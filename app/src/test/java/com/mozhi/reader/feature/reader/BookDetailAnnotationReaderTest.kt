@@ -168,19 +168,27 @@ class BookDetailAnnotationReaderTest {
     }
 
     private fun awaitInk() {
-        compose.waitUntil(15_000) { controller.isReady && renderedMarks.any { it.id == annotation.id } }
-        compose.waitForIdle()
+        // Chapter data can be ready before the background layout reaches the visible pane.
+        compose.waitUntil(15_000) {
+            compose.runOnIdle {
+                controller.isReady && renderedMarks.any { it.id == annotation.id } && inkPoint() != null
+            }
+        }
         assertInk()
     }
 
-    private fun assertInk() = compose.runOnIdle {
+    private fun inkPoint(): Offset? {
         val pages = if (mode == PageMode.SCROLL) scrollHolder.visiblePages(10).map { it.page to it.origin }
             else holder.visiblePages().map { it.first.page to it.second }
-        val point = pages.firstNotNullOf { (page, origin) ->
+        return pages.firstNotNullOfOrNull { (page, origin) ->
             page.annotationGeometry(renderedMarks, 8f, 6f, 1000f).highlights.firstOrNull()?.let {
                 origin + Offset((it.left + it.right) / 2, (it.top + it.bottom) / 2)
             }
         }
+    }
+
+    private fun assertInk() = compose.runOnIdle {
+        val point = checkNotNull(inkPoint()) { "Expected the saved annotation to have visible ink" }
         assertEquals(listOf(annotation.id), if (mode == PageMode.SCROLL) scrollHolder.annotationIdsAt(point) else holder.annotationIdsAt(point))
     }
 
