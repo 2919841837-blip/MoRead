@@ -49,7 +49,8 @@ internal data class ReaderKnowledgeActions(
     val locateCharacter: (BookCharacterGuideEntity, CharacterEvidence) -> Unit = { _, _ -> },
     val saveCharacterCard: (ExtractedCharacterCard) -> Unit = {},
     val saveCharacter: (String?, String, String) -> Unit = { _, _, _ -> },
-    val openLook: (String) -> Unit = {}
+    val openLook: (String) -> Unit = {},
+    val saveOutline: (Int, String) -> Unit = { _, _ -> }
 )
 
 @Composable
@@ -79,14 +80,9 @@ internal fun ReaderKnowledgeContentsSheet(
     ReaderKnowledgePages(state.copy(lookThumbnails = thumbnails), chapters, tocEntries, currentChapterIndex, palette, onChapterClick, onDismiss,
         ReaderKnowledgeActions(viewModel::preview, viewModel::cancel, viewModel::delete, viewModel::locate,
             viewModel::previewCharacters, viewModel::cancelCharacters, viewModel::deleteCharacters, viewModel::locateCharacter,
-            viewModel::saveCharacterCard, viewModel::saveCharacter, openLook = { imageCharacter = it }))
-    state.pending?.let { plan -> AlertDialog(
-        onDismissRequest = viewModel::dismissPreview,
-        title = { Text("生成章节大纲？") },
-        text = { Text("${plan.source.chapterTitle}\n${if (plan.source.partial) "已读部分" else "完整章节"} · ${plan.source.text.length} 字\n模型：${plan.modelLabel}\n最多 ${plan.maximumRequests} 次调用，按服务商计费。\n\n大纲会保存在本机。可以同时生成其他章节，离开页面后仍会继续。") },
-        confirmButton = { TextButton(onClick = viewModel::generate) { Text("生成大纲") } },
-        dismissButton = { TextButton(onClick = viewModel::dismissPreview) { Text("取消") } }
-    ) }
+            viewModel::saveCharacterCard, viewModel::saveCharacter, openLook = { imageCharacter = it },
+            saveOutline = viewModel::saveOutline))
+    OutlinePreviewHost(state, viewModel::dismissPreview, viewModel::generate)
     state.pendingCharacters?.takeIf { it.quick }?.let { plan -> AlertDialog(
         onDismissRequest = viewModel::dismissPreview,
         title = { Text(stringResource(if (plan.progressBounded) R.string.characters_quick_title_bounded else R.string.characters_quick_title_full)) },
@@ -134,6 +130,29 @@ internal fun ReaderKnowledgeContentsSheet(
         } },
         dismissButton = { TextButton(onClick = viewModel::dismissPreview) { Text("取消") } }
     ) }
+}
+
+/** 生成前的预览框：手改过这一章的大纲时，把「会被覆盖」的警告并进同一个框，不另叠一层确认。
+ * 单独抽出来是因为它要能脱离 viewModel 渲染，回归测试才看得到它的两副面孔。
+ */
+@Composable
+internal fun OutlinePreviewHost(state: KnowledgeUiState, onDismiss: () -> Unit, onConfirm: () -> Unit) {
+    val plan = state.pending ?: return
+    val manual = state.snapshot.chapters.any {
+        it.entry.chapterIndex == plan.source.chapterIndex && it.content.manualOutline
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("生成章节大纲？") },
+        text = { Text("${plan.source.chapterTitle}\n${if (plan.source.partial) "已读部分" else "完整章节"} · ${plan.source.text.length} 字\n模型：${plan.modelLabel}\n最多 ${plan.maximumRequests} 次调用，按服务商计费。\n\n大纲会保存在本机。可以同时生成其他章节，离开页面后仍会继续。" +
+            if (manual) "\n\n" + stringResource(R.string.reader_outline_overwrite_warning) else "") },
+        confirmButton = {
+            TextButton(onClick = onConfirm) {
+                Text(if (manual) stringResource(R.string.reader_outline_overwrite_confirm) else "生成大纲")
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } }
+    )
 }
 
 /** The same page body is exercised inside the real NavigationSheet by gesture regression tests. */
@@ -235,6 +254,7 @@ internal fun ChapterKnowledgePanel(
     var expandedChapters by rememberSaveable(state.bookId) { mutableStateOf(listOf(currentChapterIndex)) }
     var deleting by remember { mutableStateOf<Int?>(null) }
     var information by remember { mutableStateOf(false) }
+    var editingOutline by remember(state.bookId) { mutableStateOf<Int?>(null) }
     val listState = rememberLazyListState()
     Column(Modifier.fillMaxSize()) {
         KnowledgeHeading("章节大纲", "已保存 ${snapshot.chapters.size} 章 · 展开回顾本章来龙去脉", palette) { information = true }
@@ -277,8 +297,10 @@ internal fun ChapterKnowledgePanel(
                         }
                     }
                     if (expanded) Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
-                        Text(if (saved == null) "还没有这一章的大纲。" else if (saved.entry.sourceEnd == chapter.charCount)
-                            "完整章节" else "已读部分 · 前 ${saved.entry.sourceEnd} 字",
+                        Text(
+                            (if (saved == null) "还没有这一章的大纲。" else if (saved.entry.sourceEnd == chapter.charCount)
+                                "完整章节" else "已读部分 · 前 ${saved.entry.sourceEnd} 字") +
+                                (if (saved?.content?.manualOutline == true) " · " + stringResource(R.string.reader_outline_edited_badge) else ""),
                             color = palette.muted, style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(bottom = 10.dp))
                         if (saved != null) {
                             Text(saved.content.readableOutline, style = MaterialTheme.typography.bodyLarge.copy(lineHeight = 29.sp),
@@ -303,6 +325,10 @@ internal fun ChapterKnowledgePanel(
                             else TextButton(onClick = { actions.preview(chapter.chapterIndex) }, enabled = state.previewingChapter != chapter.chapterIndex) {
                                 Text(if (state.previewingChapter == chapter.chapterIndex) "准备中…" else if (saved == null) "生成概括" else "重新生成", color = palette.accent)
                             }
+                            if (saved != null) TextButton(onClick = { editingOutline = chapter.chapterIndex }, enabled = !busy,
+                                modifier = Modifier.testTag("outline-edit")) {
+                                Text(stringResource(R.string.reader_outline_edit), color = palette.accent)
+                            }
                             if (saved != null) TextButton(onClick = { deleting = chapter.chapterIndex }, enabled = !busy) { Text("删除", color = palette.muted) }
                             Text(task?.error ?: task?.progress.orEmpty(), modifier = Modifier.weight(1f).padding(start = 8.dp),
                                 maxLines = 2, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelSmall,
@@ -319,6 +345,11 @@ internal fun ChapterKnowledgePanel(
     if (information) KnowledgeInfoDialog("章节大纲", "从已经读过的内容生成连贯梗概，长章会整合为完整脉络。\n\n每章独立生成和停止，可同时提交多章，最多同时请求两个模型任务，其余自动排队。离开页面后继续运行；退出应用后需重新生成未完成的章节。\n\n大纲保存在本机，原文依据可展开核对。修改正文或重置已读范围后，旧大纲会隐藏。", { information = false })
     deleting?.let { index -> ConfirmKnowledgeDelete("删除本章大纲？", "保存的大纲及其原文依据将被删除。", { deleting = null }) {
         deleting = null; actions.delete(index)
+    } }
+    editingOutline?.let { index -> savedByChapter[index]?.let { saved ->
+        ChapterOutlineEditorDialog(initial = saved.content.readableOutline, onDismiss = { editingOutline = null }, onSave = { text ->
+            editingOutline = null; actions.saveOutline(index, text)
+        })
     } }
 }
 

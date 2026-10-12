@@ -97,6 +97,7 @@ class ReaderKnowledgeViewModel @Inject constructor(
     fun cancelCharacters() { runner.stop(mutable.value.bookId) }
 
     fun delete(chapterIndex: Int) = localAction { book -> repository.delete(book, chapterIndex) }
+    fun saveOutline(chapterIndex: Int, outline: String) = localAction { book -> repository.saveOutline(book, chapterIndex, outline) }
     fun deleteCharacters() = localAction { book -> characters.delete(book) }
     fun saveCharacter(originalIdentity: String?, name: String, description: String) = localAction { book ->
         characters.saveCharacter(book, originalIdentity, name, description)

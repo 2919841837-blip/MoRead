@@ -43,4 +43,29 @@ class ReaderKnowledgeViewModelTest {
             Dispatchers.resetMain()
         }
     }
+
+    @Test fun savingAnEditedOutlineGoesStraightToTheRepositoryWithoutAModelRequest() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val store = ViewModelStore()
+        try {
+            val outlines = mockk<ChapterKnowledgeRepository>()
+            val characters = mockk<BookCharactersRepository>()
+            val runner = mockk<KnowledgeGenerationRunner>()
+            every { outlines.observe(1) } returns MutableSharedFlow()
+            every { characters.observe(1) } returns MutableStateFlow(BookCharactersSnapshot())
+            every { runner.states } returns MutableStateFlow(emptyMap())
+            coEvery { outlines.saveOutline(any(), any(), any()) } just Runs
+            val model = ReaderKnowledgeViewModel(outlines, characters, runner, mockk(relaxed = true))
+            store.put("knowledge", model)
+            model.bind(1)
+            runCurrent()
+            model.saveOutline(0, "手改后的大纲。")
+            runCurrent()
+            coVerify { outlines.saveOutline(1, 0, "手改后的大纲。") }
+            assertNull(model.state.value.error)
+        } finally {
+            store.clear()
+            Dispatchers.resetMain()
+        }
+    }
 }

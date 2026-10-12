@@ -13,6 +13,7 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createComposeRule
 import com.mozhi.reader.ai.knowledge.*
+import com.mozhi.reader.ai.client.*
 import com.mozhi.reader.core.database.entity.*
 import com.mozhi.reader.core.datastore.ReaderSettings
 import com.mozhi.reader.core.datastore.ReaderTheme
@@ -22,6 +23,7 @@ import com.mozhi.reader.ui.theme.*
 import com.mozhi.reader.core.datastore.CustomReaderTheme
 import androidx.compose.ui.graphics.toArgb
 import java.io.File
+import kotlinx.coroutines.flow.emptyFlow
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
@@ -52,11 +54,23 @@ class ReaderKnowledgeVisualTest {
     private val guide = BookCharactersCodec.fromChapters(listOf(1 to people), 40, 9600)
     private val state = KnowledgeUiState(bookId = 1, snapshot = KnowledgeSnapshot(book, listOf(VisibleChapterKnowledge(row, content))), loading = false,
         characters = BookCharactersSnapshot(VisibleBookCharacters(personEntry, guide)))
+    private val provider = AiProviderEntity(id = 1, name = "示例模型", baseUrl = "https://example.test", apiKeyAlias = "alias",
+        type = AiProviderType.CHAT, createdAt = 1)
+    // 预览只做本地计算，模型客户端在这里只是个占位，任何真实调用都应该失败。
+    private val model = ResolvedChatClient(object : ChatApiClient {
+        override fun chatStream(messages: List<ChatMessage>, tools: List<ToolSpec>, options: ChatOptions) = emptyFlow<ChatDelta>()
+        override suspend fun chat(messages: List<ChatMessage>, options: ChatOptions): String = error("预览不调用模型")
+        override suspend fun embed(texts: List<String>): List<FloatArray> = error("预览不调用模型")
+    }, ChatOptions.Default, provider, "示例模型")
+
+    private fun plan(index: Int) = KnowledgeGenerationPlan(
+        KnowledgeSource(1, book.title, index, chapters[index].title, "已读的正文。", chapters[index].charCount, "a".repeat(64)), model)
 
     private fun show(tab: Int = 1, dark: Boolean = false, input: () -> KnowledgeUiState = { state },
         actions: ReaderKnowledgeActions = ReaderKnowledgeActions(), onDismiss: () -> Unit = {},
         appearance: com.mozhi.reader.ui.theme.AppearanceSettings = com.mozhi.reader.ui.theme.AppearanceSettings(),
-        appearanceState: () -> AppearanceSettings = { appearance }, paper: ReaderSettings? = null) {
+        appearanceState: () -> AppearanceSettings = { appearance }, paper: ReaderSettings? = null,
+        preview: Boolean = false) {
         compose.setContent {
             MoReadTheme(appearanceState()) {
                 com.mozhi.reader.ui.theme.ReaderAppearanceScope {
@@ -68,6 +82,8 @@ class ReaderKnowledgeVisualTest {
                         SideEffect { root = view.rootView }
                         ReaderKnowledgePages(input(), chapters, emptyList(), 1, palette, { _, _ -> }, onDismiss, actions, tab)
                     }
+                    // 预览框在真实代码里挂在这页外面（Hilt 那层），这里把它按同样的状态渲染出来。
+                    if (preview) OutlinePreviewHost(input(), {}, {})
                 }
                 }
             }
@@ -325,6 +341,63 @@ class ReaderKnowledgeVisualTest {
     @Test @Config(qualifiers = "w900dp-h1200dp-mdpi")
     fun portraitSideNavigationDoesNotMoveAtEitherScrollBoundary() {
         expressiveFlatApplicationKeepsReaderSheetEdgesAndAnchorsStable()
+    }
+
+    @Test @Config(qualifiers = "zh-rCN-w411dp-h891dp-mdpi")
+    fun manualOutlineEditorSavesInPlaceAndRegenerationWarnsInTheExistingPreviewDialog() {
+        val live = mutableStateOf(state)
+        var savedIndex = -1
+        var savedText: String? = null
+        var previews = 0
+        val actions = ReaderKnowledgeActions(preview = { index ->
+            previews++
+            live.value = live.value.copy(pending = plan(index))
+        }, saveOutline = { index, text ->
+            savedIndex = index
+            savedText = text
+            val current = live.value.snapshot.chapters.single()
+            live.value = live.value.copy(snapshot = live.value.snapshot.copy(chapters = listOf(
+                current.copy(content = ChapterKnowledgeCodec.editOutline(current.content, text)))))
+        })
+        val edited = "手改之后：雨夜里林舟守着灯塔，小满带着一封迟来的信登门。两人约定等天亮后出发，去海岸寻找寄信人的下落。"
+        show(input = { live.value }, actions = actions, preview = true)
+        compose.onNodeWithTag("outline-1").performScrollTo()
+        val anchor = scroll("outline-list")
+        compose.onNodeWithTag("outline-edit").performScrollTo().performClick()
+        compose.onNodeWithTag("outline-editor").assertIsDisplayed().performTextReplacement(edited)
+        compose.onNodeWithTag("outline-editor-save").assertIsEnabled().performClick()
+        assertEquals(1, savedIndex)
+        assertEquals(edited, savedText)
+        compose.onNodeWithText(edited).performScrollTo().assertIsDisplayed()
+        // 整页编辑弹层收起后，大纲列表的滚动锚点必须还在原处。
+        assertEquals(anchor, scroll("outline-list"), .001f)
+        capture("chapter-outline-manual.png")
+        // 手改过的这一章：警告并进已有的预览框，确认按钮换成「覆盖并重新生成」，不叠第二层弹窗。
+        compose.onNodeWithText("重新生成").performScrollTo().performClick()
+        assertEquals(1, previews)
+        compose.onNodeWithText("覆盖并重新生成").assertIsDisplayed()
+        compose.onNodeWithText("本章大纲已手动修改", substring = true).assertIsDisplayed()
+        compose.onNodeWithText("生成大纲").assertDoesNotExist()
+    }
+
+    @Test @Config(qualifiers = "zh-rCN-w411dp-h891dp-mdpi")
+    fun untouchedOutlineKeepsThePlainPreviewDialog() {
+        // 没手改过的章节不该看到任何覆盖警告，确认按钮也保持原来的文案。
+        show(input = { state.copy(pending = plan(1)) }, preview = true)
+        compose.onNodeWithText("生成大纲").assertIsDisplayed()
+        compose.onNodeWithText("本章大纲已手动修改", substring = true).assertDoesNotExist()
+    }
+
+    @Test @Config(qualifiers = "zh-rCN-w411dp-h891dp-mdpi")
+    fun legacySummarySeedOverTheLimitCannotBeSavedUnchanged() {
+        // 早期版本只存了摘要：编辑页预填的就是拼接出来的正文，超过 2400 字时保存按钮必须保持禁用。
+        val long = ChapterKnowledge((0 until 6).map { KnowledgeFact("字".repeat(500), "引文", 0, 3) })
+        show(input = { state.copy(snapshot = KnowledgeSnapshot(book, listOf(VisibleChapterKnowledge(row, long)))) })
+        compose.onNodeWithTag("outline-edit").performScrollTo().performClick()
+        compose.onNodeWithTag("outline-editor").assertIsDisplayed()
+        compose.onNodeWithTag("outline-editor-save").assertIsNotEnabled()
+        compose.onNodeWithTag("outline-editor").performTextReplacement("改成一句人话就能存下来的大纲。")
+        compose.onNodeWithTag("outline-editor-save").assertIsEnabled()
     }
 
     private fun selectTab(label: String) { compose.onNode(hasText(label) and hasClickAction()).performClick() }

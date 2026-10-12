@@ -405,6 +405,13 @@
     <string name="characters_external_hint">From the web, not from the book</string>
     <string name="characters_external_expand">Show</string>
     <string name="characters_external_collapse">Hide</string>
+    <string name="reader_outline_edit">Edit</string>
+    <string name="reader_outline_editor_title">Edit chapter outline</string>
+    <string name="reader_outline_editor_label">Chapter outline</string>
+    <string name="reader_outline_editor_save">Save outline</string>
+    <string name="reader_outline_edited_badge">Edited</string>
+    <string name="reader_outline_overwrite_warning">This chapter\'s outline was edited manually. Regenerating will overwrite your changes.</string>
+    <string name="reader_outline_overwrite_confirm">Overwrite and regenerate</string>
     <string name="review_manage">Select and manage</string>
     <string name="review_selection_exit">Exit selection</string>
     <string name="review_selection_count">%1$d selected</string>

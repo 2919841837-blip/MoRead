@@ -51,6 +51,37 @@ class ChapterKnowledgeTest {
         assertEquals(fact.text, ChapterKnowledge(listOf(fact)).readableOutline)
     }
 
+    @Test fun editingAnOutlineTrimsFlagsAndKeepsVerifiedFacts() {
+        val value = ChapterKnowledgeCodec.parse(raw, KnowledgePart(0, source))
+        val edited = ChapterKnowledgeCodec.editOutline(value, "  林舟在灯塔等候，小满带来一封信，两人约定天亮后出发。  ")
+        assertEquals("林舟在灯塔等候，小满带来一封信，两人约定天亮后出发。", edited.outline)
+        assertTrue(edited.manualOutline)
+        assertEquals(value.summary, edited.summary)
+        assertEquals(value.characters, edited.characters)
+        // encodeDefaults=false：没手改过的行不会多出手改标记，所以旧数据不需要迁移。
+        assertFalse(ChapterKnowledgeCodec.encode(value).contains("manualOutline"))
+        assertTrue(ChapterKnowledgeCodec.encode(edited).contains("\"manualOutline\":true"))
+    }
+
+    @Test fun manualOutlineEditsRejectBlankListStyleAndOverlongProse() {
+        val value = ChapterKnowledgeCodec.parse(raw, KnowledgePart(0, source))
+        assertTrue(runCatching { ChapterKnowledgeCodec.editOutline(value, "   ") }.isFailure)
+        assertTrue(runCatching { ChapterKnowledgeCodec.editOutline(value, "- 人物出现\n- 情节发展") }.isFailure)
+        assertTrue(runCatching { ChapterKnowledgeCodec.editOutline(value, "字".repeat(2401)) }.isFailure)
+        assertEquals("字".repeat(2400), ChapterKnowledgeCodec.editOutline(value, "字".repeat(2400)).outline)
+    }
+
+    @Test fun aRowThatOnlyHasLegacySummaryProseCanBeEditedIntoARealOutline() {
+        val fact = KnowledgeFact("旧版保存的概括", "林舟在灯塔等候。", 0, 8)
+        val legacy = ChapterKnowledge(listOf(fact))
+        assertEquals(fact.text, legacy.readableOutline)
+        // 编辑页预填的就是用户看到的那段文字，保存后它成为真正的大纲。
+        val edited = ChapterKnowledgeCodec.editOutline(legacy, legacy.readableOutline)
+        assertEquals(fact.text, edited.outline)
+        assertTrue(edited.manualOutline)
+        assertEquals(listOf(fact), edited.summary)
+    }
+
     @Test fun wholeBookPartsHaveNoSixtyThousandCharacterCutoff() {
         val source = "很长的一章。\n".repeat(12_000)
         val parts = ChapterKnowledgeCodec.parts(source, enforceChapterLimit = false)

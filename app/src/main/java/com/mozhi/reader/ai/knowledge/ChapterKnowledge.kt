@@ -23,7 +23,13 @@ data class KnowledgeCharacterAttribute(val kind: CharacterAttributeKind, val val
 data class KnowledgeCharacterRelationship(val target: String, val relation: String, val fact: KnowledgeFact)
 
 @Serializable
-data class ChapterKnowledge(val summary: List<KnowledgeFact>, val characters: List<KnowledgeCharacter> = emptyList(), val outline: String = "") {
+data class ChapterKnowledge(
+    val summary: List<KnowledgeFact>,
+    val characters: List<KnowledgeCharacter> = emptyList(),
+    val outline: String = "",
+    /** 用户手改过大纲：重新生成前需要二次确认。 */
+    val manualOutline: Boolean = false
+) {
     val readableOutline: String get() = outline.ifBlank { summary.joinToString("\n\n") { it.text } }
 }
 
@@ -86,6 +92,12 @@ internal object ChapterKnowledgeCodec {
         require(clean.length in 1..limit) { "请按要求生成长度适中的章节梗概" }
         require(!Regex("(?m)^\\s*(?:[-*•]|[0-9]+[.)、])\\s+").containsMatchIn(clean)) { "请写成连贯自然段，不要罗列分散要点" }
         return clean
+    }
+
+    /** 用户手改大纲：沿用模型输出的同一套格式约束，并打上手动标记。 */
+    fun editOutline(content: ChapterKnowledge, value: String): ChapterKnowledge {
+        require(value.isNotBlank()) { "大纲不能为空" }
+        return content.copy(outline = validateOutline(value), manualOutline = true)
     }
 
     /** 检索段落之间的分隔；引文跨过它就说明模型把两段拼在了一起。 */

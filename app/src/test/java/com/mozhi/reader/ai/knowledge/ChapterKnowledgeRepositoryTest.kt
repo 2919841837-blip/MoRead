@@ -158,6 +158,57 @@ class ChapterKnowledgeRepositoryTest {
         assertNotNull(database.chapterKnowledgeDao().get(1, 1))
     }
 
+    @Test fun savingAnEditedOutlineNeedsNoModelAndKeepsProvenanceAndEvidence() = runBlocking {
+        val generated = repository.generate(repository.preview(1, 0))
+        val requests = client.requests
+        repository.saveOutline(1, 0, "  林舟在灯塔等候，小满送来一封信。  ")
+        val saved = database.chapterKnowledgeDao().get(1, 0)!!
+        val content = AiJson.decodeFromString<ChapterKnowledge>(saved.contentJson)
+        assertEquals("林舟在灯塔等候，小满送来一封信。", content.outline)
+        assertTrue(content.manualOutline)
+        // 原文依据与「哪条记录对应哪段正文」都不受影响。
+        assertEquals(generated.sourceRevision, saved.sourceRevision)
+        assertEquals(generated.sourceEnd, saved.sourceEnd)
+        assertEquals(generated.sourceHash, saved.sourceHash)
+        assertEquals(generated.modelKey, saved.modelKey)
+        assertEquals(generated.modelLabel, saved.modelLabel)
+        assertEquals(generated.promptVersion, saved.promptVersion)
+        assertEquals(requests, client.requests) // 手改不触发任何模型请求。
+        assertEquals("林舟在灯塔等候，小满送来一封信。", repository.observe(1).first().chapters.single().content.outline)
+    }
+
+    @Test fun outlineEditIsRejectedWhileTheChapterIsGenerating() = runBlocking {
+        val generated = repository.generate(repository.preview(1, 0))
+        val entered = CompletableDeferred<Unit>()
+        client.onStream = { entered.complete(Unit); awaitCancellation() }
+        val plan = repository.preview(1, 0)
+        val job = launch { repository.generate(plan) }
+        withTimeout(5_000) { entered.await() }
+        val failure = runCatching { repository.saveOutline(1, 0, "手改后的大纲。") }.exceptionOrNull()
+        assertTrue(failure?.message.orEmpty().contains("请先停止这一章的生成"))
+        assertEquals(generated, database.chapterKnowledgeDao().get(1, 0))
+        job.cancelAndJoin()
+    }
+
+    @Test fun editedOutlineStillHidesWhenTheTextRevisionChanges() = runBlocking {
+        repository.generate(repository.preview(1, 0))
+        repository.saveOutline(1, 0, "手改后的大纲。")
+        revision = "b".repeat(64)
+        val snapshot = repository.observe(1).first()
+        assertTrue(snapshot.chapters.isEmpty())
+        assertEquals(1, snapshot.staleChapters)
+        // 正文变了就连编辑入口一起失效，手改不会让这条记录“续命”。
+        assertTrue(runCatching { repository.saveOutline(1, 0, "再改一次。") }.isFailure)
+    }
+
+    @Test fun outlineEditNeedsAnExistingVisibleRow() = runBlocking {
+        assertTrue(runCatching { repository.saveOutline(1, 0, "凭空写的大纲。") }.isFailure)
+        val entry = repository.generate(repository.preview(1, 0))
+        book = book.copy(maxReachedCharOffset = 0)
+        assertTrue(runCatching { repository.saveOutline(1, 0, "已读范围回退后的大纲。") }.isFailure)
+        assertEquals(entry, database.chapterKnowledgeDao().get(1, 0))
+    }
+
     private inner class ScriptedClient : ChatApiClient {
         var requests = 0
         val received = mutableListOf<List<ChatMessage>>()

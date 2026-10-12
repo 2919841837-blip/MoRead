@@ -124,6 +124,25 @@ class ChapterKnowledgeRepository @Inject constructor(
         try { dao.delete(bookId, chapterIndex) } finally { generating.remove(key) }
     }
 
+    /** 手改并保存大纲：只替换梗概文本，这条记录与正文的对应关系保持不变。 */
+    suspend fun saveOutline(bookId: Long, chapterIndex: Int, outline: String): Unit = withContext(Dispatchers.IO) {
+        val key = bookId to chapterIndex
+        // 同一章正在生成时拒绝写入，否则会被生成结尾的那次 upsert 覆盖。
+        check(generating.add(key)) { "请先停止这一章的生成" }
+        try {
+            BookContentMutation.withBook(bookId) {
+                val book = library.getBook(bookId)?.takeIf { it.removedAt == 0L } ?: error("书籍正文已移除")
+                val previous = dao.get(bookId, chapterIndex) ?: error("这一章还没有大纲")
+                val content = ChapterKnowledgeCodec
+                    .visible(previous, ReadingScope.uptoProgress(book), library.bookTextRevision(bookId))
+                    ?.content ?: error("阅读范围或正文已变化，请重新生成后再编辑")
+                // sourceRevision/sourceEnd/sourceHash/modelKey/modelLabel/createdAt 原样保留，
+                // 可见性判定与原文依据的核对结果都不受影响。
+                dao.save(previous.copy(contentJson = ChapterKnowledgeCodec.encode(ChapterKnowledgeCodec.editOutline(content, outline))))
+            }
+        } finally { generating.remove(key) }
+    }
+
     private suspend fun validate(source: KnowledgeSource) = withContext(Dispatchers.IO) {
         BookContentMutation.withBook(source.bookId) { validateLocked(source) }
     }

@@ -401,6 +401,13 @@
     <string name="characters_external_hint">来自网络，不是书中原文</string>
     <string name="characters_external_expand">展开</string>
     <string name="characters_external_collapse">收起</string>
+    <string name="reader_outline_edit">编辑</string>
+    <string name="reader_outline_editor_title">编辑章节大纲</string>
+    <string name="reader_outline_editor_label">章节大纲</string>
+    <string name="reader_outline_editor_save">保存大纲</string>
+    <string name="reader_outline_edited_badge">已手动修改</string>
+    <string name="reader_outline_overwrite_warning">本章大纲已手动修改，重新生成会覆盖你的修改。</string>
+    <string name="reader_outline_overwrite_confirm">覆盖并重新生成</string>
     <string name="review_manage">多选管理</string>
     <string name="review_selection_exit">退出多选</string>
     <string name="review_selection_count">已选 %1$d 项</string>
