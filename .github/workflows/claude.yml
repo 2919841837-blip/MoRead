@@ -18,6 +18,10 @@ jobs:
       (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude')) ||
       (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
     runs-on: ubuntu-latest
+    env:
+      # Third-party relay endpoint for the Anthropic API.
+      # Delete this block to talk to api.anthropic.com directly.
+      ANTHROPIC_BASE_URL: ${{ secrets.ANTHROPIC_BASE_URL }}
     permissions:
       contents: write
       pull-requests: write
