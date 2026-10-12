@@ -1,0 +1,68 @@
+name: Claude Code Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review, reopened]
+
+jobs:
+  claude-review:
+    # Fork PRs cannot read repository secrets, so the review would fail anyway.
+    # This guard keeps the workflow from running (and burning a runner) on them.
+    # Delete it if you later add a secret-free auth method (e.g. Workload Identity Federation).
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: read
+      id-token: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Run Claude Code Review
+        id: claude-review
+        uses: anthropics/claude-code-action@v1
+        with:
+          # See claude.yml for the CLAUDE_CODE_OAUTH_TOKEN alternative.
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+
+          # Creates a tracking comment and updates it as the review proceeds.
+          track_progress: true
+
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ github.event.pull_request.number }}
+
+            Review this pull request. This is an Android app written in Kotlin,
+            built with Gradle (Kotlin DSL), so weight your review accordingly.
+
+            Focus areas:
+
+            1. **Correctness**
+               - Logic errors, null-safety, and unhandled edge cases
+               - Coroutine / Flow usage: cancellation, dispatchers, leaked scopes
+               - Android lifecycle and threading mistakes
+
+            2. **Code Quality**
+               - Readability and consistency with the surrounding code
+               - Unnecessary duplication or dead code
+
+            3. **Security**
+               - Input validation and any secrets committed in plain text
+               - Unsafe storage or network usage
+
+            4. **Testing**
+               - Whether changed behavior has corresponding test coverage
+               - Missing edge-case scenarios
+
+            5. **Documentation**
+               - Comments and docs updated for behavior changes
+
+            Leave inline comments for specific issues. Use a top-level comment
+            for general observations. Be concise and skip praise-only remarks.
+
+          claude_args: |
+            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*)"
