@@ -120,6 +120,7 @@ class CompanionBackgroundVisualTest {
         val catalog = MutableStateFlow(LibraryChatCatalog(personas = listOf(persona.copy(chatAppearanceJson = PersonaChatAppearanceCodec.encode(appearance))),
             activePersonaId = 3, settings = ReaderSettings(imageLibrary = images)))
         val reader = mockk<ReaderCompanionViewModel>(relaxed = true)
+        every { reader.genUiSettings } returns MutableStateFlow(com.mozhi.reader.core.datastore.CompanionGenUiSettings())
         every { reader.uiState } returns readerState
         every { reader.chatContext } returns MutableStateFlow(CompanionChatContext("雨夜里的灯塔"))
         every { reader.events } returns emptyFlow()

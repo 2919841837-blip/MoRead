@@ -74,7 +74,8 @@ import com.mozhi.reader.core.database.entity.TtsVoiceEntity
         BookTocEntryEntity::class,
         com.mozhi.reader.core.database.entity.ChapterKnowledgeEntity::class,
         com.mozhi.reader.core.database.entity.BookCharacterGuideEntity::class,
-        com.mozhi.reader.core.database.entity.BookCharacterPartEntity::class
+        com.mozhi.reader.core.database.entity.BookCharacterPartEntity::class,
+        com.mozhi.reader.core.database.entity.BookCharacterDossierEntity::class
     ],
     version = MoReadDatabase.VERSION,
     exportSchema = true
@@ -98,6 +99,6 @@ abstract class MoReadDatabase : RoomDatabase() {
     abstract fun bookCharacterDao(): com.mozhi.reader.core.database.dao.BookCharacterDao
 
     companion object {
-        const val VERSION = 33
+        const val VERSION = 35
     }
 }

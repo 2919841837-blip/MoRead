@@ -278,7 +278,7 @@ internal fun ProactiveAnnotationSettingsContent(
                 }
             }
             if (page == "notice" && bookId == null) item {
-                MoReadSection(title = "提示方式", footer = "5 秒自动收起，仅提示已读到的段评。") {
+                MoReadSection(title = "提示方式", footer = "5 秒自动收起，生成后即可查看段评。") {
                     ProactiveAnnotationNotice.entries.forEach { mode ->
                         MoReadRow(title = noticeLabel(mode), subtitle = when (mode) {
                             ProactiveAnnotationNotice.OFF -> "静默写入"
@@ -300,7 +300,7 @@ internal fun ProactiveAnnotationSettingsContent(
     if (help) AlertDialog(onDismissRequest = { help = false }, title = { Text("段评说明") }, text = {
         Column(Modifier.verticalScroll(rememberScrollState())) {
             Text(when (page) {
-                "timing" -> "预生成会提前读取未读段落，但每条段评仅看到该段之前的内容。读到之前不会出现在聊天、工具或通知里。\n\n每条段评一次模型调用；使用主动段评分配，未配置时使用 cheap。额外提前的章节会提前消耗额度。"
+                "timing" -> "预生成会提前读取未读段落，每条段评只使用截至目标段落的内容。生成后即可查看，由你决定是否打开。\n\n每条段评一次模型调用；使用主动段评分配，未配置时使用 cheap。本章与提前章节轮流生成，额外提前的章节会提前消耗额度。"
                 "context" -> "预算包含本章正文、前文片段和梗概，不含角色设定与写作提示词。按字符计算，实际发送量可能更少。\n\n本地检索不增加模型调用，提高预算会增加单次发送量。"
                 "limits" -> "下限是给模型的请求，无合适内容时可以少生成。不限制上限时会逐个处理候选段落，仍受每日额度约束。\n\n同一角色与正文版本完成后不重复生成。提高上限不会给已完成章节补生成。失败最多两轮，切换设置或离开不占失败次数。"
                 "notice" -> "快速模型根据角色性格说一句共读感想，不发送正文、段评或聊天记录。失败或超时回落为内置短句。"

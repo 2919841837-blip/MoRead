@@ -1249,6 +1249,43 @@ class MigrationTest {
         }
     }
 
+    @Test fun migrate33To34AddsEmptyInteractiveUiState() {
+        helper.createDatabase(DB_NAME, 33).use { db ->
+            db.execSQL("INSERT INTO conversations (id, bookId, title, type, createdAt) VALUES (1, NULL, '旧会话', 'COMPANION', 1000)")
+            db.execSQL("INSERT INTO messages (id, conversationId, role, content, createdAt) VALUES (1, 1, 'assistant', '旧回复', 1001)")
+        }
+        helper.runMigrationsAndValidate(DB_NAME, 34, true, DatabaseMigrations.Migration33To34).use { db ->
+            db.query("SELECT content, uiStateJson, uiContextJson FROM messages WHERE id = 1").use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals("旧回复", cursor.getString(0))
+                assertTrue(cursor.isNull(1))
+                assertTrue(cursor.isNull(2))
+            }
+        }
+    }
+
+    @Test fun migrate34To35AddsAnEmptyDossierCacheThatCascadesWithTheBook() {
+        helper.createDatabase(DB_NAME, 34).use { db ->
+            db.execSQL("""
+                INSERT INTO books (id, title, author, coverPath, epubPath, sourceType, importedAt, totalChapters)
+                VALUES (1, '灯塔来信', '示例', NULL, '', 'TXT', 1000, 2)
+            """.trimIndent())
+        }
+        helper.runMigrationsAndValidate(DB_NAME, 35, true, DatabaseMigrations.Migration34To35).use { db ->
+            db.query("SELECT COUNT(*) FROM book_character_dossiers").use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals(0, cursor.getInt(0))
+            }
+            db.execSQL("PRAGMA foreign_keys = ON")
+            db.execSQL("INSERT INTO book_character_dossiers (bookId, cacheKey, identity, sourceRevision, contentJson, createdAt) VALUES (1, 'k', '林舟', 'r', '{}', 1)")
+            db.execSQL("DELETE FROM books WHERE id = 1")
+            db.query("SELECT COUNT(*) FROM book_character_dossiers").use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals(0, cursor.getInt(0))
+            }
+        }
+    }
+
     private companion object {
         const val DB_NAME = "migration-test.db"
     }

@@ -15,6 +15,7 @@ import com.mozhi.reader.core.database.entity.ModelRole
 import com.mozhi.reader.core.database.entity.PersonaEntity
 import com.mozhi.reader.core.library.AnnotationMedia
 import com.mozhi.reader.core.library.QuoteLocation
+import com.mozhi.reader.core.text.QuoteMatcher
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.TimeoutCancellationException
@@ -39,12 +40,12 @@ private data class ProactiveAnnotationEnvelope(
 )
 
 internal object ProactiveAnnotationParser {
+    private val THINKING = Regex("(?s)<think(?:ing)?>.*?</think(?:ing)?>")
+
     fun parse(raw: String, limit: Int): List<ProactiveAnnotationDraft> {
-        val clean = raw.trim()
-            .removePrefix("```json")
-            .removePrefix("```")
-            .removeSuffix("```")
-            .trim()
+        // 推理模型常把思考过程写进正文，普通模型常在 JSON 前后加一句说明或 Markdown 围栏。
+        val clean = runCatching { com.mozhi.reader.ai.knowledge.KnowledgeResponseJson.clean(raw.replace(THINKING, "")) }
+            .getOrDefault(raw.trim())
         val drafts = runCatching {
             when (val root = AiJson.parseToJsonElement(clean)) {
                 is kotlinx.serialization.json.JsonArray -> root.mapNotNull { element ->
@@ -112,10 +113,21 @@ data class ProactiveAnnotationRequest(
     val candidateLimit: Int,
     val doneParagraphEnds: Set<Int>,
     val prompts: List<GlobalPromptPreset> = ProactiveAnnotationPrompts.DEFAULTS,
-    val contextBudgetChars: Int = com.mozhi.reader.core.datastore.ProactiveAnnotationContextSettings().budgetChars
+    val contextBudgetChars: Int = com.mozhi.reader.core.datastore.ProactiveAnnotationContextSettings().budgetChars,
+    /** 只从这个原文位置之后挑段落：读者已经翻过去的地方再生成，只会落在看不到的上一页。 */
+    val startAt: Int = 0,
+    /** Lookahead shares the worker by candidate slot, without reducing the chapter's quota. */
+    val maxSlotsPerPass: Int = Int.MAX_VALUE,
+    /** Failed slots already visited in this generation round must wait for the bounded retry. */
+    val visitedParagraphEnds: Set<Int> = emptySet()
 )
 
-data class ProactiveAnnotationGenerationResult(val failed: Boolean, val stopped: Boolean)
+data class ProactiveAnnotationGenerationResult(
+    val failed: Boolean,
+    val stopped: Boolean,
+    val hasMore: Boolean = false,
+    val visitedParagraphEnds: Set<Int> = emptySet()
+)
 
 @Singleton
 class ProactiveAnnotationService @Inject constructor(
@@ -123,6 +135,22 @@ class ProactiveAnnotationService @Inject constructor(
     private val mediaService: AiMediaGenerationService,
     private val contextRepository: ProactiveAnnotationContextRepository
 ) {
+    // Keep chapter context across fair-scheduling passes and companions, with revision validation.
+    private val contextCache = linkedMapOf<Pair<Long, Int>, PreparedAnnotationContext>()
+
+    private suspend fun preparedContextFor(bookId: Long, chapterIndex: Int): PreparedAnnotationContext {
+        val key = bookId to chapterIndex
+        val cached = synchronized(contextCache) { contextCache[key] }
+        if (cached != null && contextRepository.isCurrent(bookId, cached.revision)) return cached
+        val prepared = contextRepository.prepare(bookId, chapterIndex)
+        synchronized(contextCache) {
+            contextCache.remove(key)
+            contextCache[key] = prepared
+            while (contextCache.size > 6) contextCache.remove(contextCache.keys.first())
+        }
+        return prepared
+    }
+
     /** Revalidation is mandatory before every paid call and immediately before the atomic sink. */
     suspend fun generateForChapter(
         request: ProactiveAnnotationRequest,
@@ -132,14 +160,23 @@ class ProactiveAnnotationService @Inject constructor(
     ): ProactiveAnnotationGenerationResult {
         var failed = false
         var preparedContext: PreparedAnnotationContext? = null
-        for (paragraph in ProactiveAnnotationParagraphs.candidates(request.body, request.candidateLimit)) {
-            if (paragraph.end in request.doneParagraphEnds) continue
+        var slots = 0
+        val visited = mutableSetOf<Int>()
+        for (slot in ProactiveAnnotationParagraphs.buckets(request.body, request.candidateLimit, request.startAt)) {
+          // 一格已有段评（含旧版按整段记账的终点）就跳过；正选写坏了才换同格次选，超时与请求错误不换。
+          if (slot.any { it.end in request.doneParagraphEnds || it.end in request.visitedParagraphEnds }) continue
+          if (slots >= request.maxSlotsPerPass.coerceAtLeast(1)) {
+              return ProactiveAnnotationGenerationResult(failed, stopped = false, hasMore = true, visitedParagraphEnds = visited.toSet())
+          }
+          var slotFilled = false
+          for ((attempt, paragraph) in slot.take(MAX_PARAGRAPHS_PER_SLOT).withIndex()) {
+            if (attempt > 0) logSkip("retrying slot with alternate paragraph")
             val permit = allowance() ?: return ProactiveAnnotationGenerationResult(failed, stopped = true)
             if (!permit.accepted || permit.maxAnnotations <= 0) return ProactiveAnnotationGenerationResult(failed, true)
             var detachedImage: com.mozhi.reader.core.database.entity.IllustrationEntity? = null
             var committed = false
             try {
-                val prepared = preparedContext ?: contextRepository.prepare(request.bookId, request.chapterIndex)
+                val prepared = preparedContext ?: preparedContextFor(request.bookId, request.chapterIndex)
                     .also { preparedContext = it }
                 val context = prepared.forParagraph(request.body, paragraph, request.contextBudgetChars)
                 suspend fun contextValid() = contextRepository.isCurrent(request.bookId, prepared.revision)
@@ -163,11 +200,13 @@ class ProactiveAnnotationService @Inject constructor(
                 }
                 if (!contextValid()) return ProactiveAnnotationGenerationResult(failed, stopped = true)
                 val draft = ProactiveAnnotationParser.parse(raw, 1).firstOrNull()
-                if (draft == null) { failed = true; continue }
-                val quote = draft.quote.trim()
-                val withinTarget = request.body.substring(paragraph.start, paragraph.end).indexOf(quote)
-                if (withinTarget < 0 || quote.length < 6) { failed = true; continue }
-                val location = QuoteLocation(request.chapterIndex, paragraph.start + withinTarget, paragraph.start + withinTarget + quote.length)
+                if (draft == null) { logSkip("unparseable reply (${raw.length} chars)"); continue }
+                // 只在目标段落内定位：容忍标点/空白走样与多抄少抄几个字，引文以原文为准。
+                val span = QuoteMatcher.bestOverlap(request.body.substring(paragraph.start, paragraph.end), draft.quote.trim())
+                    ?.takeIf { it.end - it.start >= 6 }
+                if (span == null) { logSkip("quote not found in target"); continue }
+                val location = QuoteLocation(request.chapterIndex, paragraph.start + span.start, paragraph.start + span.end)
+                val quote = request.body.substring(location.startCharOffset, location.endCharOffset)
                 var audioPath: String? = null
                 if (draft.voice && request.persona.voiceId.isNotBlank()) {
                     val mediaPermit = allowance() ?: return ProactiveAnnotationGenerationResult(failed, true)
@@ -188,7 +227,7 @@ class ProactiveAnnotationService @Inject constructor(
                         detachedImage = optionalMedia {
                             mediaService.generateIllustration(
                                 bookId = request.bookId, chapterIndex = request.chapterIndex,
-                                charOffset = location.startCharOffset, sourceText = draft.quote,
+                                charOffset = location.startCharOffset, sourceText = quote,
                                 prompt = draft.imagePrompt, personaId = request.persona.id, persist = false,
                                 beforePaidRequest = { allowance() != null && contextValid() }
                             )
@@ -199,7 +238,7 @@ class ProactiveAnnotationService @Inject constructor(
                     bookId = request.bookId, personaId = request.persona.id,
                     chapterIndex = request.chapterIndex,
                     startCharOffset = location.startCharOffset, endCharOffset = location.endCharOffset,
-                    selectedText = draft.quote.trim(), note = draft.note.trim(),
+                    selectedText = quote, note = draft.note.trim(),
                     colorTag = AnnotationColors.forPersona(request.persona.id),
                     style = AnnotationStyle.fromWire(draft.style).wire,
                     mediaJson = AnnotationMedia(audioPath, null).encode(),
@@ -209,20 +248,40 @@ class ProactiveAnnotationService @Inject constructor(
                 if (!contextValid()) return ProactiveAnnotationGenerationResult(failed, stopped = true)
                 committed = commit(row, paragraph.end, detachedImage)
                 if (!committed) return ProactiveAnnotationGenerationResult(failed, true)
+                slotFilled = true
+                break
             } catch (_: TimeoutCancellationException) {
                 // A slow paragraph must release the single worker and remain eligible for retry.
                 currentCoroutineContext().ensureActive()
-                failed = true
+                logSkip("request timed out")
+                break
             } catch (cancelled: kotlinx.coroutines.CancellationException) {
                 throw cancelled
-            } catch (_: Exception) {
-                failed = true // A bad paragraph must not prevent the remaining paragraphs from being tried.
+            } catch (error: Exception) {
+                // A bad paragraph must not prevent the remaining paragraphs from being tried.
+                logSkip("request failed: ${error.javaClass.simpleName}")
+                break
             } finally {
                 // Sink guarantees null/throw means rollback; committed acknowledgement is cancellation-safe.
                 if (!committed) detachedImage?.let { java.io.File(it.imagePath).delete() }
             }
+          }
+          if (!slotFilled) failed = true
+          slots++
+          visited += slot.map { it.end }
         }
-        return ProactiveAnnotationGenerationResult(failed, stopped = false)
+        return ProactiveAnnotationGenerationResult(failed, stopped = false, visitedParagraphEnds = visited.toSet())
+    }
+
+    /** 失败原因进日志（不含正文与模型输出），用户「一直没有段评」时能查到是哪一步掉的。 */
+    private fun logSkip(reason: String) {
+        runCatching { android.util.Log.w(TAG, "proactive annotation skipped: $reason") }
+    }
+
+    private companion object {
+        const val TAG = "ProactiveAnnotation"
+        /** 每格最多试正选 + 一个次选，失败的格子不会无限烧调用。 */
+        const val MAX_PARAGRAPHS_PER_SLOT = 2
     }
 
     private suspend fun <T> optionalMedia(block: suspend () -> T): T? = try {

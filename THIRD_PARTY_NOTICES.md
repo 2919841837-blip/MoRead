@@ -6,8 +6,7 @@
 - OkHttp / okhttp-sse（Apache-2.0）：网络与 SSE 流式基础设施。
 - jsoup（MIT）：EPUB HTML 正文抽取。
 - lzo-core 1.0.6（GPL-3.0，[lzo-java](https://github.com/shevek/lzo-java)）：MDX / MDD 分块 LZO 解压。
-- Bouncy Castle 1.80（Bouncy Castle Licence，MIT 许可条款）：MDX v2 索引解密所需的 RIPEMD-128；许可随 APK assets 分发，见 `licenses/bouncycastle-LICENSE.html`。不替换系统安全提供程序。
-- MDX / MDD 文件格式参考 [writemdict 格式说明](https://github.com/zhansliu/writemdict/blob/master/fileformat.md)，读取器独立实现。测试词典是自行生成的微型样本，不含商业词典数据。
+- MDX / MDD 文件格式参考 [writemdict 格式说明](https://github.com/zhansliu/writemdict/blob/master/fileformat.md)，读取器独立实现；v2 索引解密所需的 RIPEMD-128 为自带实现。测试词典是自行生成的微型样本，不含商业词典数据。
 - [Legado NG](https://github.com/joestar817/legado_NG)：操作区域、角色卡提取、净化和统一 UI 体系的产品设计参考。
 - OpenccJava 1.4.2（MIT，Copyright (c) 2025 laisuk）：本地繁简及地区词转换（`licenses/openccjava-MIT.txt`，同时随 APK assets 分发）。
 - OpenCC 词库（Apache-2.0，上游 BYVoid/OpenCC）：OpenccJava 随附的 `dicts/**` 转换数据（`licenses/opencc-dictionaries-Apache-2.0.txt`；原始 `dicts/LICENSE` 与 assets 声明均随包保留）。
@@ -18,6 +17,8 @@
 - ZXing core（Apache-2.0）：局域网传书页的二维码矩阵生成（只用纯 Java 的 `core`，绘制由应用自己完成）。
 - multiplatform-markdown-renderer（Apache-2.0）：AI 输出的 Markdown 渲染。
 - Vico（Apache-2.0，[patrykandpatrick/vico](https://github.com/patrykandpatrick/vico)）：伴读图表中的柱状图与折线图；饼图、雷达图、关系图与时间线由应用自绘。
+- quickjs-kt 1.0.15（Apache-2.0，[dokar3/quickjs-kt](https://github.com/dokar3/quickjs-kt)）：伴读互动回答的 JavaScript 运行时 Kotlin 绑定。
+- intelligent-ui-demo（MIT，Copyright (c) 2026 DJJ，[Disdjj/intelligent-ui-demo](https://github.com/Disdjj/intelligent-ui-demo)）：互动界面编译器的容错规则参考及模型输出回归样本；许可与来源说明保存在 `app/src/test/resources/genui/fixtures/`。
 - ObjectBox（Java/Android 绑定 Apache-2.0，数据库核心为免费专有二进制）：向量索引存储。
 - kotlinx.coroutines / kotlinx.serialization（Apache-2.0）。
 - AndroidX、Jetpack Compose、Room、DataStore、WorkManager、Hilt、Material Icons（Apache-2.0）：Android 官方组件。

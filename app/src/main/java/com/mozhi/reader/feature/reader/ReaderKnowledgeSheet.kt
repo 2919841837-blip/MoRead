@@ -4,10 +4,10 @@ import androidx.compose.foundation.clickable
 import androidx.compose.ui.res.stringResource
 import com.mozhi.reader.R
 import com.mozhi.reader.ai.knowledge.ExternalCharacterNote
-import com.mozhi.reader.ai.knowledge.CharacterResearchAgent
 import com.mozhi.reader.ai.knowledge.BookCharacterGuide
 import androidx.compose.foundation.background
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -25,6 +25,7 @@ import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
@@ -49,14 +50,22 @@ internal data class ReaderKnowledgeActions(
     val locateCharacter: (BookCharacterGuideEntity, CharacterEvidence) -> Unit = { _, _ -> },
     val saveCharacterCard: (ExtractedCharacterCard) -> Unit = {},
     val saveCharacter: (String?, String, String) -> Unit = { _, _, _ -> },
-    val openLook: (String) -> Unit = {}
+    val openLook: (String) -> Unit = {},
+    val locateAnchor: (BookCharacterGuideEntity, SourceAnchor) -> Unit = { _, _ -> }
 )
+
+/** 目录弹层「人物」页签的序号，供进度球直接打开。 */
+internal const val KNOWLEDGE_CHARACTERS_TAB = 2
 
 @Composable
 internal fun ReaderKnowledgeContentsSheet(
     bookId: Long, contentRevision: Int, chapters: List<ChapterEntity>, tocEntries: List<BookTocEntryEntity>,
     currentChapterIndex: Int, palette: ReaderPalette, onChapterClick: (Int, String) -> Unit,
-    onLocate: (Int, Int) -> Unit, onDismiss: () -> Unit, viewModel: ReaderKnowledgeViewModel = hiltViewModel()
+    onLocate: (Int, Int) -> Unit, onDismiss: () -> Unit, initialTab: Int = 0,
+    bookmarks: List<com.mozhi.reader.core.database.entity.BookmarkEntity> = emptyList(),
+    onBookmarkClick: (com.mozhi.reader.core.database.entity.BookmarkEntity) -> Unit = {},
+    onDeleteBookmark: (Long) -> Unit = {},
+    viewModel: ReaderKnowledgeViewModel = hiltViewModel()
 ) {
     val observed by viewModel.state.collectAsStateWithLifecycle()
     val previews: com.mozhi.reader.feature.illustration.CharacterLookPreviewViewModel = hiltViewModel()
@@ -79,7 +88,20 @@ internal fun ReaderKnowledgeContentsSheet(
     ReaderKnowledgePages(state.copy(lookThumbnails = thumbnails), chapters, tocEntries, currentChapterIndex, palette, onChapterClick, onDismiss,
         ReaderKnowledgeActions(viewModel::preview, viewModel::cancel, viewModel::delete, viewModel::locate,
             viewModel::previewCharacters, viewModel::cancelCharacters, viewModel::deleteCharacters, viewModel::locateCharacter,
-            viewModel::saveCharacterCard, viewModel::saveCharacter, openLook = { imageCharacter = it }))
+            viewModel::saveCharacterCard, viewModel::saveCharacter, openLook = { imageCharacter = it },
+            locateAnchor = viewModel::locateAnchor), initialTab = initialTab,
+        bookmarks = bookmarks, onBookmarkClick = onBookmarkClick, onDeleteBookmark = onDeleteBookmark)
+    // 人物整理会跑好几分钟：开始时顺手要通知权限，切到后台也能在通知栏看到进度（拒绝也不影响整理）。
+    val notificationPermission = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestPermission()) { }
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val startCharacters = {
+        if (android.os.Build.VERSION.SDK_INT >= 33 && androidx.core.content.ContextCompat.checkSelfPermission(context,
+                android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            notificationPermission.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+        }
+        viewModel.generateCharacters()
+    }
     state.pending?.let { plan -> AlertDialog(
         onDismissRequest = viewModel::dismissPreview,
         title = { Text("生成章节大纲？") },
@@ -94,14 +116,14 @@ internal fun ReaderKnowledgeContentsSheet(
             append(plan.bookTitle).append('\n')
             append(stringResource(if (plan.progressBounded) R.string.characters_scope_bounded else R.string.characters_scope_full, plan.chapterCount))
             append('\n')
-            append(stringResource(R.string.characters_quick_models, plan.mainModelLabel, plan.modelLabel)).append("\n\n")
+            append(stringResource(R.string.characters_quick_models, plan.modelLabel)).append("\n\n")
             append(stringResource(R.string.characters_quick_body, plan.maximumRequests))
-            if (plan.webSearch) {
+            plan.webModelLabel?.let { webModel ->
                 append("\n\n")
-                append(stringResource(if (plan.progressBounded) R.string.characters_quick_web_bounded else R.string.characters_quick_web_full))
+                append(stringResource(if (plan.progressBounded) R.string.characters_quick_web_bounded else R.string.characters_quick_web_full, webModel))
             }
         }) },
-        confirmButton = { TextButton(onClick = viewModel::generateCharacters) { Text(stringResource(R.string.characters_quick_start)) } },
+        confirmButton = { TextButton(onClick = startCharacters) { Text(stringResource(R.string.characters_quick_start)) } },
         dismissButton = { TextButton(onClick = viewModel::dismissPreview) { Text(stringResource(R.string.characters_cancel)) } }
     ) }
     state.pendingCharacters?.takeUnless { it.quick }?.let { plan -> AlertDialog(
@@ -125,7 +147,7 @@ internal fun ReaderKnowledgeContentsSheet(
             if (plan.resuming) append("\n已保存 ${plan.completedParts} 段进度，核对通过后会直接复用。")
             append("\n\n可以随时停止，完成后整份保存。")
         }) },
-        confirmButton = { TextButton(onClick = viewModel::generateCharacters) {
+        confirmButton = { TextButton(onClick = startCharacters) {
             Text(when {
                 plan.resuming -> "继续提取"
                 plan.progressBounded -> "提取到此处"
@@ -141,23 +163,29 @@ internal fun ReaderKnowledgeContentsSheet(
 internal fun ReaderKnowledgePages(
     state: KnowledgeUiState, chapters: List<ChapterEntity>, tocEntries: List<BookTocEntryEntity>,
     currentChapterIndex: Int, palette: ReaderPalette, onChapterClick: (Int, String) -> Unit,
-    onDismiss: () -> Unit, actions: ReaderKnowledgeActions = ReaderKnowledgeActions(), initialTab: Int = 0
+    onDismiss: () -> Unit, actions: ReaderKnowledgeActions = ReaderKnowledgeActions(), initialTab: Int = 0,
+    bookmarks: List<com.mozhi.reader.core.database.entity.BookmarkEntity> = emptyList(),
+    onBookmarkClick: (com.mozhi.reader.core.database.entity.BookmarkEntity) -> Unit = {},
+    onDeleteBookmark: (Long) -> Unit = {}
 ) {
     var tab by rememberSaveable(state.bookId) { mutableIntStateOf(initialTab) }
     val pages = rememberSaveableStateHolder()
     val snackbar = remember { SnackbarHostState() }
     LaunchedEffect(state.error) { state.error?.let { snackbar.showSnackbar(it) } }
+    val book = state.snapshot.book
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {
             ReaderKnowledgeTabs(tab, palette, onDismiss,
-                bookTitle = state.snapshot.book?.title.orEmpty(),
-                position = if (chapters.isEmpty()) "书中导航" else "阅读导航 · 第 ${currentChapterIndex + 1} / ${chapters.size} 章"
+                bookTitle = book?.title.orEmpty(),
+                position = if (chapters.isEmpty()) "" else stringResource(R.string.toc_position, currentChapterIndex + 1, chapters.size),
+                coverPath = book?.coverPath
             ) { tab = it }
             Box(Modifier.weight(1f)) {
                 pages.SaveableStateProvider("${state.bookId}:$tab") {
                     when (tab) {
-                        0 -> ContentsSheet(chapters, tocEntries, currentChapterIndex, palette, onChapterClick)
+                        0 -> ContentsSheet(chapters, tocEntries, currentChapterIndex, palette, onChapterClick, onContinue = onDismiss)
                         1 -> ChapterKnowledgePanel(state, chapters, currentChapterIndex, palette, actions)
+                        KNOWLEDGE_BOOKMARKS_TAB -> BookmarksSheet(bookmarks, palette, onBookmarkClick, onDeleteBookmark, showHeader = false)
                         else -> BookCharactersPanel(state, chapters, palette, actions)
                     }
                 }
@@ -167,44 +195,84 @@ internal fun ReaderKnowledgePages(
     }
 }
 
+/** 目录弹层「书签」页签的序号。 */
+internal const val KNOWLEDGE_BOOKMARKS_TAB = 3
+
+/**
+ * 弹层头部：书封小样 + 朱砂眉标 + 宋体书名 + 位置；下面一条四段的分段控件
+ * （下沉的轨道上浮起一块纸色滑块，不再用强调色填满）。
+ */
 @Composable
 internal fun ReaderKnowledgeTabs(
     selectedTab: Int, palette: ReaderPalette, onDismiss: () -> Unit = {},
-    bookTitle: String = "", position: String = "阅读导航", onSelect: (Int) -> Unit
+    bookTitle: String = "", position: String = "", coverPath: String? = null, onSelect: (Int) -> Unit
 ) {
     Column(Modifier.fillMaxWidth()) {
-        Row(Modifier.fillMaxWidth().height(82.dp).padding(start = 22.dp, end = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                Text(position, style = MaterialTheme.typography.labelSmall, color = palette.muted, maxLines = 1)
-                Text(bookTitle.ifBlank { "书中导航" }, style = MaterialTheme.typography.titleLarge,
+        Row(Modifier.fillMaxWidth().height(92.dp).padding(start = 22.dp, end = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+            TocCoverThumb(bookTitle, coverPath, palette)
+            Column(Modifier.weight(1f).padding(start = 14.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                Text(stringResource(R.string.toc_eyebrow), style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 2.sp),
+                    color = palette.seal, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                Text(bookTitle.ifBlank { stringResource(R.string.toc_eyebrow) },
+                    style = MaterialTheme.typography.titleLarge.copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Serif),
                     color = palette.onBackground, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (position.isNotBlank()) {
+                    Text(position, style = MaterialTheme.typography.labelSmall, color = palette.muted, maxLines = 1)
+                }
             }
-            Spacer(Modifier.width(12.dp))
-            Surface(shape = CircleShape, color = palette.glass) {
-                IconButton(onClick = onDismiss) { Icon(Icons.Outlined.Close, "关闭目录与资料", tint = palette.muted, modifier = Modifier.size(20.dp)) }
-            }
-        }
-        Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp).height(54.dp)
-            .clip(RoundedCornerShape(18.dp)).background(palette.glass).padding(4.dp)
-            .selectableGroup().testTag("knowledge-tabs"), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            val icons = listOf(Icons.Outlined.FormatListBulleted, Icons.Outlined.AccountTree, Icons.Outlined.PeopleAlt)
-            listOf("目录", "大纲", "人物").forEachIndexed { index, label ->
-                val selected = index == selectedTab
-                val background by animateColorAsState(if (selected) palette.accentContainer else Color.Transparent, label = "navigation-tab")
-                Row(Modifier.weight(1f).fillMaxHeight().clip(RoundedCornerShape(14.dp)).background(background)
-                    .selectable(selected, role = Role.Tab, onClick = { onSelect(index) }),
-                    horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
-                    Icon(icons[index], null, Modifier.size(18.dp), tint = if (selected) palette.accent else palette.muted)
-                    Spacer(Modifier.width(7.dp))
-                    Text(label, style = MaterialTheme.typography.titleSmall,
-                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                        color = if (selected) palette.accent else palette.muted)
+            Spacer(Modifier.width(8.dp))
+            Surface(shape = CircleShape, color = palette.onBackground.copy(alpha = if (palette.isDark) 0.10f else 0.05f)) {
+                IconButton(onClick = onDismiss) {
+                    Icon(Icons.Outlined.Close, stringResource(R.string.toc_close), tint = palette.muted, modifier = Modifier.size(20.dp))
                 }
             }
         }
-        Spacer(Modifier.height(10.dp))
+        Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp).height(46.dp)
+            .clip(RoundedCornerShape(16.dp)).background(palette.onBackground.copy(alpha = if (palette.isDark) 0.08f else 0.055f)).padding(4.dp)
+            .selectableGroup().testTag("knowledge-tabs"), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+            // 页签序号与页面一致：0 目录、1 大纲、2 人物、3 书签。
+            listOf(R.string.toc_tab_contents, R.string.toc_tab_outline, R.string.toc_tab_characters, R.string.toc_tab_bookmarks)
+                .forEachIndexed { index, labelRes ->
+                    val selected = index == selectedTab
+                    val background by animateColorAsState(if (selected) palette.background else Color.Transparent, label = "navigation-tab")
+                    Box(Modifier.weight(1f).fillMaxHeight()
+                        .then(if (selected) Modifier.shadow(1.dp, RoundedCornerShape(12.dp)) else Modifier)
+                        .clip(RoundedCornerShape(12.dp)).background(background)
+                        .selectable(selected, role = Role.Tab, onClick = { onSelect(index) }),
+                        contentAlignment = Alignment.Center) {
+                        Text(stringResource(labelRes), style = MaterialTheme.typography.titleSmall,
+                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                            color = if (selected) palette.accent else palette.muted)
+                    }
+                }
+        }
+        Spacer(Modifier.height(14.dp))
     }
 }
+
+@Composable
+private fun TocCoverThumb(title: String, coverPath: String?, palette: ReaderPalette) {
+    val shape = RoundedCornerShape(topStart = 3.dp, bottomStart = 3.dp, topEnd = 7.dp, bottomEnd = 7.dp)
+    Box(
+        Modifier.size(width = 46.dp, height = 64.dp).shadow(4.dp, shape).clip(shape)
+            .background(if (palette.isDark) Color(0xFF3A4652) else Color(0xFF243A44)),
+        contentAlignment = Alignment.Center
+    ) {
+        val file = remember(coverPath) {
+            coverPath?.takeIf(String::isNotBlank)?.let(::File)?.takeIf(File::exists)
+        }
+        if (file != null) {
+            coil3.compose.AsyncImage(model = file, contentDescription = null,
+                contentScale = androidx.compose.ui.layout.ContentScale.Crop, modifier = Modifier.fillMaxSize())
+        } else {
+            Text(title.take(4).toList().joinToString("\n"), color = Color(0xFFF3EFE6),
+                style = MaterialTheme.typography.labelSmall.copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Serif,
+                    fontWeight = FontWeight.SemiBold, lineHeight = 12.sp, fontSize = 10.sp))
+        }
+    }
+}
+
+private typealias File = java.io.File
 
 @Composable
 private fun KnowledgeHeading(title: String, subtitle: String, palette: ReaderPalette, onInfo: () -> Unit) {
@@ -343,91 +411,100 @@ internal fun BookCharactersPanel(state: KnowledgeUiState, chapters: List<Chapter
     val titles = remember(chapters) { chapters.associate { it.chapterIndex to it.title } }
     var progressBounded by rememberSaveable(state.bookId, saved?.guide?.progressBounded) { mutableStateOf(saved?.guide?.progressBounded ?: true) }
     var quickMode by rememberSaveable(state.bookId) { mutableStateOf(saved?.guide?.mode != BookCharacterGuide.MODE_FULL || saved == null) }
-    Column(Modifier.fillMaxSize()) {
-        Row(Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 20.dp).testTag("character-tools"),
-            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            Column(Modifier.weight(1f)) {
-                Text("${people.size} 位人物", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = palette.onBackground)
-                if (query.isNotBlank()) Text("${filtered.size} 位匹配 · $query", style = MaterialTheme.typography.labelSmall,
-                    color = palette.muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    var openedIdentity by rememberSaveable(state.bookId) { mutableStateOf<String?>(null) }
+    var graphMode by rememberSaveable(state.bookId) { mutableStateOf(false) }
+    // 档案页是弹层里的二级页：系统返回先回到人物列表，再交给弹层关闭。
+    androidx.activity.compose.BackHandler(enabled = openedIdentity != null) { openedIdentity = null }
+    val locateSource: (CharacterSource) -> Unit = { source ->
+        saved?.let { visible ->
+            when (source) {
+                is CharacterSource.Anchor -> actions.locateAnchor(visible.entry, source.anchor)
+                is CharacterSource.Evidence -> actions.locateCharacter(visible.entry, source.evidence)
             }
-            Surface(shape = CircleShape, color = palette.glass) {
-                IconButton(onClick = { searching = true }) { Icon(Icons.Outlined.Search, "查找书中人物", tint = palette.muted, modifier = Modifier.size(20.dp)) }
-            }
-            Surface(shape = CircleShape, color = palette.glass) {
-                IconButton(onClick = { editing = null; editorVisible = true }, enabled = !state.loading) {
-                    Icon(Icons.Outlined.Add, "新增人物", tint = palette.accent, modifier = Modifier.size(20.dp))
+        }
+    }
+    val idleText = when {
+        state.characters.pendingProfiles > 0 -> stringResource(R.string.characters_pending_resume, state.characters.pendingProfiles)
+        state.characters.checkpointParts > 0 -> "已有提取进度，点击「提取」继续"
+        state.characters.outdated -> "正文已变化，可重新提取；手动资料保留"
+        saved?.guide?.scannedChapters == 0 -> "手动整理"
+        saved != null -> if (saved.guide.progressBounded) "已扫描到第 ${saved.guide.scannedChapters} 章" else "已扫描全书 ${saved.guide.scannedChapters} 章"
+        else -> "可从正文提取，也可手动添加"
+    }
+    androidx.compose.animation.AnimatedContent(targetState = openedIdentity, label = "character-dossier",
+        transitionSpec = {
+            val forward = targetState != null
+            (androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(220)) +
+                androidx.compose.animation.slideInHorizontally(androidx.compose.animation.core.tween(260)) { if (forward) it / 6 else -it / 6}) togetherWith
+                androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(160))
+        }) { identity ->
+        val person = identity?.let { id -> people.firstOrNull { it.identity == id } }
+        if (person != null) {
+            CharacterDossierPage(person, people, titles, state.lookThumbnails, saved?.guide?.externalNotes.orEmpty(),
+                saved?.guide?.progressBounded == true, palette, rememberLazyListState(),
+                onBack = { openedIdentity = null }, onOpenPerson = { openedIdentity = it }, onLocate = locateSource,
+                onAvatar = { actions.openLook(person.identity) }, onEdit = { editing = person; editorVisible = true },
+                onCard = { card = ExtractedCharacterCard.from(person) })
+        } else Column(Modifier.fillMaxSize()) {
+            Row(Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 20.dp).testTag("character-tools"),
+                verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Column(Modifier.weight(1f)) {
+                    Text("${people.size} 位人物", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = palette.onBackground)
+                    if (query.isNotBlank()) Text("${filtered.size} 位匹配 · $query", style = MaterialTheme.typography.labelSmall,
+                        color = palette.muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                Surface(shape = CircleShape, color = palette.glass) {
+                    IconButton(onClick = { searching = true }) { Icon(Icons.Outlined.Search, "查找书中人物", tint = palette.muted, modifier = Modifier.size(20.dp)) }
+                }
+                Surface(shape = CircleShape, color = if (graphMode) palette.accentContainer else palette.glass) {
+                    IconButton(onClick = { graphMode = !graphMode }, enabled = people.size > 1) {
+                        Icon(if (graphMode) Icons.Outlined.ViewAgenda else Icons.Outlined.Hub,
+                            stringResource(if (graphMode) R.string.characters_toggle_list_cd else R.string.characters_toggle_graph_cd),
+                            tint = if (graphMode) palette.accent else palette.muted, modifier = Modifier.size(20.dp))
+                    }
+                }
+                Surface(shape = CircleShape, color = palette.glass) {
+                    IconButton(onClick = { editing = null; editorVisible = true }, enabled = !state.loading) {
+                        Icon(Icons.Outlined.Add, "新增人物", tint = palette.accent, modifier = Modifier.size(20.dp))
+                    }
+                }
+                FilledTonalButton(onClick = { options = true }, shape = CircleShape, contentPadding = PaddingValues(horizontal = 14.dp),
+                    colors = ButtonDefaults.filledTonalButtonColors(containerColor = palette.accentContainer, contentColor = palette.accent)) {
+                    Text(if (busy) "提取中" else "提取")
                 }
             }
-            FilledTonalButton(onClick = { options = true }, shape = CircleShape, contentPadding = PaddingValues(horizontal = 14.dp),
-                colors = ButtonDefaults.filledTonalButtonColors(containerColor = palette.accentContainer, contentColor = palette.accent)) {
-                Text(if (busy) "提取中" else "提取")
-            }
-        }
-        // Fixed status line: progress changes never move the list or its scroll anchor.
-        Box(Modifier.fillMaxWidth().height(32.dp).padding(horizontal = 20.dp), contentAlignment = Alignment.CenterStart) {
-            Text(task?.error ?: when {
-                busy -> characterProgressLabel(task.progress) + " · 可离开此页"
-                state.characters.checkpointParts > 0 -> "已有提取进度，点击「提取」继续"
-                state.characters.outdated -> "正文已变化，可重新提取；手动资料保留"
-                saved?.guide?.scannedChapters == 0 -> "手动整理"
-                saved != null -> if (saved.guide.progressBounded) "已扫描到第 ${saved.guide.scannedChapters} 章" else "已扫描全书 ${saved.guide.scannedChapters} 章"
-                else -> "可从正文提取，也可手动添加"
-            }, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall,
-                color = if (task?.error != null) MaterialTheme.colorScheme.error else palette.muted)
-        }
-        LazyColumn(state = listState, modifier = Modifier.weight(1f).fillMaxWidth().blockSheetDrag(listState).testTag("characters-list"),
-            contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            if (filtered.isEmpty()) item(key = "empty") {
-                KnowledgeEmpty(if (query.isNotBlank()) "没有找到这个人物" else "还没有人物",
-                    if (query.isNotBlank()) "试试其他姓名，或清除搜索。" else "点击「提取」汇集书中人物，或用 + 手动添加。", palette)
-            }
-            saved?.guide?.externalNotes?.takeIf { it.isNotEmpty() && query.isBlank() }?.let { notes ->
-                item(key = "external-notes", contentType = "external") { ExternalNotesCard(notes, saved.guide.progressBounded, palette) }
-            }
-            items(filtered, key = { it.identity }, contentType = { "character" }) { person ->
-                var expanded by rememberSaveable(person.identity) { mutableStateOf(false) }
-                var menu by remember { mutableStateOf(false) }
-                Surface(shape = RoundedCornerShape(18.dp), color = palette.glass, modifier = Modifier.fillMaxWidth().testTag("person-${person.name}")) {
-                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Surface(onClick = { actions.openLook(person.identity) }, modifier = Modifier.size(48.dp), shape = CircleShape, color = palette.accentContainer) {
-                                Box(contentAlignment = Alignment.Center) {
-                                    Text(person.name.take(1), color = palette.accent, style = MaterialTheme.typography.titleMedium)
-                                    state.lookThumbnails[person.identity]?.let { path ->
-                                        coil3.compose.AsyncImage(java.io.File(path), contentDescription = person.name,
-                                            contentScale = androidx.compose.ui.layout.ContentScale.Crop, modifier = Modifier.fillMaxSize())
-                                    }
-                                }
-                            }
-                            Column(Modifier.weight(1f).padding(start = 10.dp)) {
-                                Text(person.name, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold, color = palette.onBackground)
-                                Text(if (person.manualDescription != null) "手动整理" else "${person.evidence.map { it.chapterIndex }.distinct().size} 章原文依据",
-                                    color = palette.muted, style = MaterialTheme.typography.labelSmall)
-                            }
+            // Fixed status line: progress changes never move the list or its scroll anchor.
+            CharacterTaskStrip(task, idleText, palette)
+            if (graphMode && people.size > 1) {
+                BookRelationGraph(filtered.ifEmpty { people }, state.lookThumbnails, palette, onOpenPerson = { openedIdentity = it },
+                    modifier = Modifier.weight(1f).fillMaxWidth())
+            } else LazyColumn(state = listState, modifier = Modifier.weight(1f).fillMaxWidth().blockSheetDrag(listState).testTag("characters-list"),
+                contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                if (filtered.isEmpty()) item(key = "empty") {
+                    KnowledgeEmpty(if (query.isNotBlank()) "没有找到这个人物" else "还没有人物",
+                        if (query.isNotBlank()) "试试其他姓名，或清除搜索。" else "点击「提取」汇集书中人物，或用 + 手动添加。", palette)
+                }
+                saved?.guide?.externalNotes?.takeIf { it.isNotEmpty() && query.isBlank() }?.let { notes ->
+                    item(key = "external-notes", contentType = "external") { ExternalNotesCard(notes, saved.guide.progressBounded, palette) }
+                }
+                characterGroups(filtered).forEach { group ->
+                    group.role?.let { role -> item(key = "group-$role", contentType = "group") {
+                        Text("${characterGroupTitle(role)} · ${group.people.size}", style = MaterialTheme.typography.labelLarge, color = palette.muted,
+                            modifier = Modifier.padding(top = 4.dp))
+                    } }
+                    items(group.people, key = { it.identity }, contentType = { "character" }) { person ->
+                        CharacterRosterCard(person, state.lookThumbnails[person.identity], palette, onOpen = { openedIdentity = person.identity },
+                            onAvatar = { actions.openLook(person.identity) }) {
+                            var menu by remember { mutableStateOf(false) }
                             Box {
-                                IconButton(onClick = { menu = true }) { Icon(Icons.Outlined.MoreHoriz, "${person.name}的人物操作", tint = palette.muted) }
+                                IconButton(onClick = { menu = true }) {
+                                    Icon(Icons.Outlined.MoreHoriz, stringResource(R.string.characters_person_actions, person.name), tint = palette.muted)
+                                }
                                 DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                                    DropdownMenuItem(text = { Text("编辑人物") }, onClick = { menu = false; editing = person; editorVisible = true })
-                                    DropdownMenuItem(text = { Text("提取角色卡") }, onClick = { menu = false; card = ExtractedCharacterCard.from(person) })
+                                    DropdownMenuItem(text = { Text(stringResource(R.string.dossier_menu_edit)) }, onClick = { menu = false; editing = person; editorVisible = true })
+                                    DropdownMenuItem(text = { Text(stringResource(R.string.dossier_menu_card)) }, onClick = { menu = false; card = ExtractedCharacterCard.from(person) })
                                 }
                             }
-                        }
-                        CharacterProfileDetails(person, expanded, palette) { evidence ->
-                            saved?.let { actions.locateCharacter(it.entry, evidence) }
-                        }
-                        person.manualDescription?.takeIf(String::isNotBlank)?.let {
-                            Text(it, color = palette.onBackground, style = MaterialTheme.typography.bodyMedium,
-                                maxLines = if (expanded) Int.MAX_VALUE else 4, overflow = TextOverflow.Ellipsis)
-                        }
-                        val evidence = if (expanded) person.evidence else if (person.manualDescription == null) person.evidence.take(1) else emptyList()
-                        evidence.forEach { item -> key(item.chapterIndex, item.fact.start, item.fact.text) {
-                            KnowledgeFactRow(item.fact, titles[item.chapterIndex] ?: "第 ${item.chapterIndex + 1} 章", palette) {
-                                saved?.let { actions.locateCharacter(it.entry, item) }
-                            }
-                        } }
-                        if (person.evidence.size > 1 || person.manualDescription != null || person.attributes.isNotEmpty() || person.relationships.isNotEmpty()) TextButton(onClick = { expanded = !expanded }, contentPadding = PaddingValues(0.dp)) {
-                            Text(if (expanded) "收起人物资料" else if (person.manualDescription != null || person.attributes.isNotEmpty() || person.relationships.isNotEmpty()) "展开资料与原文依据" else "展开 ${person.evidence.size - 1} 条资料", color = palette.accent)
                         }
                     }
                 }
@@ -516,33 +593,6 @@ private fun ConfirmKnowledgeDelete(title: String, description: String, onDismiss
     AlertDialog(onDismissRequest = onDismiss, title = { Text(title) }, text = { Text(description) },
         confirmButton = { TextButton(onClick = onConfirm) { Text("删除") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } })
-}
-
-@Composable
-private fun KnowledgeFactRow(fact: KnowledgeFact, chapterTitle: String, palette: ReaderPalette, onLocate: () -> Unit) {
-    var expanded by rememberSaveable(fact.start, fact.quote) { mutableStateOf(false) }
-    Column {
-        Text(fact.text, style = MaterialTheme.typography.bodyLarge.copy(lineHeight = 27.sp), color = palette.onBackground)
-        TextButton(onClick = { expanded = !expanded }, contentPadding = PaddingValues(horizontal = 0.dp)) {
-            Text(if (expanded) "收起依据" else "原文依据", color = palette.muted, style = MaterialTheme.typography.labelSmall)
-        }
-        if (expanded) Column(Modifier.padding(start = 10.dp).fillMaxWidth()) {
-            Text("“${fact.quote}”", style = MaterialTheme.typography.bodySmall.copy(lineHeight = 22.sp), color = palette.muted)
-            TextButton(onClick = onLocate, contentPadding = PaddingValues(horizontal = 0.dp)) {
-                Text("$chapterTitle · 核对原文", color = palette.accent)
-            }
-        }
-    }
-}
-
-/** 快速提取的进度阶段码 → 界面文案。 */
-@Composable
-private fun characterProgressLabel(raw: String): String = when {
-    raw == CharacterResearchAgent.PROGRESS_PLANNING -> stringResource(R.string.characters_progress_planning)
-    raw == CharacterResearchAgent.PROGRESS_SEARCHING -> stringResource(R.string.characters_progress_searching)
-    raw.startsWith(CharacterResearchAgent.PROGRESS_PROFILING) ->
-        stringResource(R.string.characters_progress_profiling, raw.removePrefix(CharacterResearchAgent.PROGRESS_PROFILING))
-    else -> raw
 }
 
 /** 联网查到的书外资料：和原文依据分开放，「读到此处」时默认收起并提示可能含剧透。 */

@@ -138,7 +138,7 @@ fun MoReadButton(
 /** 深色沉浸播放器：原版保留白色主键与透明侧键，彩色方案使用各自的实色/浅色按钮。 */
 @Composable
 fun immersivePlaybackColors(primary: Boolean): ButtonColors {
-    val classic = LocalMoReadColors.current.colorScheme == ColorSchemePreset.NEUTRAL
+    val classic = LocalMoReadColors.current.colorScheme.isClassic
     val c = MaterialTheme.colorScheme
     return ButtonDefaults.buttonColors(
         containerColor = if (classic) {

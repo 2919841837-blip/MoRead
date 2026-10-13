@@ -4,7 +4,6 @@ import com.mozhi.reader.core.database.entity.AnnotationEntity
 import com.mozhi.reader.core.database.entity.BookEntity
 import com.mozhi.reader.core.database.entity.NoteEntity
 import com.mozhi.reader.core.database.entity.PersonaEntity
-import com.mozhi.reader.core.retrieval.AnnotationVisibility
 import com.mozhi.reader.core.retrieval.ReadingScopeResolver
 
 internal enum class ReviewSource(val label: String) { ALL("全部"), MINE("我的"), AI("AI 伴读") }
@@ -50,8 +49,6 @@ internal fun reviewEntries(
     fun author(id: Long?) = id?.let { "AI · ${names[it] ?: "已删除角色"}" } ?: "我的"
     val highlights = annotations.mapNotNull { annotation ->
         val book = bookMap[annotation.bookId] ?: return@mapNotNull null
-        val scope = ReadingScopeResolver.resolve(spoilerProtection, book)
-        if (!AnnotationVisibility.isVisible(annotation, scope)) return@mapNotNull null
         ReviewEntry(book, author(annotation.personaId), annotation = annotation, authorAvatarPath = avatars[annotation.personaId])
     }
     val writings = notes.mapNotNull { note ->

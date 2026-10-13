@@ -1,5 +1,6 @@
 package com.mozhi.reader.feature.reader
 
+import com.mozhi.reader.R
 import android.provider.OpenableColumns
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -53,7 +54,9 @@ import com.mozhi.reader.core.database.entity.MessageEntity
 import com.mozhi.reader.ui.components.MoReadBackdrop
 import com.mozhi.reader.ui.components.MoReadBoundedContent
 import com.mozhi.reader.ui.components.rememberChatFontFamily
+import com.mozhi.reader.ui.components.safeTopInset
 import com.mozhi.reader.ui.components.safeTopPadding
+import androidx.compose.ui.graphics.Brush
 import java.io.File
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
@@ -120,6 +123,13 @@ fun CompanionChatPane(
     var previewImagePath by remember { mutableStateOf<String?>(null) }
 
     val context = LocalContext.current
+    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
+    val uriHandler = androidx.compose.ui.platform.LocalUriHandler.current
+    val genUiSettings by companionViewModel.genUiSettings.collectAsStateWithLifecycle()
+    LaunchedEffect(palette.isDark) { companionViewModel.setGenUiDarkPaper(palette.isDark) }
+    var pendingGenUiUrl by remember { mutableStateOf<com.mozhi.reader.ai.genui.GenUiCommand.OpenUrl?>(null) }
+    // 「发消息」要和输入框发送走同一条路（锚定滚动）；列表状态在下面才建好，这里先占位。
+    val genUiSendRef = remember { arrayOfNulls<(String) -> Unit>(1) }
 
     LaunchedEffect(companionViewModel) {
         companionViewModel.events.collect { event ->
@@ -133,8 +143,59 @@ fun CompanionChatPane(
                 // 定位失败要说出来：静默无反应会让人以为是点击没生效，反复戳。
                 is CompanionChatEvent.Message ->
                     Toast.makeText(context, event.text, Toast.LENGTH_SHORT).show()
+                // 互动界面的动作：先过白名单与参数校验，再在这里执行
+                is CompanionChatEvent.GenUi -> when (val command = com.mozhi.reader.ai.genui.GenUiActions.validate(event.action)) {
+                    is com.mozhi.reader.ai.genui.GenUiCommand.Send ->
+                        if (companionViewModel.uiState.value.isStreaming) {
+                            Toast.makeText(context, context.getString(R.string.genui_send_busy), Toast.LENGTH_SHORT).show()
+                        } else {
+                            genUiSendRef[0]?.invoke(command.text)
+                        }
+                    is com.mozhi.reader.ai.genui.GenUiCommand.Copy -> {
+                        clipboard.setText(androidx.compose.ui.text.AnnotatedString(command.text))
+                        Toast.makeText(context, context.getString(R.string.genui_copied), Toast.LENGTH_SHORT).show()
+                    }
+                    is com.mozhi.reader.ai.genui.GenUiCommand.Jump -> {
+                        val located = companionViewModel.verifyGenUiQuote(command.chapterNumber, command.quote)
+                        if (located != null) {
+                            companionViewModel.locate(located)
+                        } else {
+                            Toast.makeText(context, context.getString(R.string.genui_quote_missing), Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                    is com.mozhi.reader.ai.genui.GenUiCommand.Speak ->
+                        companionViewModel.speak(command.text, mediaViewModel::playCachedSpeech)
+                    is com.mozhi.reader.ai.genui.GenUiCommand.OpenUrl -> pendingGenUiUrl = command
+                    null -> Unit
+                }
             }
         }
+    }
+    pendingGenUiUrl?.let { command ->
+        AlertDialog(
+            onDismissRequest = { pendingGenUiUrl = null },
+            title = { Text(androidx.compose.ui.res.stringResource(R.string.genui_open_url_title)) },
+            text = { Text(androidx.compose.ui.res.stringResource(R.string.genui_open_url_body, command.host, command.url)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    pendingGenUiUrl = null
+                    runCatching { uriHandler.openUri(command.url) }
+                }) { Text(androidx.compose.ui.res.stringResource(R.string.genui_open_url_confirm)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingGenUiUrl = null }) {
+                    Text(androidx.compose.ui.res.stringResource(R.string.genui_open_url_cancel))
+                }
+            }
+        )
+    }
+    val genUiController = remember(companionViewModel, genUiSettings) {
+        CompanionGenUiController(
+            session = companionViewModel.genUi,
+            settings = genUiSettings,
+            verifyQuote = companionViewModel::verifyGenUiQuote,
+            onLocate = companionViewModel::locate
+        )
     }
 
     val imagePicker = rememberLauncherForActivityResult(
@@ -239,6 +300,12 @@ fun CompanionChatPane(
         companionViewModel.updateComposerDraft("", persona?.id)
         pendingAttachments = emptyList()
     }
+    androidx.compose.runtime.SideEffect {
+        genUiSendRef[0] = { text ->
+            scrollState.requestFollowLatest()
+            companionViewModel.send(text, sceneQuote)
+        }
+    }
 
     val chatFont = rememberChatFontFamily(state.appearance.fontId, state.fontLibrary)
 
@@ -302,43 +369,28 @@ fun CompanionChatPane(
             )
         }
         MoReadBoundedContent(maxWidth = if (LocalCompanionSidebarVisible.current) 880.dp else 720.dp) {
+        // 没有顶栏：返回、角色、会话按钮是浮在对话上方的玻璃小件，消息从它们底下滚过，
+        // 顶部一层渐隐的纸色让穿过的文字淡出，而不是被一条硬边截断。
+        // 顶部留白取「忽略可见性」的稳定安全区：从沉浸阅读推进来时状态栏晚一拍恢复，不能让列表跟着跳。
+        val headerInset = safeTopInset() + CHAT_FLOATING_HEADER_HEIGHT
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                // The reader side pane also reaches the window edge. Keep its header below the
-                // stable status-bar/cutout inset, including while immersive reading hides the bars.
-                .safeTopPadding()
                 .imePadding()
         ) {
-            CompanionChatHeader(
-                embedded = embedded,
-                persona = persona,
-                personas = state.personas,
-                bookTitle = chatContext.bookTitle,
-                personaMenuExpanded = personaMenuExpanded,
-                isStreaming = state.isStreaming,
-                palette = palette,
-                onBack = onBack,
-                onOpenPersonaMenu = { personaMenuExpanded = true },
-                onDismissPersonaMenu = { personaMenuExpanded = false },
-                onSelectPersona = { personaId ->
-                    personaMenuExpanded = false
-                    companionViewModel.selectPersona(personaId)
-                },
-                onNewConversation = companionViewModel::newConversation,
-                onShowConversations = { showConversations = true }
-            )
-            HorizontalDivider(color = palette.glassBorder)
-
             Box(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
             ) {
-                androidx.compose.runtime.CompositionLocalProvider(LocalCompanionWebSources provides webSources) {
+                androidx.compose.runtime.CompositionLocalProvider(
+                    LocalCompanionWebSources provides webSources,
+                    LocalCompanionGenUi provides genUiController
+                ) {
                 CompanionChatMessageList(
                     entries = entries,
                     scrollState = scrollState,
+                    topInset = headerInset,
                     modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp)
                 ) { entry ->
                             when (entry) {
@@ -432,6 +484,38 @@ fun CompanionChatPane(
                                 }
                     }
                 }
+                }
+
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(
+                            Brush.verticalGradient(
+                                0f to palette.background.copy(alpha = 0.96f),
+                                0.62f to palette.background.copy(alpha = 0.82f),
+                                1f to palette.background.copy(alpha = 0f)
+                            )
+                        )
+                        .safeTopPadding()
+                ) {
+                CompanionChatHeader(
+                    embedded = embedded,
+                    persona = persona,
+                    personas = state.personas,
+                    bookTitle = chatContext.bookTitle,
+                    personaMenuExpanded = personaMenuExpanded,
+                    isStreaming = state.isStreaming,
+                    palette = palette,
+                    onBack = onBack,
+                    onOpenPersonaMenu = { personaMenuExpanded = true },
+                    onDismissPersonaMenu = { personaMenuExpanded = false },
+                    onSelectPersona = { personaId ->
+                        personaMenuExpanded = false
+                        companionViewModel.selectPersona(personaId)
+                    },
+                    onNewConversation = companionViewModel::newConversation,
+                    onShowConversations = { showConversations = true }
+                )
                 }
 
                 val followScope = rememberCoroutineScope()
@@ -576,3 +660,6 @@ fun CompanionChatPane(
             onDismiss = { showImageStudio = false; previewImagePath = null })
     }
 }
+
+/** 浮动顶部按钮行的高度（44dp 按钮 + 上下 8dp），列表据此留出顶部空间。 */
+private val CHAT_FLOATING_HEADER_HEIGHT = 60.dp

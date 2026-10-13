@@ -796,6 +796,33 @@ object DatabaseMigrations {
         }
     }
 
+    /** 人物档案：逐人落库的断点与缓存，删书级联清理。 */
+    val Migration34To35 = object : Migration(34, 35) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("""
+                CREATE TABLE IF NOT EXISTS `book_character_dossiers` (
+                    `bookId` INTEGER NOT NULL,
+                    `cacheKey` TEXT NOT NULL,
+                    `identity` TEXT NOT NULL,
+                    `sourceRevision` TEXT NOT NULL,
+                    `contentJson` TEXT NOT NULL,
+                    `createdAt` INTEGER NOT NULL,
+                    PRIMARY KEY(`bookId`, `cacheKey`),
+                    FOREIGN KEY(`bookId`) REFERENCES `books`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE
+                )
+            """.trimIndent())
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_book_character_dossiers_bookId` ON `book_character_dossiers` (`bookId`)")
+        }
+    }
+
+    /** 伴读互动回答：AI 消息保存界面状态，用户消息保存当时交给模型的界面状态摘要。 */
+    val Migration33To34 = object : Migration(33, 34) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("ALTER TABLE `messages` ADD COLUMN `uiStateJson` TEXT DEFAULT NULL")
+            db.execSQL("ALTER TABLE `messages` ADD COLUMN `uiContextJson` TEXT DEFAULT NULL")
+        }
+    }
+
     /** 重复导入检测：书籍记下源文件指纹，旧书留空（EPUB 在下次导入同尺寸文件时补算）。 */
     val Migration32To33 = object : Migration(32, 33) {
         override fun migrate(db: SupportSQLiteDatabase) {

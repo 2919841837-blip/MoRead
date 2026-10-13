@@ -46,6 +46,7 @@ import androidx.compose.material.icons.outlined.Psychology
 import androidx.compose.material.icons.outlined.QueryStats
 import androidx.compose.material.icons.outlined.RecordVoiceOver
 import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
@@ -63,6 +64,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -70,6 +72,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.text.font.FontFamily
@@ -592,7 +595,7 @@ internal fun ChatSceneDivider(text: String, palette: ReaderPalette) {
         FadingRule(palette, fadeToStart = true, modifier = Modifier.weight(1f))
         Text(
             text = if (pending) " " else text,
-            style = MaterialTheme.typography.labelSmall,
+            style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 2.sp),
             color = palette.muted,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
@@ -639,86 +642,88 @@ internal fun EmbeddingProgressCapsule(
         progress.stage == EmbeddingIndexStage.FAILED
     val showBar = progress.stage == EmbeddingIndexStage.INDEXING ||
         (progress.stage == EmbeddingIndexStage.QUEUED && progress.indexedChapters > 0)
-    Surface(
-        color = palette.glass,
-        shape = if (isProblem) RoundedCornerShape(14.dp) else CircleShape,
-        border = BorderStroke(
-            1.dp,
-            if (isProblem) MaterialTheme.colorScheme.error.copy(alpha = 0.45f) else palette.glassBorder
-        )
-    ) {
-        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.heightIn(min = 22.dp)
-            ) {
-                if (progress.stage == EmbeddingIndexStage.INDEXING) {
-                    CircularProgressIndicator(
-                        strokeWidth = 1.5.dp,
-                        color = palette.accent,
-                        modifier = Modifier.size(11.dp)
-                    )
-                }
-                Text(
-                    text = buildString {
-                        append(
-                            when (progress.stage) {
-                                EmbeddingIndexStage.DISABLED -> "本书未启用 AI 索引"
-                                EmbeddingIndexStage.QUEUED -> "全文索引等待中"
-                                EmbeddingIndexStage.INDEXING -> "正在建立全文索引"
-                                EmbeddingIndexStage.BLOCKED -> "全文索引需要处理"
-                                EmbeddingIndexStage.FAILED -> "全文索引失败"
-                                else -> ""
-                            }
+    // 一枚居中的发丝线小胶囊：说明索引状态属于整场对话，而不是某条消息。
+    Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+        Surface(
+            color = palette.glassStrong.copy(alpha = 0.6f),
+            shape = if (isProblem) RoundedCornerShape(16.dp) else CircleShape,
+            border = BorderStroke(
+                0.5.dp,
+                if (isProblem) MaterialTheme.colorScheme.error.copy(alpha = 0.45f) else palette.glassBorder
+            )
+        ) {
+            Column(modifier = Modifier.padding(start = 12.dp, end = 4.dp, top = 2.dp, bottom = 2.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (progress.stage == EmbeddingIndexStage.INDEXING) {
+                        CircularProgressIndicator(
+                            strokeWidth = 1.5.dp,
+                            color = palette.accent,
+                            modifier = Modifier.size(12.dp)
                         )
-                        if (progress.totalChapters > 0 && !isProblem) {
-                            append(" · ${progress.indexedChapters}/${progress.totalChapters}")
-                        }
-                    },
-                    style = MaterialTheme.typography.labelSmall,
-                    color = if (isProblem) MaterialTheme.colorScheme.error else palette.muted,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(
-                        start = if (progress.stage == EmbeddingIndexStage.INDEXING) 6.dp else 0.dp
+                    } else {
+                        Icon(
+                            Icons.Outlined.Shield,
+                            contentDescription = null,
+                            tint = if (isProblem) MaterialTheme.colorScheme.error else palette.muted,
+                            modifier = Modifier.size(14.dp)
+                        )
+                    }
+                    Text(
+                        text = buildString {
+                            append(
+                                when (progress.stage) {
+                                    EmbeddingIndexStage.DISABLED -> "本书未启用 AI 索引"
+                                    EmbeddingIndexStage.QUEUED -> "全文索引等待中"
+                                    EmbeddingIndexStage.INDEXING -> "正在建立全文索引"
+                                    EmbeddingIndexStage.BLOCKED -> "全文索引需要处理"
+                                    EmbeddingIndexStage.FAILED -> "全文索引失败"
+                                    else -> ""
+                                }
+                            )
+                            if (progress.totalChapters > 0 && !isProblem) {
+                                append(" · ${progress.indexedChapters}/${progress.totalChapters}")
+                            }
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (isProblem) MaterialTheme.colorScheme.error else palette.muted,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(start = 6.dp)
                     )
-                )
-                TextButton(
-                    onClick = onRetry,
-                    contentPadding = PaddingValues(
-                        horizontal = 8.dp,
-                        vertical = 0.dp
-                    ),
-                    modifier = Modifier.padding(start = 4.dp)
-                ) {
                     Text(
                         text = if (progress.stage == EmbeddingIndexStage.DISABLED) "启用" else "重试",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = palette.accent
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = palette.accent,
+                        modifier = Modifier
+                            .padding(start = 4.dp)
+                            .clip(CircleShape)
+                            .clickable(onClick = onRetry)
+                            .padding(horizontal = 10.dp, vertical = 9.dp)
                     )
                 }
-            }
-            // 问题态才展开第二行说清原因；进行中只留一条细进度。
-            if (isProblem && progress.message.isNotBlank()) {
-                Text(
-                    text = progress.message,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = palette.muted,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(top = 3.dp, bottom = 2.dp)
-                )
-            }
-            if (showBar) {
-                LinearProgressIndicator(
-                    progress = { progress.fraction },
-                    color = palette.accent,
-                    trackColor = palette.glassBorder,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(2.dp)
-                        .padding(top = 4.dp)
-                )
+                // 问题态才展开第二行说清原因；进行中只留一条细进度。
+                if (isProblem && progress.message.isNotBlank()) {
+                    Text(
+                        text = progress.message,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = palette.muted,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(end = 10.dp, bottom = 6.dp)
+                    )
+                }
+                if (showBar) {
+                    LinearProgressIndicator(
+                        progress = { progress.fraction },
+                        color = palette.accent,
+                        trackColor = palette.glassBorder,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(end = 10.dp, bottom = 6.dp)
+                            .height(2.dp)
+                    )
+                }
             }
         }
     }

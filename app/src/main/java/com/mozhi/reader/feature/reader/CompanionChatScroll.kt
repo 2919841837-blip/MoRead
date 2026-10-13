@@ -197,6 +197,8 @@ internal fun CompanionChatMessageList(
     entries: List<ChatEntry>,
     scrollState: CompanionChatScrollState,
     modifier: Modifier = Modifier,
+    /** 浮在列表上方的顶部按钮所占的高度；内容从它下面开始，滚动时从它底下穿过。 */
+    topInset: androidx.compose.ui.unit.Dp = 0.dp,
     content: @Composable (ChatEntry) -> Unit
 ) {
     // 首次定位完成后短淡入，而不是硬切出现：页面还在转场滑动时整屏列表突然「弹」出来，
@@ -212,7 +214,7 @@ internal fun CompanionChatMessageList(
         modifier = modifier
             .nestedScroll(scrollState.nestedScrollConnection)
             .graphicsLayer { alpha = revealAlpha },
-        contentPadding = PaddingValues(top = 8.dp, bottom = 14.dp)
+        contentPadding = PaddingValues(top = 8.dp + topInset, bottom = 14.dp)
     ) {
         itemsIndexed(
             items = entries,

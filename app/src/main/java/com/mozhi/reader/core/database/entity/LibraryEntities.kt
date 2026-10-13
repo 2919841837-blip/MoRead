@@ -390,7 +390,17 @@ data class MessageEntity(
     val inputTokens: Long? = null,
     val outputTokens: Long? = null,
     /** End-to-end stream duration, including first-token latency and network transfer. */
-    val generationTimeMs: Long? = null
+    val generationTimeMs: Long? = null,
+    /**
+     * AI 消息里互动界面的状态（具名状态的当前值 + `__host` 宿主结果引用）。
+     * null = 不含互动界面或从未交互；重开聊天页时据此恢复用户上次调到的样子。
+     */
+    val uiStateJson: String? = null,
+    /**
+     * 用户消息发送时附带给模型的界面状态摘要（不显示）。重建历史与重生成时原样复用，
+     * 模型因此知道用户在上一条回复的界面里改了什么。
+     */
+    val uiContextJson: String? = null
 )
 
 /** RikkaHub-style assignment: a role points at one concrete model, not a whole provider. */

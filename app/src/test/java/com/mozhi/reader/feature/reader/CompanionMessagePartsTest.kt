@@ -12,6 +12,23 @@ import org.junit.Test
 class CompanionMessagePartsTest {
 
     @Test
+    fun `interactive islands become their own part between text bubbles`() {
+        val content = "先看这个：\n\n{@body const [n,setN] = useState(3)}\n<card>\n<slider value={n} onChange={setN} min={1} max={9}/>\n</card>\n\n[语音] 拖拖看\n收尾一句"
+        val single = parseCompanionParts(content, multiBubble = false)
+        assertEquals(listOf("Text", "Widget", "Voice", "Text"), single.map { it::class.simpleName })
+        assertEquals(0, (single[1] as CompanionBubblePart.Widget).islandIndex)
+        assertTrue(single.none { it.text.contains("{@body") })
+        val multi = parseCompanionParts(content, multiBubble = true)
+        assertEquals(1, multi.count { it is CompanionBubblePart.Widget })
+    }
+
+    @Test
+    fun `half written island stays hidden while streaming`() {
+        val parts = parseCompanionParts("先看这个：\n<card>\n  <text>", multiBubble = false, complete = false)
+        assertEquals(listOf("先看这个："), parts.map { it.text })
+    }
+
+    @Test
     fun `multi bubble splits each line into its own bubble`() {
         val parts = parseCompanionParts("我刚读到那段\n真的有点起鸡皮疙瘩\n你读到哪了？", multiBubble = true)
         assertEquals(

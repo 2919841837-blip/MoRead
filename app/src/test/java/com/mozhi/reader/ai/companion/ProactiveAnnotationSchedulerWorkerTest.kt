@@ -16,6 +16,46 @@ import org.junit.Test
 
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class ProactiveAnnotationSchedulerWorkerTest {
+    @Test fun unlimitedCurrentChapterSharesEveryPassWithAheadChapterAndAllSelectedCompanions() = runTest {
+        val f = Fixture(backgroundScope)
+        f.autonomy.value = f.autonomy.value.copy(annotationPersonaIds = setOf(3, 8),
+            annotationLimits = f.autonomy.value.annotationLimits.copy(aheadChapters = 1,
+                maxPerChapter = ProactiveAnnotationLimits.UNLIMITED, dailyMax = ProactiveAnnotationLimits.UNLIMITED))
+        val requests = mutableListOf<ProactiveAnnotationRequest>()
+        coEvery { f.service.generateForChapter(capture(requests), any(), any(), any()) } answers {
+            val request = firstArg<ProactiveAnnotationRequest>()
+            val nextEnd = (request.visitedParagraphEnds.maxOrNull() ?: 0) + 20
+            assertEquals(Int.MAX_VALUE, request.candidateLimit)
+            assertEquals(1, request.maxSlotsPerPass)
+            ProactiveAnnotationGenerationResult(false, false, hasMore = nextEnd < 60,
+                visitedParagraphEnds = setOf(nextEnd))
+        }
+        f.scheduler.onChapterEntered(1, 0); runCurrent()
+        assertEquals(listOf(0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1), requests.map { it.chapterIndex })
+        assertEquals(List(12) { if (it % 2 == 0) 3L else 8L }, requests.map { it.persona.id })
+        assertTrue(f.ledger.rows.values.all { it.status == "DONE" && it.attempts == 0 })
+    }
+
+    @Test fun failedSlicesShareWorkerButConsumeOnlyTwoCompleteGenerationAttempts() = runTest {
+        val f = Fixture(backgroundScope)
+        f.autonomy.value = f.autonomy.value.copy(annotationLimits = f.autonomy.value.annotationLimits.copy(aheadChapters = 1))
+        val requests = mutableListOf<ProactiveAnnotationRequest>()
+        coEvery { f.service.generateForChapter(capture(requests), any(), any(), any()) } answers {
+            val request = firstArg<ProactiveAnnotationRequest>()
+            if (request.chapterIndex == 1) ProactiveAnnotationGenerationResult(false, false)
+            else ProactiveAnnotationGenerationResult(request.visitedParagraphEnds.isEmpty(), false,
+                hasMore = request.visitedParagraphEnds.isEmpty(), visitedParagraphEnds = setOf(40))
+        }
+        f.scheduler.onChapterEntered(1, 0); runCurrent()
+        assertEquals(listOf(0, 1, 0), requests.map { it.chapterIndex })
+        assertEquals(1, f.ledger.rows.values.first { it.chapterIndex == 0 }.attempts)
+        advanceTimeBy(PROACTIVE_ANNOTATION_RETRY_DELAY_MS); runCurrent()
+        assertEquals(listOf(0, 1, 0, 0, 0), requests.map { it.chapterIndex })
+        assertEquals(2, f.ledger.rows.values.first { it.chapterIndex == 0 }.attempts)
+        advanceTimeBy(PROACTIVE_ANNOTATION_RETRY_DELAY_MS * 5); runCurrent()
+        assertEquals(5, requests.size)
+    }
+
     @Test fun selectedCompanionsGenerateIndependentlyWithoutFollowingActiveChatSwitches() = runTest {
         val f = Fixture(backgroundScope)
         f.autonomy.value = f.autonomy.value.copy(annotationPersonaIds = setOf(3, 8),

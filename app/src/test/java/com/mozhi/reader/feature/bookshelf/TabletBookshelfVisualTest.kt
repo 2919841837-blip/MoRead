@@ -146,7 +146,7 @@ class TabletBookshelfVisualTest {
                                 onClearFilters = { filter = ShelfFilter(); select(RootDestination.Bookshelf) },
                                 onManageGroups = {}, onManageTags = {})
                             else MoReadNavigationDock(true, haze, window == MoReadWindowWidth.MEDIUM, selected,
-                                Modifier.align(if (window == MoReadWindowWidth.MEDIUM) Alignment.CenterStart else Alignment.BottomCenter), select)
+                                Modifier.align(if (window == MoReadWindowWidth.MEDIUM) Alignment.CenterStart else Alignment.BottomCenter), onSelect = select)
                         }
                     }
                 }

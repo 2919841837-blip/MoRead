@@ -13,6 +13,8 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -90,6 +92,10 @@ class ReaderKnowledgeViewModel @Inject constructor(
         }
     }
 
+    /** 只看任务进度、不读书籍资料：阅读页的进度球用它，开销与目录弹层是否打开无关。 */
+    fun characterTask(bookId: Long): kotlinx.coroutines.flow.Flow<KnowledgeTaskState?> =
+        runner.states.map { it[KnowledgeTaskKey(bookId)] }.distinctUntilChanged()
+
     fun dismissPreview() { mutable.update { it.copy(pending = null, pendingCharacters = null) } }
     fun generate() { mutable.value.pending?.let(runner::generate); dismissPreview() }
     fun generateCharacters() { mutable.value.pendingCharacters?.let(runner::generateCharacters); dismissPreview() }
@@ -110,6 +116,7 @@ class ReaderKnowledgeViewModel @Inject constructor(
     }
     fun locate(entry: ChapterKnowledgeEntity, fact: KnowledgeFact) = localAction { locations.send(repository.locate(entry, fact)) }
     fun locateCharacter(entry: BookCharacterGuideEntity, evidence: CharacterEvidence) = localAction { locations.send(characters.locate(entry, evidence)) }
+    fun locateAnchor(entry: BookCharacterGuideEntity, anchor: SourceAnchor) = localAction { locations.send(characters.locate(entry, anchor)) }
 
     private fun localAction(block: suspend (Long) -> Unit) {
         val book = mutable.value.bookId

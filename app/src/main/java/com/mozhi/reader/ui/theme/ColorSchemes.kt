@@ -53,6 +53,7 @@ object MoReadSchemes {
 
     /** 静态方案规格；[ColorSchemePreset.DYNAMIC] 没有静态规格，由 [dynamicSide] 运行时拼装。 */
     fun spec(preset: ColorSchemePreset): MoReadSchemeSpec = when (preset) {
+        ColorSchemePreset.PAPER -> Paper
         ColorSchemePreset.NEUTRAL, ColorSchemePreset.DYNAMIC -> Neutral
         ColorSchemePreset.HAZE_BLUE -> HazeBlue
         ColorSchemePreset.SAGE -> Sage
@@ -144,10 +145,14 @@ object MoReadSchemes {
         preset: ColorSchemePreset,
         semantic: MoReadSemanticColors,
         harmony: SemanticHarmony = SemanticHarmony.MULTI
-    ): List<Pair<Color, Color>> = if (preset == ColorSchemePreset.NEUTRAL && harmony == SemanticHarmony.MULTI) {
-        NeutralAvatarGradients
-    } else {
-        semantic.all.map { tone ->
+    ): List<Pair<Color, Color>> = when {
+        harmony != SemanticHarmony.MULTI -> semantic.all.map { tone ->
+            tone.container to tone.accent.copy(alpha = 0.1f).compositeOver(tone.container)
+        }
+        preset == ColorSchemePreset.NEUTRAL -> NeutralAvatarGradients
+        // 纸墨：书封式的沉色渐变配浅字，头像在暖白纸上是一枚小小的「印」。
+        preset == ColorSchemePreset.PAPER -> PaperAvatarGradients
+        else -> semantic.all.map { tone ->
             tone.container to tone.accent.copy(alpha = 0.1f).compositeOver(tone.container)
         }
     }
@@ -159,11 +164,98 @@ object MoReadSchemes {
         Color(0xFF8A8A8A) to Color(0xFF4A4A4A)
     )
 
+    private val PaperAvatarGradients = listOf(
+        Color(0xFF3F6B67) to Color(0xFF2F5552),
+        Color(0xFF85622F) to Color(0xFF6E4E1E),
+        Color(0xFF4C6684) to Color(0xFF2F4560),
+        Color(0xFF765A74) to Color(0xFF573F55)
+    )
+
     private val NeutralTags = listOf(
         Color(0xFFD59B2D),
         Color(0xFF4E8B62),
         Color(0xFF4A6785),
         Color(0xFFA84D55)
+    )
+
+    // ---------------------------------------------------------------- 纸墨（默认）
+
+    /**
+     * 纸、墨、朱砂：暖白纸做底，墨色做文字与主按钮，朱砂只留给眉标、当前位置这类极少数强调。
+     * 浮起面（卡片、阅读页）比纸亮一档，下沉面（分段轨道、标签）比纸暗一档，
+     * 层级靠这三档纸色与发丝线，不靠描边和投影。
+     */
+    private val Paper = MoReadSchemeSpec(
+        light = MoReadSchemeSide(
+            colors = lightColorScheme(
+                primary = Color(0xFF1C1A17),
+                onPrimary = Color(0xFFFBF9F4),
+                primaryContainer = Color(0xFFE7E1D4),
+                onPrimaryContainer = Color(0xFF1C1A17),
+                inversePrimary = Color(0xFFE7E1D4),
+                secondary = Color(0xFF3F5B7A),
+                onSecondary = Color(0xFFFBF9F4),
+                secondaryContainer = Color(0xFFDFE5EB),
+                onSecondaryContainer = Color(0xFF1F2F42),
+                tertiary = Color(0xFF52734F),
+                onTertiary = Color(0xFFFBF9F4),
+                tertiaryContainer = Color(0xFFE2E9DC),
+                onTertiaryContainer = Color(0xFF2A3B28),
+                background = Color(0xFFF3EFE6),
+                onBackground = Color(0xFF1C1A17),
+                surface = Color(0xFFFBF9F4),
+                onSurface = Color(0xFF1C1A17),
+                surfaceVariant = Color(0xFFE6E0D3),
+                onSurfaceVariant = Color(0xFF5E584E),
+                surfaceContainerLowest = Color(0xFFFFFDF8),
+                surfaceContainerLow = Color(0xFFF7F4EC),
+                surfaceContainer = Color(0xFFF3EFE6),
+                surfaceContainerHigh = Color(0xFFE9E4D8),
+                surfaceContainerHighest = Color(0xFFE1DBCD),
+                outline = Color(0xFF857E72),
+                outlineVariant = Color(0xFFD5CEC0),
+                inverseSurface = Color(0xFF2B2824),
+                inverseOnSurface = Color(0xFFF3EFE6)
+            ),
+            canvas = Color(0xFFF3EFE6),
+            rose = MoReadTone(Color(0xFFB0442B), Color(0xFFF3DFD7), Color(0xFF5A2214)),
+            tagPalette = listOf(Color(0xFFB4862F), Color(0xFF5E7F5B), Color(0xFF3F5B7A), Color(0xFFB0442B))
+        ),
+        dark = MoReadSchemeSide(
+            colors = darkColorScheme(
+                primary = Color(0xFFECE6DA),
+                onPrimary = Color(0xFF1C1A17),
+                primaryContainer = Color(0xFF34302A),
+                onPrimaryContainer = Color(0xFFECE6DA),
+                inversePrimary = Color(0xFF34302A),
+                secondary = Color(0xFF8FB0D6),
+                onSecondary = Color(0xFF1C1A17),
+                secondaryContainer = Color(0xFF2B3A4B),
+                onSecondaryContainer = Color(0xFFDDE7F2),
+                tertiary = Color(0xFF9DBE98),
+                onTertiary = Color(0xFF1C1A17),
+                tertiaryContainer = Color(0xFF2F3E2D),
+                onTertiaryContainer = Color(0xFFDDEBD9),
+                background = Color(0xFF131210),
+                onBackground = Color(0xFFECE6DA),
+                surface = Color(0xFF1C1A17),
+                onSurface = Color(0xFFECE6DA),
+                surfaceVariant = Color(0xFF3A3631),
+                onSurfaceVariant = Color(0xFFA9A296),
+                surfaceContainerLowest = Color(0xFF0D0C0B),
+                surfaceContainerLow = Color(0xFF181614),
+                surfaceContainer = Color(0xFF1F1D1A),
+                surfaceContainerHigh = Color(0xFF282522),
+                surfaceContainerHighest = Color(0xFF322F2B),
+                outline = Color(0xFF8A8478),
+                outlineVariant = Color(0xFF3E3A34),
+                inverseSurface = Color(0xFFECE6DA),
+                inverseOnSurface = Color(0xFF2B2824)
+            ),
+            canvas = Color(0xFF131210),
+            rose = MoReadTone(Color(0xFFD9755A), Color(0xFF4A2A21), Color(0xFFF5DCD3)),
+            tagPalette = listOf(Color(0xFFD8B37F), Color(0xFF9DBE98), Color(0xFF8FB0D6), Color(0xFFD9755A))
+        )
     )
 
     // ---------------------------------------------------------------- 中性灰（历史外观）

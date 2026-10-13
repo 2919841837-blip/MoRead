@@ -96,7 +96,15 @@ class ProactiveAnnotationScheduler @Inject constructor(
     private var noticeVersion = 0L
     private var observedPolicy: ProactiveBookPolicy? = null
     private var lastEntered: Trigger? = null
+    private var priorityEntry: Trigger? = null
     private var lastCompleted: Trigger? = null
+    private class GenerationRound(val trigger: Trigger, val personaId: Long, val startAt: Int) {
+        val visitedParagraphEnds = mutableSetOf<Int>()
+        val annotationIds = mutableListOf<Long>()
+        var failed = false
+    }
+    // Only unfinished rounds in the current reader window; committed successes remain in Room.
+    private val rounds = mutableMapOf<Long, GenerationRound>()
     private var exhaustedNoticeDay = Long.MIN_VALUE
     private val exhaustedNoticeBooks = mutableSetOf<Long>()
     private val commits = ProactiveAnnotationCommitStore(database)
@@ -120,6 +128,7 @@ class ProactiveAnnotationScheduler @Inject constructor(
                             retries.remove(it)?.cancel()
                             active = it
                             activeVersion = policyVersion to readerVersion
+                            if (priorityEntry == it) priorityEntry = null
                         }
                     } ?: break
                     try { run(trigger) }
@@ -145,6 +154,8 @@ class ProactiveAnnotationScheduler @Inject constructor(
         observedPolicy = resolved
         policyVersion++
         pending.clear()
+        rounds.clear()
+        priorityEntry = lastEntered
         retries.values.forEach { it.cancel() }; retries.clear()
         if (resolved.enabled) listOfNotNull(lastEntered, lastCompleted).filter { it.timing == resolved.limits.timing }
         else emptyList()
@@ -156,6 +167,7 @@ class ProactiveAnnotationScheduler @Inject constructor(
                 pending.clear(); readerVersion++
                 retries.values.forEach { it.cancel() }; retries.clear()
                 lastEntered = null; lastCompleted = null; observedPolicy = null
+                priorityEntry = null; rounds.clear()
             }
             readerBook = bookId
         }
@@ -172,9 +184,11 @@ class ProactiveAnnotationScheduler @Inject constructor(
         synchronized(lock) {
             if (readerBook != bookId) return
             lastEntered = trigger // Remember even with master off or AFTER timing.
+            priorityEntry = trigger
             if (observedPolicy?.limits?.timing == trigger.timing) {
                 pending.removeAll { !wanted(it) }
                 retries.keys.filter { !wanted(it) }.forEach { retries.remove(it)?.cancel() }
+                rounds.entries.removeAll { !wanted(it.value.trigger) }
             }
         }
         enqueue(trigger)
@@ -212,6 +226,7 @@ class ProactiveAnnotationScheduler @Inject constructor(
                 }
                 for (index in annotationChapterRange(trigger.chapterIndex, ahead, last)) {
                     val next = trigger.copy(chapterIndex = index)
+                    if (next == active && activeVersion == version && priorityEntry == next) priorityEntry = null
                     if ((next != active || activeVersion != version) && pending.size < 6) pending.add(next)
                 }
             }
@@ -255,7 +270,7 @@ class ProactiveAnnotationScheduler @Inject constructor(
 
     private fun shouldYield(trigger: Trigger): Boolean = synchronized(lock) {
         trigger.timing == ProactiveAnnotationTiming.ON_CHAPTER_ENTRY &&
-            lastEntered?.let { it != trigger && it in pending } == true
+            priorityEntry?.let { it != trigger && it in pending } == true
     }
 
     /**
@@ -332,7 +347,12 @@ class ProactiveAnnotationScheduler @Inject constructor(
         val persona = personas.getPersona(personaId) ?: return
         val chapter = library.getChapter(trigger.bookId, trigger.chapterIndex) ?: return
         val body = library.readChapterText(trigger.bookId, chapter)
-        if (body.isBlank() || library.getBook(trigger.bookId) == null) return
+        val book = library.getBook(trigger.bookId)
+        if (body.isBlank() || book == null) return
+        // 进入章节时生成，模型要几秒到几十秒；读者此刻所在页之前的段落等写好时早已翻过，
+        // 段评只会亮在回不去的上一页。从当前页起挑段落，同样的条数落在读者还没读到的地方。
+        val startAt = if (trigger.timing == ProactiveAnnotationTiming.ON_CHAPTER_ENTRY &&
+            book.lastReadChapterIndex == trigger.chapterIndex) book.lastReadCharOffset.coerceIn(0, body.length) else 0
         val revision = ProactiveAnnotationParagraphs.revision(body)
         if (!readerContextValid()) return
         val now = System.currentTimeMillis()
@@ -353,6 +373,11 @@ class ProactiveAnnotationScheduler @Inject constructor(
         }.getOrElse {
             dao.update(job.copy(status = "FAILED", attempts = 2, failureReason = "invalid_paragraph_ledger"))
             return
+        }
+        val round = synchronized(lock) {
+            if (!readerContextValid()) return
+            rounds.entries.removeAll { it.key != job.id && it.value.trigger == trigger && it.value.personaId == personaId }
+            rounds.getOrPut(job.id) { GenerationRound(trigger, personaId, startAt) }
         }
         val ids = mutableListOf<Long>()
         suspend fun valid(): Boolean {
@@ -384,7 +409,9 @@ class ProactiveAnnotationScheduler @Inject constructor(
             outcome = service.generateForChapter(
                 request = ProactiveAnnotationRequest(trigger.bookId, trigger.chapterIndex, body, persona,
                     if (limits.chapterUnlimited) Int.MAX_VALUE else limits.maxPerChapter, done.toSet(), initial.prompts,
-                    contextBudgetChars = limits.context.budgetChars),
+                    contextBudgetChars = limits.context.budgetChars, startAt = round.startAt,
+                    maxSlotsPerPass = if (trigger.timing == ProactiveAnnotationTiming.ON_CHAPTER_ENTRY && limits.aheadChapters > 0) 1 else Int.MAX_VALUE,
+                    visitedParagraphEnds = round.visitedParagraphEnds.toSet()),
                 allowance = { allowance() },
                 recordMedia = { voices, images ->
                     check(valid()) { "generation_context_changed_before_media_charge" }
@@ -400,6 +427,7 @@ class ProactiveAnnotationScheduler @Inject constructor(
                             if (limits.dailyUnlimited) Int.MAX_VALUE else limits.dailyMax, startOfDay(), ::readerContextValid)
                         if (committed == null) false else {
                             ids += committed.annotationId
+                            round.annotationIds += committed.annotationId
                             job = committed.job
                             done += end
                             // DB origin counts cover failed DataStore bookkeeping; never undo committed successes.
@@ -417,14 +445,25 @@ class ProactiveAnnotationScheduler @Inject constructor(
         } catch (_: Exception) {
             outcome = ProactiveAnnotationGenerationResult(failed = true, stopped = false)
         }
+        round.visitedParagraphEnds += outcome.visitedParagraphEnds
+        round.failed = round.failed || outcome.failed
         val interrupted = outcome.stopped || !valid()
-        val completed = !outcome.failed && !outcome.stopped
+        val continuing = outcome.hasMore && !interrupted
+        val completed = !round.failed && !interrupted && !continuing
         job = when {
             completed -> job.copy(status = "DONE", failureReason = null)
+            continuing -> job.copy(status = "PAUSED", failureReason = "sharing_lookahead_worker")
             interrupted -> job.copy(status = "PAUSED", failureReason = "policy_lifecycle_or_quota")
             else -> job.copy(status = "FAILED", attempts = job.attempts + 1, failureReason = "generation_failed")
         }
         dao.update(job.copy(updatedAt = System.currentTimeMillis()))
+        if (continuing) {
+            synchronized(lock) {
+                // Append behind other chapters; an unlimited current chapter cannot starve lookahead.
+                if (readerContextValid() && pending.size < 6) pending.add(trigger)
+            }
+            wake.trySend(Unit)
+        } else if (!yielded) synchronized(lock) { rounds.remove(job.id) }
         if (job.status == "FAILED" && job.canAttempt() && readerContextValid()) retry(trigger, version)
         if (job.status == "PAUSED" && yielded && readerContextValid()) {
             synchronized(lock) { if (readerContextValid() && pending.size < 6) addPending(trigger) }
@@ -432,12 +471,14 @@ class ProactiveAnnotationScheduler @Inject constructor(
         }
         // Quota/timing/media/notice-copy edits don't invalidate a count notice for already committed rows.
         // Disabled master, persona change or any reader lifecycle transition still suppress publication.
+        // Keep one batch notice across slices; FAST_MODEL must not become a paid call per paragraph.
+        val noticeIds = if (continuing) emptyList() else round.annotationIds.toList().also { round.annotationIds.clear() }
         val autonomy = settings.companionAutonomySettings.first()
-        if (ids.isNotEmpty() && autonomy.noticeActive && personaId in autonomy.annotationPersonasFor(settings.activePersonaId.first())) {
+        if (noticeIds.isNotEmpty() && autonomy.noticeActive && personaId in autonomy.annotationPersonasFor(settings.activePersonaId.first())) {
             synchronized(lock) {
                 if (version.second == readerVersion && noticeEpoch == noticeVersion && readerBook == trigger.bookId) {
                     mutableResults.tryEmit(ProactiveAnnotationBatchResult(trigger.bookId, trigger.chapterIndex,
-                        persona.name, persona.avatarPath, ids.size, ids.toList(), personaId,
+                        persona.name, persona.avatarPath, noticeIds.size, noticeIds, personaId,
                         persona.personality, persona.speakingStyle))
                 }
             }

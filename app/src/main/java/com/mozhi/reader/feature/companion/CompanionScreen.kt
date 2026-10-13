@@ -119,7 +119,8 @@ fun CompanionScreen(
             }
         }
 
-        ExtendedFloatingActionButton(
+        // 手机悬浮舱右侧已有「新的书库伴读」圆钮，页面里不再另放一枚浮钮。
+        if (!(compact && com.mozhi.reader.ui.theme.navStyle() == com.mozhi.reader.ui.theme.NavStyle.FLOATING_DOCK)) ExtendedFloatingActionButton(
             onClick = onOpenLibraryChat,
             modifier = Modifier
                 .align(Alignment.BottomEnd)

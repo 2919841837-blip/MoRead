@@ -785,7 +785,7 @@ private fun SchemeSwatchCard(
             }
         }
         Text(
-            text = preset.label,
+            text = stringResource(preset.labelRes),
             style = MaterialTheme.typography.labelSmall,
             fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
             color = if (selected) scheme.primary else scheme.onSurfaceVariant,

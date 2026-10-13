@@ -31,7 +31,7 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [35], application = Application::class, qualifiers = "w411dp-h891dp-mdpi")
+@Config(sdk = [35], application = Application::class, qualifiers = "zh-rCN-w411dp-h891dp-mdpi")
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class ReaderKnowledgeVisualTest {
     @get:Rule val compose = createComposeRule()
@@ -41,6 +41,10 @@ class ReaderKnowledgeVisualTest {
     private val chapters = (0 until 40).map { index ->
         val title = listOf("第一章 灯亮之前", "第二章 雨中来客", "第三章 一封迟到的信", "第四章 海风又起").getOrNull(index) ?: "第 ${index + 1} 章 海岸旅途"
         ChapterEntity(id = index + 1L, bookId = 1, chapterIndex = index, title = title, href = "", charCount = 240)
+    }
+    private val bookmarks = chapters.map { chapter ->
+        BookmarkEntity(id = chapter.id, bookId = 1, locatorJson = "{}", chapterIndex = chapter.chapterIndex,
+            label = chapter.title, excerpt = "海风拂过灯塔，小满沿着海岸寻找寄信人的下落。", createdAt = 1)
     }
     private val fact = KnowledgeFact("小满送来了信，两人约好天亮出发。", "小满把信放在桌上，两人约定天亮后出发。", 20, 20 + "小满把信放在桌上，两人约定天亮后出发。".length)
     private val people = listOf(
@@ -66,7 +70,8 @@ class ReaderKnowledgeVisualTest {
                         expandedEdge = com.mozhi.reader.ui.components.NavigationSheetEdge.START) {
                         val view = LocalView.current
                         SideEffect { root = view.rootView }
-                        ReaderKnowledgePages(input(), chapters, emptyList(), 1, palette, { _, _ -> }, onDismiss, actions, tab)
+                        ReaderKnowledgePages(input(), chapters, emptyList(), 1, palette, { _, _ -> }, onDismiss, actions, tab,
+                            bookmarks = bookmarks)
                     }
                 }
                 }
@@ -108,19 +113,69 @@ class ReaderKnowledgeVisualTest {
         capture("navigation-contents-rose.png", MoReadSchemes.side(ColorSchemePreset.ROSE_DUST, false).colors.primary.toArgb())
     }
 
-    @Test fun wholeBookCharactersUseCompactCardsAndExpandableEvidenceInDarkTheme() {
+    @Test fun wholeBookCharactersUseCompactCardsAndOpenAProfilePageInDarkTheme() {
         show(tab = 2, dark = true)
         compose.onNodeWithText("林舟", useUnmergedTree = true).assertIsDisplayed()
         compose.onNodeWithText("小满", useUnmergedTree = true).assertIsDisplayed()
         compose.onNodeWithText(fact.text).assertDoesNotExist()
         compose.onNodeWithText("更新全书人物").assertDoesNotExist()
         capture("chapter-characters-dark.png")
-        compose.onNodeWithText("展开 1 条资料").performClick()
-        compose.onNodeWithText(fact.text).assertIsDisplayed()
+        compose.onNodeWithTag("person-林舟").performClick()
+        compose.onNodeWithTag("dossier-list").assertIsDisplayed()
+        compose.onNodeWithText(fact.text).performScrollTo().assertIsDisplayed()
+        capture("chapter-character-legacy-dossier-dark.png")
+        compose.onNodeWithContentDescription("返回人物列表").performClick()
+        compose.onNodeWithTag("characters-list").assertIsDisplayed()
         compose.onNodeWithText("提取", substring = false).performClick()
         compose.onNodeWithText("更新全书人物").assertIsDisplayed()
         compose.onNodeWithContentDescription("书籍资料说明").performClick()
         compose.onNodeWithText("包括还没读到的章节", substring = true).assertIsDisplayed()
+    }
+
+    /** 新档案：头像、主次、一句话、小传、性格、经历时间线、关系（双向合并）与台词，各条都能跳回原文。 */
+    @Test fun profilesShowStructuredDossiersRelationsAndAGraph() {
+        val anchor = { start: Int -> SourceAnchor(1, start, start + 6) }
+        val lin = BookCharacter("林舟", emptyList(), role = CharacterRole.PROTAGONIST, mentions = 320, dossier = CharacterDossier(
+            tagline = "雨夜里独守灯塔的少年", bio = "林舟自幼随祖父守着海边的灯塔。祖父去世后，他独自留下，每晚按时点灯，等一封迟迟未到的信。小满带来那封信后，他决定离开灯塔，沿海岸寻找寄信人。",
+            gender = "男", age = "十七岁", identity = "灯塔守望人", appearance = "瘦高，常穿一件旧呢外套",
+            arc = "从固守一隅到主动出发",
+            personality = listOf(DossierTrait("执着", "风雨夜也按时点灯", anchor(0)), DossierTrait("嘴硬心软", "嘴上赶小满走，却给她留了热汤", anchor(20))),
+            experiences = listOf(DossierEvent("独自守着灯塔，在雨夜等来了小满。", 0, anchor(0)), DossierEvent("和小满约好天亮出发。", 1, anchor(20)),
+                DossierEvent("在海岸小镇找到寄信人的旧居。", 3, anchor(40))),
+            relationships = listOf(DossierRelation("小满", "同伴", "一起踏上寻信之旅", anchor(20)), DossierRelation("林伯", "祖父", "把守灯的规矩传给了他", anchor(0))),
+            quotes = listOf(DossierQuote("灯不能灭。", anchor(0)))))
+        val man = BookCharacter("小满", emptyList(), role = CharacterRole.MAJOR, mentions = 120, dossier = CharacterDossier(
+            tagline = "送来迟到之信的姑娘", identity = "信使", personality = listOf(DossierTrait("爽朗")),
+            relationships = listOf(DossierRelation("林舟", "旅伴"))))
+        val bo = BookCharacter("林伯", emptyList(), role = CharacterRole.SUPPORTING, mentions = 12, dossier = CharacterDossier(tagline = "已故的老守灯人"))
+        val profiles = guide.copy(characters = listOf(lin, man, bo), mode = BookCharacterGuide.MODE_QUICK)
+        val located = mutableListOf<SourceAnchor>()
+        show(tab = 2, input = { state.copy(characters = BookCharactersSnapshot(VisibleBookCharacters(personEntry, profiles))) },
+            actions = ReaderKnowledgeActions(locateAnchor = { _, anchor -> located += anchor }))
+        compose.onNodeWithText("主角 · 1").assertIsDisplayed()
+        compose.onNodeWithText("雨夜里独守灯塔的少年").assertIsDisplayed()
+        capture("characters-roster.png")
+        compose.onNodeWithTag("person-林舟").performClick()
+        compose.onNodeWithText("人物小传").assertIsDisplayed()
+        capture("character-dossier.png")
+        compose.onNodeWithText("执着").performScrollTo().performClick()
+        assertEquals(anchor(0), located.last())
+        compose.onNodeWithTag("dossier-list").performScrollToKey("timeline")
+        compose.onNodeWithText("在海岸小镇找到寄信人的旧居。").performScrollTo().performClick()
+        assertEquals(anchor(40), located.last())
+        // 小满的档案说林舟是「旅伴」，在林舟的档案里合并成同一条关系。
+        compose.onNodeWithTag("dossier-list").performScrollToKey("relations")
+        compose.onNodeWithText("对方眼中：旅伴", substring = true).performScrollTo().assertIsDisplayed()
+        capture("character-dossier-relations.png")
+        compose.onNodeWithTag("dossier-list").performScrollToKey("quotes")
+        compose.onNodeWithText("灯不能灭。").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithTag("dossier-list").performScrollToKey("relations")
+        compose.onNodeWithTag("relation-林舟-小满").performScrollTo().performClick()
+        compose.onNodeWithTag("dossier-小满").assertIsDisplayed()
+        compose.onNodeWithContentDescription("返回人物列表").performClick()
+        compose.onNodeWithContentDescription("查看人物关系图").performClick()
+        compose.onNodeWithTag("characters-graph").assertIsDisplayed()
+        capture("characters-graph.png")
     }
 
     @Test fun charactersOwnMostOfViewportAndManualEditingSearchKeepTheListAnchor() {
@@ -159,7 +214,7 @@ class ReaderKnowledgeVisualTest {
         capture("characters-manual-search.png")
     }
 
-    @Test @Config(qualifiers = "w320dp-h640dp-mdpi") fun emptyStateHasClearManualEntryOnSmallScreens() {
+    @Test @Config(qualifiers = "zh-rCN-w320dp-h640dp-mdpi") fun emptyStateHasClearManualEntryOnSmallScreens() {
         var generated = 0
         show(input = { state.copy(snapshot = KnowledgeSnapshot(book)) }, actions = ReaderKnowledgeActions(preview = { generated++ }))
         compose.onNodeWithText("生成当前章").assertIsDisplayed().performClick()
@@ -182,24 +237,26 @@ class ReaderKnowledgeVisualTest {
 
     @Test fun navigationSurfaceReachesTheWindowBottomOnEveryTab() {
         show(tab = 0)
-        listOf("目录", "大纲", "人物").forEach { tab ->
+        listOf("目录", "大纲", "人物", "书签").forEach { tab ->
             selectTab(tab)
             // Read the placed child: the modal's outer modifier precedes Material's anchor offset.
             val bounds = compose.onNodeWithTag("navigation-viewport").fetchSemanticsNode().boundsInRoot
             assertEquals("$tab 的弹层底部必须贴住窗口底部，不得留下按比例缩小的空带", root.height.toFloat(), bounds.bottom, 1f)
             if (tab == "目录") capture("navigation-contents-bottom.png")
+            if (tab == "书签") capture("navigation-bookmarks-bottom.png")
         }
         capture("navigation-sheet-bottom.png")
     }
 
-    @Test fun realSheetStaysStillDuringRepeatedBoundarySwipesOnAllThreePages() {
+    @Test fun realSheetStaysStillDuringRepeatedBoundarySwipesOnAllFourPages() {
         var dismissed = 0
         val many = state.copy(characters = BookCharactersSnapshot(VisibleBookCharacters(personEntry,
             guide.copy(characters = (0 until 40).map { BookCharacter("人物$it", guide.characters.first().evidence) }))))
         show(input = { many }, onDismiss = { dismissed++ })
         val sheetTop = top("navigation-viewport")
         val tabsTop = top("knowledge-tabs")
-        listOf("大纲" to "outline-list", "人物" to "characters-list", "目录" to "contents-list").forEach { (tab, list) ->
+        listOf("大纲" to "outline-list", "人物" to "characters-list", "目录" to "contents-list",
+            "书签" to "bookmarks-list").forEach { (tab, list) ->
             selectTab(tab)
             val target = compose.onNodeWithTag(list)
             target.performScrollToIndex(0)
@@ -239,12 +296,19 @@ class ReaderKnowledgeVisualTest {
         selectTab("目录")
         compose.onNodeWithTag("contents-list").performScrollToIndex(20)
         val contentsPosition = scroll("contents-list")
+        selectTab("书签")
+        compose.onNodeWithTag("bookmarks-list").performScrollToIndex(10)
+        val bookmarksPosition = scroll("bookmarks-list")
+        compose.runOnIdle { live.value = live.value.copy(characterTask = KnowledgeTaskState(active = true, progress = "已扫描 11 / 40 章")) }
+        assertEquals(bookmarksPosition, scroll("bookmarks-list"), 0.001f)
         selectTab("大纲")
         assertEquals(outlinePosition, scroll("outline-list"), 0.001f)
         selectTab("人物")
         assertEquals(peoplePosition, scroll("characters-list"), 0.001f)
         selectTab("目录")
         assertEquals(contentsPosition, scroll("contents-list"), 0.001f)
+        selectTab("书签")
+        assertEquals(bookmarksPosition, scroll("bookmarks-list"), 0.001f)
         assertEquals(header, top("knowledge-tabs"), 0.5f)
         capture("navigation-sheet-scroll.png")
     }
@@ -258,7 +322,8 @@ class ReaderKnowledgeVisualTest {
             shapeStyle = com.mozhi.reader.ui.theme.ShapeStyle.EXPRESSIVE))
         val sheetTop = top("navigation-viewport")
         val tabsTop = top("knowledge-tabs")
-        listOf("大纲" to "outline-list", "人物" to "characters-list", "目录" to "contents-list").forEach { (tab, list) ->
+        listOf("大纲" to "outline-list", "人物" to "characters-list", "目录" to "contents-list",
+            "书签" to "bookmarks-list").forEach { (tab, list) ->
             selectTab(tab)
             val target = compose.onNodeWithTag(list)
             target.performScrollToIndex(0)
@@ -292,9 +357,11 @@ class ReaderKnowledgeVisualTest {
         val tabs = top("knowledge-tabs")
         val list = compose.onNodeWithTag("characters-list")
         list.performScrollToIndex(0)
+        compose.onNodeWithTag("person-人物0").performClick()
         compose.onNodeWithTag("relation-人物0-同伴0").performScrollTo().assertIsDisplayed().performClick()
         assertEquals(1, located)
         capture("characters-rich-relations.png")
+        compose.onNodeWithContentDescription("返回人物列表").performClick()
         repeat(2) { list.performTouchInput { swipeDown(durationMillis = 120) } }
         list.performScrollToIndex(39)
         repeat(2) { list.performTouchInput { swipeUp(durationMillis = 100) } }
@@ -313,7 +380,7 @@ class ReaderKnowledgeVisualTest {
         compose.onNodeWithTag("person-人物37").assertIsDisplayed()
     }
 
-    @Test @Config(qualifiers = "w1400dp-h960dp-mdpi")
+    @Test @Config(qualifiers = "zh-rCN-w1400dp-h960dp-mdpi")
     fun tabletSideNavigationRetainsTabsAndAnchorsDuringRefresh() {
         tabScrollAnchorsSurviveSwitchingAndBackgroundProgressUpdates()
         val pane = compose.onNodeWithTag("navigation-viewport").fetchSemanticsNode().boundsInRoot
@@ -322,7 +389,7 @@ class ReaderKnowledgeVisualTest {
         assertEquals(root.height.toFloat(), pane.bottom, 1f)
     }
 
-    @Test @Config(qualifiers = "w900dp-h1200dp-mdpi")
+    @Test @Config(qualifiers = "zh-rCN-w900dp-h1200dp-mdpi")
     fun portraitSideNavigationDoesNotMoveAtEitherScrollBoundary() {
         expressiveFlatApplicationKeepsReaderSheetEdgesAndAnchorsStable()
     }

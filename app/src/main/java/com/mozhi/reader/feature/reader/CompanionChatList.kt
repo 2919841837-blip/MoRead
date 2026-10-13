@@ -63,11 +63,21 @@ internal sealed interface ChatEntry {
         val freezeGroupTail: Boolean = false,
         val canReroll: Boolean = false,
         /** Usage belongs to the whole model message, even when displayed as several bubbles. */
-        val isLastMessagePart: Boolean = true
+        val isLastMessagePart: Boolean = true,
+        /**
+         * 互动岛专用：所属消息在互动会话里的身份（clientRoundId 优先，与流式条目一致，
+         * 流式 → 落库不重建引擎槽）、整条消息的原文与是否已写完。
+         */
+        val widgetMessageKey: String? = null,
+        val widgetSource: String? = null,
+        val widgetComplete: Boolean = true
     ) : ChatEntry {
         override val key: String = "bubble-$id"
-        override val contentType: String =
-            if (part is CompanionBubblePart.Voice) "voice-bubble" else "text-bubble"
+        override val contentType: String = when (part) {
+            is CompanionBubblePart.Voice -> "voice-bubble"
+            is CompanionBubblePart.Widget -> "widget"
+            is CompanionBubblePart.Text -> "text-bubble"
+        }
     }
 
     data class Media(val callId: String, val result: AgentMediaResult) : ChatEntry {
@@ -158,7 +168,9 @@ internal fun buildCompanionChatEntries(
                                 timestamp = item.message.createdAt,
                                 canReroll = !fromUser &&
                                     item.message.id == lastAssistantMessageId &&
-                                    index == parts.lastIndex
+                                    index == parts.lastIndex,
+                                widgetMessageKey = messageUiId.takeIf { part is CompanionBubblePart.Widget },
+                                widgetSource = item.message.content.takeIf { part is CompanionBubblePart.Widget }
                             )
                         )
                     }
@@ -183,7 +195,7 @@ internal fun buildCompanionChatEntries(
             ?.let { text ->
                 // Keep the same parser during streaming and persistence. Cutting at
                 // the last newline loses fenced/list block context and merges rows at commit.
-                val parts = parseCompanionParts(text, multiBubble)
+                val parts = parseCompanionParts(text, multiBubble, complete = !isStreaming)
                 parts.forEachIndexed { index, part ->
                     val unfinishedVoice = isStreaming && index == parts.lastIndex &&
                         part is CompanionBubblePart.Voice
@@ -194,7 +206,10 @@ internal fun buildCompanionChatEntries(
                             part = if (unfinishedVoice) CompanionBubblePart.Text(part.text) else part,
                             fromUser = false,
                             streaming = isStreaming && index == parts.lastIndex,
-                            freezeGroupTail = multiBubble && isStreaming
+                            freezeGroupTail = multiBubble && isStreaming,
+                            widgetMessageKey = liveEntryId.takeIf { part is CompanionBubblePart.Widget },
+                            widgetSource = text.takeIf { part is CompanionBubblePart.Widget },
+                            widgetComplete = !isStreaming
                         )
                     )
                 }

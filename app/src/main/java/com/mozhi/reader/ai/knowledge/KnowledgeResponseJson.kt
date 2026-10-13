@@ -3,6 +3,7 @@ package com.mozhi.reader.ai.knowledge
 import com.mozhi.reader.ai.client.AiJson
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 
 /** Accept complete structured output in Markdown/prose; never repair truncated JSON or evidence. */
@@ -25,6 +26,23 @@ internal object KnowledgeResponseJson {
         val value = runCatching { AiJson.parseToJsonElement(clean) }.getOrNull()
         return if (value is JsonArray) buildJsonObject { put("characters", value) }.toString() else clean
     }
+
+    /**
+     * 人物结果的宽容版：完整时同 [characters]；被截断时救回已写完的部分并打上 [SALVAGED] 标记。
+     * 救回的条目照样逐条核对；核对后一个人物都没有，就按「截断」要求模型重写，而不是当成「本段没有人物」缓存起来。
+     */
+    fun salvagedCharacters(raw: String): String {
+        val strict = characters(raw)
+        if (isStructured(strict)) return strict
+        val repaired = CharacterJsonSalvage.parseObject(raw, "characters") ?: return strict
+        return JsonObject(repaired + (SALVAGED to JsonPrimitive(true))).toString()
+    }
+
+    fun isSalvaged(clean: String): Boolean = runCatching {
+        ((AiJson.parseToJsonElement(clean) as? JsonObject)?.get(SALVAGED) as? JsonPrimitive)?.content == "true"
+    }.getOrDefault(false)
+
+    private const val SALVAGED = "_truncated"
 
     private fun isStructured(value: String): Boolean = runCatching {
         val parsed = AiJson.parseToJsonElement(value)

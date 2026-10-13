@@ -79,8 +79,8 @@ class AppearancePersistenceTest {
                 assertNull(appearance.customAccentArgb)
                 assertEquals(preset.recommendedSurface, appearance.surfaceStyle)
                 assertEquals(preset.recommendedShape, appearance.shapeStyle)
-                assertEquals(if (preset == ColorSchemePreset.NEUTRAL) NavStyle.FLOATING_DOCK else NavStyle.BAR, appearance.navStyle)
-                assertEquals(if (preset == ColorSchemePreset.NEUTRAL) SemanticHarmony.MULTI else SemanticHarmony.MONO, appearance.semanticHarmony)
+                assertEquals(if (preset.isClassic) NavStyle.FLOATING_DOCK else NavStyle.BAR, appearance.navStyle)
+                assertEquals(if (preset.isClassic) SemanticHarmony.MULTI else SemanticHarmony.MONO, appearance.semanticHarmony)
                 assertEquals(ThemeMode.DARK, appearance.themeMode)
             }
         } finally { scope.coroutineContext.job.cancelAndJoin() }
@@ -132,6 +132,9 @@ class AppearancePersistenceTest {
             repo.setSemanticHarmony(SemanticHarmony.MONO)
             repo.setCustomAccent(0xFF0077FF.toInt())
             repo.setColorScheme(ColorSchemePreset.NEUTRAL)
+            assertEquals(AppearanceSettings(colorScheme = ColorSchemePreset.NEUTRAL), repo.appearance.first())
+            // 纸墨是新的默认：选回它等于恢复出厂外观。
+            repo.setColorScheme(ColorSchemePreset.PAPER)
             assertEquals(AppearanceSettings(), repo.appearance.first())
         } finally { scope.coroutineContext.job.cancelAndJoin() }
     }

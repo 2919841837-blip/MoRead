@@ -15,7 +15,12 @@ data class BookCharacter(val name: String, val evidence: List<CharacterEvidence>
     /** User prose is distinct from verified AI source facts and survives later extractions. */
     val manualDescription: String? = null, val sourceName: String? = null,
     val attributes: List<BookCharacterAttribute> = emptyList(),
-    val relationships: List<BookCharacterRelationship> = emptyList()) {
+    val relationships: List<BookCharacterRelationship> = emptyList(),
+    /** 结构化人物档案；完整扫描的旧存档与手动人物没有。 */
+    val dossier: CharacterDossier? = null,
+    val role: CharacterRole? = null,
+    /** 称呼在提取范围内出现的次数，用于排序与关系图节点大小。 */
+    val mentions: Int = 0) {
     val identity: String get() = sourceName ?: name
     val aliases: List<String> get() = attributes.filter { it.kind == CharacterAttributeKind.ALIAS }.map { it.value }.distinct()
 }
@@ -40,7 +45,9 @@ data class BookCharacterGuide(
 @Serializable
 data class ExternalCharacterNote(val text: String, val character: String = "", val url: String = "", val title: String = "")
 data class VisibleBookCharacters(val entry: BookCharacterGuideEntity, val guide: BookCharacterGuide)
-data class BookCharactersSnapshot(val saved: VisibleBookCharacters? = null, val outdated: Boolean = false, val checkpointParts: Int = 0)
+data class BookCharactersSnapshot(val saved: VisibleBookCharacters? = null, val outdated: Boolean = false, val checkpointParts: Int = 0,
+    /** 快速模式上次没跑完、已整理好的人物数；再点提取会直接复用它们。 */
+    val pendingProfiles: Int = 0)
 
 internal object BookCharactersCodec {
     const val PROMPT_VERSION = 2
@@ -50,8 +57,8 @@ internal object BookCharactersCodec {
         require(description.length <= 24_000) { "人物资料不能超过 24000 字" }
         val original = originalIdentity?.let { key -> guide.characters.firstOrNull { it.identity == key } ?: error("人物已变化，请重新打开编辑") }
         require(guide.characters.none { it !== original && (it.name.equals(cleanName, true) || it.identity.equals(cleanName, true)) }) { "已有同名人物，请直接编辑该人物" }
-        val person = BookCharacter(cleanName, original?.evidence.orEmpty(), description.trim(), original?.identity ?: cleanName,
-            original?.attributes.orEmpty(), original?.relationships.orEmpty())
+        val person = original?.copy(name = cleanName, manualDescription = description.trim(), sourceName = original.identity)
+            ?: BookCharacter(cleanName, emptyList(), description.trim(), cleanName)
         return guide.copy(characters = if (original == null) guide.characters + person else guide.characters.map { if (it === original) person else it })
     }
 
@@ -59,13 +66,14 @@ internal object BookCharactersCodec {
         val edits = previous?.characters.orEmpty().filter { it.manualDescription != null }
         val result = generated.characters.mapNotNull { current ->
             edits.firstOrNull { it.identity == current.identity }?.copy(evidence = current.evidence,
-                attributes = current.attributes, relationships = current.relationships)
+                attributes = current.attributes, relationships = current.relationships,
+                dossier = current.dossier, role = current.role, mentions = current.mentions)
                 ?: current.takeUnless { candidate -> edits.any { it.name.equals(candidate.name, true) } }
         }.toMutableList()
         edits.filter { edit -> result.none { it.identity == edit.identity } }.forEach { edit ->
             // A manual rename owns the displayed name; avoid duplicate lazy-list keys/names.
             result.removeAll { it.name.equals(edit.name, true) }
-            result += edit.copy(evidence = emptyList(), attributes = emptyList(), relationships = emptyList())
+            result += edit.copy(evidence = emptyList(), attributes = emptyList(), relationships = emptyList(), dossier = null)
         }
         return generated.copy(characters = result.distinctBy { it.name })
     }
@@ -117,11 +125,13 @@ internal object BookCharactersCodec {
         entry ?: return null
         val guide = runCatching { AiJson.decodeFromString<BookCharacterGuide>(entry.contentJson) }.getOrNull() ?: return null
         if (entry.sourceRevision != revision || entry.promptVersion !in 1..PROMPT_VERSION) {
-            val manual = guide.characters.filter { it.manualDescription != null && it.name.isNotBlank() }.map { it.copy(evidence = emptyList(), attributes = emptyList(), relationships = emptyList()) }
+            val manual = guide.characters.filter { it.manualDescription != null && it.name.isNotBlank() }
+                .map { it.copy(evidence = emptyList(), attributes = emptyList(), relationships = emptyList(), dossier = null) }
             return manual.takeIf { it.isNotEmpty() }?.let { VisibleBookCharacters(entry, BookCharacterGuide(it, 0, 0, true)) }
         }
         if (guide.characters.any { it.name.isBlank() || (it.evidence + it.attributes.map { a -> a.evidence } + it.relationships.map { r -> r.evidence }).any { e -> e.chapterIndex < 0 || e.fact.start < 0 ||
-                e.fact.end <= e.fact.start || e.fact.end - e.fact.start != e.fact.quote.length } }) return null
+                e.fact.end <= e.fact.start || e.fact.end - e.fact.start != e.fact.quote.length } ||
+                it.dossier?.anchors().orEmpty().any { a -> a.chapterIndex < 0 || a.start < 0 || a.end <= a.start } }) return null
         return VisibleBookCharacters(entry, guide)
     }
 }

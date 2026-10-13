@@ -3,6 +3,7 @@ package com.mozhi.reader.core.database.dao
 import androidx.room.Dao
 import androidx.room.Query
 import androidx.room.Upsert
+import com.mozhi.reader.core.database.entity.BookCharacterDossierEntity
 import com.mozhi.reader.core.database.entity.BookCharacterGuideEntity
 import com.mozhi.reader.core.database.entity.BookCharacterPartEntity
 import kotlinx.coroutines.flow.Flow
@@ -35,4 +36,19 @@ interface BookCharacterDao {
     suspend fun deleteParts(bookId: Long)
     @Query("DELETE FROM book_character_guides WHERE bookId = :bookId")
     suspend fun deleteGuide(bookId: Long)
+
+    @Query("SELECT * FROM book_character_dossiers WHERE bookId = :bookId AND cacheKey = :cacheKey")
+    suspend fun getDossier(bookId: Long, cacheKey: String): BookCharacterDossierEntity?
+    @Upsert suspend fun saveDossier(dossier: BookCharacterDossierEntity)
+    /** 只用来在缓存变化时触发重新计算；具体口径见 [countPendingDossiers]。 */
+    @Query("SELECT COUNT(*) FROM book_character_dossiers WHERE bookId = :bookId")
+    fun observeDossierCount(bookId: Long): Flow<Int>
+    /** 已发布资料之后才整理好的人物数：大于 0 说明上次没跑完，可以继续。名单与小传（以 # 开头的行）不算。 */
+    @Query("SELECT COUNT(*) FROM book_character_dossiers WHERE bookId = :bookId AND sourceRevision = :revision AND createdAt > :after AND identity NOT LIKE '#%'")
+    suspend fun countPendingDossiers(bookId: Long, revision: String, after: Long): Int
+    /** 发布后只留下这一次用到的缓存；旧进度、旧称呼的条目不会越积越多。 */
+    @Query("DELETE FROM book_character_dossiers WHERE bookId = :bookId AND cacheKey NOT IN (:keep)")
+    suspend fun pruneDossiers(bookId: Long, keep: List<String>)
+    @Query("DELETE FROM book_character_dossiers WHERE bookId = :bookId")
+    suspend fun deleteDossiers(bookId: Long)
 }

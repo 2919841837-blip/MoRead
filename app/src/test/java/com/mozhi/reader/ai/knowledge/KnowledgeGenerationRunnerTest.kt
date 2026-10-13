@@ -27,7 +27,7 @@ class KnowledgeGenerationRunnerTest {
             if (index == 0) awaitCancellation() else finishSecond.await()
             mockk<ChapterKnowledgeEntity>()
         }
-        val runner = KnowledgeGenerationRunner(outlines, characters, backgroundScope)
+        val runner = KnowledgeGenerationRunner(outlines, characters, backgroundScope, io.mockk.mockk(relaxed = true))
         assertTrue(runner.generate(first))
         assertTrue(runner.generate(second))
         assertFalse(runner.generate(first))
@@ -46,8 +46,33 @@ class KnowledgeGenerationRunnerTest {
         runner.stop(1, 0)
     }
 
+    @Test fun everyStartKeepsTheAppAliveAndStopAllKeepsTheLastProgressForTheUi() = runTest {
+        val keepAlive = mockk<KnowledgeTaskKeepAlive>(relaxed = true)
+        val quick = BookCharactersPlan(1, "灯塔来信", "revision", emptyList(), model, null, 0, quick = true)
+        coEvery { characters.generateQuick(any(), any()) } coAnswers {
+            secondArg<(KnowledgeProgress) -> Unit>()(KnowledgeProgress(KnowledgeProgress.Stage.PROFILES, 1, 3, finished = listOf("林舟")))
+            awaitCancellation()
+        }
+        coEvery { outlines.generate(any(), any()) } coAnswers { awaitCancellation() }
+        val runner = KnowledgeGenerationRunner(outlines, characters, backgroundScope, keepAlive)
+        runner.generateCharacters(quick)
+        runner.generate(plan(0))
+        runCurrent()
+        verify(exactly = 2) { keepAlive.onTaskStarted() }
+        val running = runner.states.value.getValue(KnowledgeTaskKey(1))
+        assertEquals("灯塔来信", running.bookTitle)
+        assertEquals(listOf("林舟"), running.detail!!.finished)
+        runner.stopAll()
+        runCurrent()
+        assertTrue(runner.states.value.values.none { it.active })
+        val stopped = runner.states.value.getValue(KnowledgeTaskKey(1))
+        assertEquals("已停止，可继续生成", stopped.progress)
+        assertEquals(listOf("林舟"), stopped.detail!!.finished)
+        assertEquals("灯塔来信", stopped.bookTitle)
+    }
+
     @Test fun immediateCancellationBeforeTheCoroutineStartsDoesNotLeaveABusyChapter() = runTest {
-        val runner = KnowledgeGenerationRunner(outlines, characters, backgroundScope)
+        val runner = KnowledgeGenerationRunner(outlines, characters, backgroundScope, io.mockk.mockk(relaxed = true))
         runner.generate(plan(0))
         runner.stop(1, 0)
         runCurrent()
@@ -58,11 +83,11 @@ class KnowledgeGenerationRunnerTest {
     @Test fun failedChapterDoesNotStopWholeBookCharacterExtraction() = runTest {
         coEvery { outlines.generate(any(), any()) } throws IllegalArgumentException("模型返回格式错误")
         val finish = CompletableDeferred<Unit>()
-        coEvery { characters.generate(any(), any()) } coAnswers {
+        coEvery { characters.generate(any(), any(), any()) } coAnswers {
             finish.await()
             mockk<BookCharacterGuideEntity>()
         }
-        val runner = KnowledgeGenerationRunner(outlines, characters, backgroundScope)
+        val runner = KnowledgeGenerationRunner(outlines, characters, backgroundScope, io.mockk.mockk(relaxed = true))
         runner.generate(plan(0))
         runner.generateCharacters(BookCharactersPlan(1, "book", "revision", emptyList(), model, null, 0))
         runCurrent()

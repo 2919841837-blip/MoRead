@@ -22,12 +22,16 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.mozhi.reader.R
+import com.mozhi.reader.core.storage.CacheBucketUsage
 import com.mozhi.reader.core.storage.StorageCategory
 import com.mozhi.reader.core.storage.StorageCategoryUsage
+import com.mozhi.reader.ui.theme.MoReadSpacing
 import kotlin.math.atan2
 import kotlin.math.hypot
 
@@ -75,7 +79,11 @@ internal fun storagePercentage(bytes: Long, total: Long): String {
 }
 
 @Composable
-internal fun StorageDistributionChart(categories: List<StorageCategoryUsage>, modifier: Modifier = Modifier) {
+internal fun StorageDistributionChart(
+    categories: List<StorageCategoryUsage>,
+    modifier: Modifier = Modifier,
+    cacheBuckets: List<CacheBucketUsage> = emptyList()
+) {
     var expanded by rememberSaveable { mutableStateOf(false) }
     var selectedKey by rememberSaveable { mutableStateOf<String?>(null) }
     val slices = remember(categories, expanded) { storageChartSlices(categories, expanded) }
@@ -156,5 +164,24 @@ internal fun StorageDistributionChart(categories: List<StorageCategoryUsage>, mo
         Text(detail ?: "点击色块或条形图，可查看该类数据的占比与说明。",
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp))
+        if (selected?.categories?.singleOrNull()?.category == StorageCategory.CACHE && cacheBuckets.isNotEmpty()) {
+            CacheBreakdown(cacheBuckets)
+        }
+    }
+}
+
+@Composable
+private fun CacheBreakdown(buckets: List<CacheBucketUsage>) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = MoReadSpacing.s).testTag("storage-cache-breakdown"),
+        verticalArrangement = Arrangement.spacedBy(MoReadSpacing.xs)) {
+        Text(stringResource(R.string.storage_cache_breakdown), style = MaterialTheme.typography.labelMedium)
+        buckets.forEach { row ->
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(MoReadSpacing.s)) {
+                Text(stringResource(row.bucket.title), modifier = Modifier.weight(1f),
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(formatBytes(row.bytes), style = MaterialTheme.typography.labelMedium)
+            }
+        }
     }
 }

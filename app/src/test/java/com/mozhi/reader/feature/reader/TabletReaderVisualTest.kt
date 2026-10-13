@@ -84,6 +84,7 @@ class TabletReaderVisualTest {
         every { translationModel.error } returns MutableStateFlow(null)
         val persona = PersonaEntity(id = 3, name = "知秋", personality = "慢慢读，也慢慢聊。", isRoleplay = false, createdAt = 1)
         val companionModel = mockk<ReaderCompanionViewModel>(relaxed = true)
+        every { companionModel.genUiSettings } returns MutableStateFlow(com.mozhi.reader.core.datastore.CompanionGenUiSettings())
         every { companionModel.uiState } returns MutableStateFlow(CompanionChatUiState(
             personas = listOf(persona), activePersona = persona, conversationId = 7, isLoadingMessages = false,
             messages = listOf(
@@ -172,7 +173,7 @@ class TabletReaderVisualTest {
         val pane = compose.onNodeWithTag("navigation-viewport").fetchSemanticsNode().boundsInRoot
         assertEquals(0f, pane.left, .5f); assertEquals(440f, pane.width, .5f); assertEquals(root.height.toFloat(), pane.bottom, 1f)
         capture("tablet-reader-contents.png")
-        compose.onNodeWithContentDescription("关闭目录与资料").performClick()
+        compose.onNodeWithContentDescription(androidx.test.core.app.ApplicationProvider.getApplicationContext<Application>().getString(com.mozhi.reader.R.string.toc_close)).performClick()
         compose.onNodeWithContentDescription("排版").performClick()
         val inspector = compose.onNodeWithTag("navigation-viewport").fetchSemanticsNode().boundsInRoot
         assertEquals(root.width.toFloat(), inspector.right, .5f)

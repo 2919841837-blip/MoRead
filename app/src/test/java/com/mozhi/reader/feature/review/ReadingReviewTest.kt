@@ -86,15 +86,15 @@ class ReadingReviewTest {
         assertEquals("note:1", filterReview(entries, ReviewFilter(kind = ReviewKind.NOTE)).single().key)
     }
 
-    @Test fun unreadAiContentNeverEntersSearchCountsExportsOrCoCreation() {
+    @Test fun generatedAnnotationsAreAvailableBeforeReadingWhileNotesKeepTheirScope() {
         val entries = reviewEntries(listOf(reviewTestBook()),
             listOf(reviewTestAnnotation(1), reviewTestAnnotation(2, personaId = 7).copy(sourceScopeChapterIndex = 61, sourceScopeCharOffset = 0)),
             listOf(reviewTestNote(1, 7), reviewTestNote(2, 7).copy(sourceScopeChapterIndex = 60, sourceScopeCharOffset = 500),
                 reviewTestNote(3, 7).copy(sourceScopeChapterIndex = 60, relatedCharOffset = 10), reviewTestNote(4)),
             listOf(reviewTestPersona()), true)
-        assertEquals(setOf("highlight:1", "note:2", "note:4"), entries.map { it.key }.toSet())
+        assertEquals(setOf("highlight:1", "highlight:2", "note:2", "note:4"), entries.map { it.key }.toSet())
         assertEquals(entries.size, reviewSourceSelection(entries, 1).size)
-        assertFalse(reviewSourceText(entries).contains("[4]"))
+        assertTrue(reviewSourceText(entries).contains("[4]"))
     }
 
     @Test fun removingBookContentPreservesReviewButDisablesLocation() {

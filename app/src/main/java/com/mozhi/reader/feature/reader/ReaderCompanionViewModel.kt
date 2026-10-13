@@ -1,6 +1,5 @@
 package com.mozhi.reader.feature.reader
 
-import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.mozhi.reader.ai.agent.AgentEvent
@@ -26,7 +25,6 @@ import com.mozhi.reader.core.database.entity.MessageEntity
 import com.mozhi.reader.core.database.entity.PersonaChatAppearance
 import com.mozhi.reader.core.database.entity.PersonaEntity
 import com.mozhi.reader.core.database.entity.chatAppearance
-import com.mozhi.reader.core.datastore.ReaderFontAsset
 import com.mozhi.reader.core.database.entity.enabledTools
 import com.mozhi.reader.core.datastore.CompanionAutonomySettings
 import com.mozhi.reader.core.datastore.ReaderSettings
@@ -54,7 +52,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
-import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -64,99 +61,6 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
-
-enum class AgentStepState { RUNNING, SUCCEEDED, FAILED }
-
-data class AgentExecutionStep(
-    val callId: String,
-    val toolName: String,
-    val displayName: String,
-    val state: AgentStepState,
-    val detail: String = "",
-    /** 模型给出的原始参数 JSON；界面用 ToolCallSummary 压成一行摘要。 */
-    val arguments: String = "{}",
-    /** 工具返回的结果预览（已截断），只在「过程」卡展开后显示。 */
-    val resultPreview: String = ""
-)
-
-/** 输入区待发送的附件（尚未落盘）；发送时经 AttachmentStore 压缩/保存。 */
-data class PendingAttachment(
-    val uri: Uri,
-    val isImage: Boolean,
-    val name: String
-)
-
-data class VoiceClipState(
-    val path: String? = null,
-    val loading: Boolean = false,
-    val missing: Boolean = false,
-    val failed: Boolean = false
-)
-
-/** 全屏聊天页顶栏与 sceneQuote 素材。 */
-/** 聊天页要交给阅读页去做的事。 */
-sealed interface CompanionChatEvent {
-    /** 跳到正文某处并短暂高亮；坐标是章内 UTF-16 偏移。 */
-    data class LocateInBook(
-        val chapterIndex: Int,
-        val startCharOffset: Int,
-        val endCharOffset: Int,
-        val sourceAnchorJson: String
-    ) : CompanionChatEvent
-
-    data class Message(val text: String) : CompanionChatEvent
-}
-
-data class CompanionChatContext(
-    val bookTitle: String = "",
-    val sceneQuote: String = ""
-)
-
-data class StoppedCompanionReply(
-    val conversationId: Long,
-    val roundId: String,
-    val text: String,
-    val reasoning: String
-)
-
-data class CompanionChatUiState(
-    val personas: List<PersonaEntity> = emptyList(),
-    val activePersona: PersonaEntity? = null,
-    val conversationId: Long? = null,
-    val isLoadingMessages: Boolean = true,
-    val conversations: List<ConversationEntity> = emptyList(),
-    val messages: List<MessageEntity> = emptyList(),
-    val composerDraft: String = "",
-    val stoppedReply: StoppedCompanionReply? = null,
-    val isSavingStoppedReply: Boolean = false,
-    val liveEntryId: String = "live-initial",
-    /** 仅包含已在本书已读正文中实际命中的引用，按消息 id 索引。 */
-    val locatedCitations: Map<Long, List<LocatedCompanionCitation>> = emptyMap(),
-    val streamingText: String? = null,
-    /** 本轮正在流的思维链；null = 该模型不产出 reasoning，界面整条不出现。 */
-    val streamingReasoning: String? = null,
-    val isStreaming: Boolean = false,
-    /** Status line while a tool runs, e.g. "正在检索书中原文…". */
-    val toolStatus: String? = null,
-    val executionSteps: List<AgentExecutionStep> = emptyList(),
-    val embeddingProgress: BookEmbeddingProgress? = null,
-    /** Default-on guard that limits book tools to the user's current reading position. */
-    val spoilerProtectionEnabled: Boolean = true,
-    /** AI 回合结束后生成的建议回复，点击即发送；发送/切换会话时清空。 */
-    val suggestions: List<String> = emptyList(),
-    /** 当前角色的聊天外观；未自定义时是 DEFAULT，界面据此跟随阅读主题。 */
-    val appearance: PersonaChatAppearance = PersonaChatAppearance.DEFAULT,
-    /** 外观选中的背景图的真实路径；图片被删掉时为 null。 */
-    val backgroundImagePath: String? = null,
-    /** 共享字体库，供气泡按 [appearance] 的 fontId 取字体。 */
-    val fontLibrary: List<ReaderFontAsset> = emptyList(),
-    /** 多气泡：AI 回复按行拆成独立气泡。 */
-    val multiBubbleEnabled: Boolean = false,
-    /** 「自主发语音」开关开着且当前角色已绑音色；两者缺一即为 false。 */
-    val voiceRepliesEnabled: Boolean = false,
-    val voiceClips: Map<String, VoiceClipState> = emptyMap(),
-    val error: String? = null
-)
 
 /**
  * 伴读会话（阅读页悬浮球 / dock「伴读」）：当前角色来自伴读页选定的
@@ -181,8 +85,114 @@ class ReaderCompanionViewModel @Inject constructor(
     private val webSearchSettingsStore: WebSearchSettingsStore,
     private val userMaskStore: UserMaskStore,
     private val generationTracker: CompanionGenerationTracker,
+    private val genUiRuntimeAssets: com.mozhi.reader.ai.genui.runtime.GenUiRuntimeAssets,
     @ApplicationScope private val applicationScope: CoroutineScope
 ) : ViewModel() {
+
+    /**
+     * 互动回答会话：本聊天页内所有消息的界面程序共用一个引擎（离开页面即释放）。
+     * 状态按消息身份落库；动作交给页面，经白名单与参数校验后执行。
+     */
+    val genUi = com.mozhi.reader.ai.genui.runtime.GenUiSession(
+        scope = viewModelScope,
+        runtimeScript = { genUiRuntimeAssets.runtimeScript() },
+        callbacks = object : com.mozhi.reader.ai.genui.runtime.GenUiSession.Callbacks {
+            override fun onAction(messageKey: String, action: com.mozhi.reader.ai.genui.GenUiAction) {
+                eventChannel.trySend(CompanionChatEvent.GenUi(messageKey, action))
+            }
+
+            override suspend fun persistState(messageKey: String, state: kotlinx.serialization.json.JsonObject) {
+                val message = session.value.messages.firstOrNull { (it.clientRoundId ?: it.id.toString()) == messageKey }
+                    ?.takeIf { it.role == "assistant" } ?: return
+                withContext(Dispatchers.IO) { chatRepository.updateMessageUiState(message.id, state.toString()) }
+            }
+        }
+    )
+
+    val genUiSettings = settingsRepository.companionGenUi
+        .stateIn(viewModelScope, SharingStarted.Eagerly, com.mozhi.reader.core.datastore.CompanionGenUiSettings())
+
+    private var genUiBookData: kotlinx.serialization.json.JsonObject? = null
+    private var genUiDarkPaper = false
+    private val genUiQuoteCache = HashMap<String, LocatedCompanionCitation?>()
+
+    /** 纸色明暗由页面告知（程序里 `app.theme.dark` 用）。 */
+    fun setGenUiDarkPaper(dark: Boolean) {
+        if (genUiDarkPaper == dark && genUiBookData != null) return
+        genUiDarkPaper = dark
+        publishGenUiAppData()
+    }
+
+    private fun publishGenUiAppData() {
+        genUi.setAppData(kotlinx.serialization.json.buildJsonObject {
+            genUiBookData?.let { put("book", it) }
+            uiState.value.activePersona?.name?.let { name ->
+                put("persona", kotlinx.serialization.json.buildJsonObject { put("name", kotlinx.serialization.json.JsonPrimitive(name)) })
+            }
+            put("theme", kotlinx.serialization.json.buildJsonObject { put("dark", kotlinx.serialization.json.JsonPrimitive(genUiDarkPaper)) })
+        })
+    }
+
+    /** `app.book`：只到「已读」粒度（当前章、进度），不含任何正文。 */
+    private suspend fun refreshGenUiBookData(book: Long) {
+        val entity = libraryRepository.getBook(book) ?: return
+        val current = libraryRepository.getChapter(book, entity.lastReadChapterIndex)
+        val total = entity.totalChapters.coerceAtLeast(1)
+        genUiBookData = kotlinx.serialization.json.buildJsonObject {
+            put("title", kotlinx.serialization.json.JsonPrimitive(entity.title))
+            put("chapter", kotlinx.serialization.json.JsonPrimitive(entity.lastReadChapterIndex + 1))
+            current?.title?.let { put("chapterTitle", kotlinx.serialization.json.JsonPrimitive(it)) }
+            put("totalChapters", kotlinx.serialization.json.JsonPrimitive(entity.totalChapters))
+            put("progress", kotlinx.serialization.json.JsonPrimitive(((entity.lastReadChapterIndex + 1) * 100 / total).coerceIn(0, 100)))
+        }
+        publishGenUiAppData()
+    }
+
+    /**
+     * 互动界面里的 `<Quote>`：在已读范围内核对引文，找得到才以原文卡显示并可跳转。
+     * 结果按「章 + 引文」缓存，同一张卡重组不会重复扫描正文。
+     */
+    suspend fun verifyGenUiQuote(chapterNumber: Int?, quote: String): LocatedCompanionCitation? {
+        val clean = quote.trim()
+        if (clean.length < 2) return null
+        val cacheKey = "${chapterNumber ?: 0}\u0000$clean"
+        if (genUiQuoteCache.containsKey(cacheKey)) return genUiQuoteCache[cacheKey]
+        val located = try {
+            withContext(Dispatchers.IO) {
+                val currentBookId = bookId.value ?: return@withContext null
+                val book = libraryRepository.getBook(currentBookId) ?: return@withContext null
+                val scope = ReadingScopeResolver.resolve(settingsRepository.companionSpoilerProtectionEnabled.first(), book)
+                val chapters = libraryRepository.getChapters(currentBookId).filter { scope.allowsChapter(it.chapterIndex) }
+                val requested = chapterNumber?.minus(1)
+                val ordered = chapters.partition { it.chapterIndex == requested }.let { (first, rest) -> first + rest }
+                var scanned = 0
+                val quoteChapters = buildList {
+                    ordered.forEach { chapter ->
+                        if (chapter.chapterIndex != requested && scanned >= MAX_LOCATE_CHARS) return@forEach
+                        val readable = scope.readableText(chapter.chapterIndex, libraryRepository.readChapterText(currentBookId, chapter))
+                        scanned += readable.length
+                        add(QuoteChapter(chapter.chapterIndex, readable))
+                    }
+                }
+                CompanionCitationVerifier.locate(listOf(CompanionCitation(chapterNumber, clean)), quoteChapters, scope).firstOrNull()
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            null
+        }
+        genUiQuoteCache[cacheKey] = located
+        return located
+    }
+
+    /** 最近几条带互动的回复里用户改过的状态（发消息时附给模型，不显示）。 */
+    private fun genUiContextJson(): String? {
+        if (!genUiSettings.value.enabled) return null
+        val keys = session.value.messages
+            .filter { it.role == "assistant" && com.mozhi.reader.ai.genui.GenUiDocument.mightContainDil(it.content) }
+            .map { it.clientRoundId ?: it.id.toString() }
+        return genUi.digest(keys)?.let(com.mozhi.reader.ai.genui.GenUiStateDigest::encodeContext)
+    }
 
     fun updateComposerDraft(text: String, personaId: Long?) {
         if (session.value.personaId == personaId) {
@@ -372,7 +382,11 @@ class ReaderCompanionViewModel @Inject constructor(
     }
 
     fun bind(bookId: Long) {
+        val changed = this.bookId.value != bookId
+        if (changed) genUiQuoteCache.clear()
         this.bookId.value = bookId
+        // 历史消息里的互动界面一打开就要用到 app.book
+        if (changed || genUiBookData == null) viewModelScope.launch { refreshGenUiBookData(bookId) }
     }
 
     /** 切换伴读角色：写 DataStore，与伴读页共用同一份选择。 */
@@ -683,6 +697,10 @@ class ReaderCompanionViewModel @Inject constructor(
         if ((trimmed.isEmpty() && attachments.isEmpty()) || session.value.isStreaming || session.value.stoppedReply != null) return
         val book = bookId.value ?: return
         val persona = uiState.value.activePersona ?: return
+        if (com.mozhi.reader.BuildConfig.BUILD_TYPE != "release" && trimmed == GENUI_DEMO_COMMAND) {
+            insertGenUiDemo(book, persona)
+            return
+        }
         viewModelScope.launch {
             try {
                 val conversationId = session.value.conversationId
@@ -706,7 +724,9 @@ class ReaderCompanionViewModel @Inject constructor(
                     // 发送时就把面具与可见水位钉在消息上：固化是异步的，届时状态可能已切换。
                     maskId = userMaskStore.activeMask()?.id ?: 0L,
                     sourceScopeChapterIndex = readingScope.maxChapterIndex,
-                    sourceScopeCharOffset = readingScope.maxCharOffset
+                    sourceScopeCharOffset = readingScope.maxCharOffset,
+                    // 用户在上一条回复的互动界面里改过什么：随本轮交给模型，不显示
+                    uiContextJson = genUiContextJson()
                 )
                 stream(
                     book = book,
@@ -1067,6 +1087,8 @@ class ReaderCompanionViewModel @Inject constructor(
                             maskId = userMaskStore.activeMask()?.id ?: 0L
                         )
                     )
+                    val genUiSettings = settingsRepository.companionGenUi.first()
+                    refreshGenUiBookData(book)
                     val systemPrompt = contextBuilder.build(
                         persona = persona,
                         bookId = book,
@@ -1076,7 +1098,14 @@ class ReaderCompanionViewModel @Inject constructor(
                         conversationShape = ConversationShape(
                             multiBubble = multiBubble,
                             voiceEnabled = voiceEnabled,
-                            imageEnabled = autonomy.imageRepliesEnabled && tools.any { it.spec.name == "generate_image" }
+                            imageEnabled = autonomy.imageRepliesEnabled && tools.any { it.spec.name == "generate_image" },
+                            // 只宣告已经实现的宿主能力：插图、语音、小程序随后续批次打开
+                            genUi = com.mozhi.reader.ai.genui.GenUiCapabilities(
+                                level = genUiSettings.level,
+                                freeStyle = genUiSettings.style == com.mozhi.reader.core.datastore.GenUiStyleFreedom.FREE,
+                                book = true,
+                                characters = true
+                            )
                         )
                     )
                     tools to systemPrompt
@@ -1201,6 +1230,19 @@ class ReaderCompanionViewModel @Inject constructor(
         }
     }
 
+    /**
+     * 开发与验收包（非 release）：把提示词里的两个示例当作一条 AI 回复插进当前会话，
+     * 不调用模型也能验证互动界面的渲染、交互、持久化与重开恢复。
+     */
+    private fun insertGenUiDemo(book: Long, persona: PersonaEntity) {
+        viewModelScope.launch {
+            val conversationId = session.value.conversationId ?: createConversation(book, persona)
+            val content = com.mozhi.reader.ai.genui.GenUiPromptExamples.QUIZ + "\n\n" +
+                com.mozhi.reader.ai.genui.GenUiPromptExamples.STYLED
+            withContext(Dispatchers.IO) { chatRepository.appendAssistantMessage(conversationId, content) }
+        }
+    }
+
     /** 节拍器回调：把缓冲区快照发布给 UI，仅在流式进行且内容变化时触发重组。 */
     private fun publishStreamingSnapshot() {
         val current = session.value
@@ -1223,6 +1265,7 @@ class ReaderCompanionViewModel @Inject constructor(
         generationJob?.cancel()
         conversationsJob?.cancel()
         suggestionJob?.cancel()
+        genUi.close()
     }
 
     private fun Throwable.userMessage(): String = when (this) {
@@ -1232,6 +1275,8 @@ class ReaderCompanionViewModel @Inject constructor(
 
     private companion object {
         const val CONVERSATION_TYPE = "COMPANION"
+        /** 开发与验收包（非 release）：发这条命令插入互动回答示例（不调用模型）。 */
+        const val GENUI_DEMO_COMMAND = "/genui-demo"
         /** 定位兜底扫描的字符上限：约 60 万字，足够覆盖绝大多数书的已读部分。 */
         const val MAX_LOCATE_CHARS = 600_000
         /** 手动朗读单条气泡的字数上限：再长就不是「听一句」了。 */

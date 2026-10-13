@@ -64,8 +64,8 @@ class AppearanceVisualTest {
     private fun choose(preset: ColorSchemePreset, dark: Boolean = false) {
         appearance = appearance.copy(colorScheme = preset, accent = AccentPreset.FOLLOW, customAccentArgb = null,
             surfaceStyle = preset.recommendedSurface, shapeStyle = preset.recommendedShape,
-            navStyle = if (preset == ColorSchemePreset.NEUTRAL) NavStyle.Default else appearance.navStyle,
-            semanticHarmony = if (preset == ColorSchemePreset.NEUTRAL) SemanticHarmony.Default else appearance.semanticHarmony,
+            navStyle = if (preset.isClassic) NavStyle.Default else appearance.navStyle,
+            semanticHarmony = if (preset.isClassic) SemanticHarmony.Default else appearance.semanticHarmony,
             themeMode = if (dark) ThemeMode.DARK else ThemeMode.LIGHT)
     }
 
@@ -105,6 +105,8 @@ class AppearanceVisualTest {
         assertEquals(ShapeStyle.STANDARD, appearance.shapeStyle)
         capture("appearance-dimensions.png")
         compose.onNodeWithText("原版").performScrollTo().performClick().assertIsSelected()
+        assertEquals(AppearanceSettings(themeMode = ThemeMode.LIGHT, colorScheme = ColorSchemePreset.NEUTRAL), appearance)
+        compose.onNodeWithText("纸墨").performScrollTo().performClick().assertIsSelected()
         assertEquals(AppearanceSettings(themeMode = ThemeMode.LIGHT), appearance)
     }
 
@@ -152,6 +154,7 @@ class AppearanceVisualTest {
         every { vm.uiState } returns MutableStateFlow(BookshelfUiState(books = books, allBooks = books,
             totalBooks = books.size, recentBook = books.first(), recentChapterTitle = "第一章 清晨"))
         every { vm.events } returns emptyFlow()
+        every { vm.searchQuery } returns MutableStateFlow("")
         var route by mutableStateOf(RootDestination.Bookshelf.route)
         show {
             Box(Modifier.fillMaxSize()) {

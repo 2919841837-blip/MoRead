@@ -9,7 +9,6 @@ import java.nio.charset.Charset
 import java.util.Locale
 import java.util.zip.Adler32
 import java.util.zip.InflaterInputStream
-import org.bouncycastle.crypto.digests.RIPEMD128Digest
 import org.anarres.lzo.LzoDecompressor1x
 import org.anarres.lzo.lzo_uintp
 
@@ -208,8 +207,7 @@ internal class MdictReader(private val file: File, private val resource: Boolean
         private fun decodeIndex(input: ByteArray): ByteArray {
             require(input.size >= 8)
             val seed = input.copyOfRange(4, 8) + byteArrayOf(0x95.toByte(), 0x36, 0, 0)
-            val key = ByteArray(16)
-            RIPEMD128Digest().apply { update(seed, 0, seed.size); doFinal(key, 0) }
+            val key = Ripemd128.digest(seed)
             val result = input.copyOf()
             var previous = 0x36
             for (i in 8 until input.size) {

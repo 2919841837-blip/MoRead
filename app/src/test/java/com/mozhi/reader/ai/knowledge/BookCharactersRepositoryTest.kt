@@ -34,7 +34,6 @@ class BookCharactersRepositoryTest {
     private lateinit var database: MoReadDatabase
     private lateinit var repository: BookCharactersRepository
     private val client = CharacterClient()
-    private val mainClient = EditorClient()
 
     @Before fun setup() = runBlocking {
         database = Room.inMemoryDatabaseBuilder(ApplicationProvider.getApplicationContext(), MoReadDatabase::class.java).allowMainThreadQueries().build()
@@ -56,9 +55,9 @@ class BookCharactersRepositoryTest {
         every { readerTools.forBook(any(), any(), any(), any(), any(), any(), any()) } returns emptyList()
         val webSettings = mockk<com.mozhi.reader.ai.search.WebSearchSettingsStore>()
         coEvery { webSettings.current() } returns com.mozhi.reader.ai.search.WebSearchSettings(enabled = false)
-        coEvery { factory.forRole(ModelRole.CHAT) } returns ResolvedChatClient(mainClient, ChatOptions.Default, provider, "test-editor")
         repository = BookCharactersRepository(library, database, factory, knowledgeAgent,
-            dagger.Lazy { CharacterResearchAgent(loop, knowledgeAgent, readerTools) }, webSettings)
+            dagger.Lazy { CharacterResearchAgent(loop, KnowledgeJsonRequest(KnowledgeRequestLimiter()), readerTools) }, webSettings,
+            dagger.Lazy { CharacterBiographer(KnowledgeJsonRequest(KnowledgeRequestLimiter())) })
     }
 
     @After fun close() { database.close() }
@@ -270,6 +269,10 @@ class BookCharactersRepositoryTest {
             val source = messages.first { it.role == ChatRole.USER }.content
             received += source
             onStream()
+            if (tools.isEmpty()) {
+                emit(ChatDelta.Text(quickReply(messages.first().content, source)))
+                return@flow
+            }
             if (malformedChapter?.let(source::contains) == true) {
                 emit(ChatDelta.Text("这段有人物，但结果未按格式返回。"))
                 return@flow
@@ -283,36 +286,74 @@ class BookCharactersRepositoryTest {
         override suspend fun embed(texts: List<String>): List<FloatArray> = error("No embeddings")
     }
 
-    @Test fun quickModeDispatchesHelpersAndPublishesVerifiedCharacters() = runBlocking {
+    /** 快速模式用更长的正文：本地候选需要一个人物出现足够多次。 */
+    private val quickTexts = listOf(
+        "林舟在灯塔等候。林舟说：“灯不能灭。”林舟抬头看海。林舟笑道：“好。”",
+        "小满带来一封信。小满道：“给你。”小满说：“走吧。”这是完全没有读到的最后一章。"
+    )
+
+    private fun useQuickTexts() {
+        chapters.forEachIndexed { index, chapter ->
+            coEvery { library.readChapterTextStrict(1, chapter) } returns quickTexts[index]
+        }
+    }
+
+    @Test fun quickModeBuildsARosterThenOneDossierPerPersonAndPublishesThem() = runBlocking {
+        useQuickTexts()
         val plan = repository.preview(1, progressBounded = false, quick = true)
         assertTrue(plan.quick)
-        assertEquals("test-editor", plan.mainModelLabel)
-        val published = repository.generateQuick(plan)
+        assertFalse(plan.webSearch)
+        val progress = mutableListOf<KnowledgeProgress>()
+        val published = repository.generateQuick(plan) { progress += it }
         val guide = BookCharactersCodec.visible(published, revision)!!.guide
         assertEquals(BookCharacterGuide.MODE_QUICK, guide.mode)
-        val person = guide.characters.single { it.name == "林舟" }
-        assertEquals(0, person.evidence.single().chapterIndex)
-        assertEquals(0, person.evidence.single().fact.start)
-        assertEquals(2, mainClient.rounds)
-        assertTrue(client.received.single().contains("目标人物：林舟"))
+        assertEquals(listOf("林舟", "小满"), guide.characters.map { it.name })
+        val lin = guide.characters.first()
+        assertEquals(CharacterRole.PROTAGONIST, lin.role)
+        assertEquals("守灯人", lin.dossier!!.tagline)
+        val anchor = lin.dossier!!.experiences.single().anchor!!
+        assertEquals(0 to "林舟在灯塔等候。", anchor.chapterIndex to quickTexts[0].substring(anchor.start, anchor.end))
+        assertEquals(0 to 0, repository.locate(published, anchor))
+        // 一次名单 + 每人一份档案；全程不发工具 schema，不写聊天记录。
+        assertEquals(3, client.requests)
+        assertTrue(progress.any { it.stage == KnowledgeProgress.Stage.ROSTER })
+        assertEquals(listOf("林舟", "小满").toSet(), progress.last().finished.toSet())
+        coVerify(exactly = 0) { chatDao.insertMessage(any()) }
+        // 发布后只保留这一次用到的缓存（名单 + 两人）。
+        assertEquals(0, repository.observe(1).first().pendingProfiles)
+    }
+
+    @Test fun stoppedQuickRunKeepsFinishedPeopleAndTheNextRunOnlyPaysForTheRest() = runBlocking {
+        useQuickTexts()
+        val entered = CompletableDeferred<Unit>()
+        client.onStream = { if ("目标人物：小满" in client.received.last()) { entered.complete(Unit); awaitCancellation() } }
+        val job = launch { repository.generateQuick(repository.preview(1, quick = true)) }
+        withTimeout(10_000) {
+            entered.await()
+            while (repository.observe(1).first().pendingProfiles < 1) delay(10)
+        }
+        job.cancelAndJoin()
+        assertNull(database.bookCharacterDao().getGuide(1))
+        assertEquals(1, repository.observe(1).first().pendingProfiles)
+        client.onStream = {}
+        val before = client.requests
+        val published = repository.generateQuick(repository.preview(1, quick = true))
+        // 名单与林舟都命中缓存，只为小满再请求一次。
+        assertEquals(before + 1, client.requests)
+        assertEquals(listOf("林舟", "小满"), BookCharactersCodec.visible(published, revision)!!.guide.characters.map { it.name })
     }
 
     @Test fun quickModeWithinProgressNeverSendsUnreadText() = runBlocking {
-        currentBook = book.copy(maxReachedChapterIndex = 0, maxReachedCharOffset = texts[0].length)
+        useQuickTexts()
+        currentBook = book.copy(maxReachedChapterIndex = 0, maxReachedCharOffset = quickTexts[0].length)
         val plan = repository.preview(1, progressBounded = true, quick = true)
         repository.generateQuick(plan)
-        assertTrue(client.received.none { "没有读到" in it })
+        assertTrue(client.received.none { "没有读到" in it || "小满" in it })
     }
 
-    private inner class EditorClient : ChatApiClient {
-        var rounds = 0
-        override fun chatStream(messages: List<ChatMessage>, tools: List<ToolSpec>, options: ChatOptions): Flow<ChatDelta> = flow {
-            rounds++
-            val call = if (rounds == 1) ToolCall("p1", "profile_characters", """{"characters":[{"name":"林舟"}]}""")
-                else ToolCall("s1", "submit_character_guide", """{"order":["林舟"]}""")
-            emit(ChatDelta.ToolCalls(listOf(call)))
-        }
-        override suspend fun chat(messages: List<ChatMessage>, options: ChatOptions): String = error("Use agent")
-        override suspend fun embed(texts: List<String>): List<FloatArray> = error("No embeddings")
+    private fun quickReply(system: String, user: String): String = when {
+        "人物名单" in system -> """{"characters":[{"name":"林舟","role":"protagonist"},{"name":"小满","role":"major"}]}"""
+        "目标人物：林舟" in user -> """{"name":"林舟","tagline":"守灯人","bio":"在灯塔等候的人。","experiences":[{"p":1,"event":"在灯塔等候"}]}"""
+        else -> """{"name":"小满","tagline":"信使","bio":"送信的人。","experiences":[{"p":1,"event":"送来一封信"}]}"""
     }
 }

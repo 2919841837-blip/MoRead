@@ -97,7 +97,7 @@ class AppUpdateRepository @Inject constructor(
             )
             output
         } catch (error: Throwable) {
-            File(context.cacheDir, "updates/${release.tag.sanitizeFileName()}.apk.part").delete()
+            File(context.cacheDir, "$UPDATE_DOWNLOAD_DIRECTORY/${release.tag.sanitizeFileName()}.apk.part").delete()
             mutableState.value = mutableState.value.copy(
                 downloading = false,
                 downloadProgress = null,
@@ -127,7 +127,7 @@ class AppUpdateRepository @Inject constructor(
     }
 
     private fun downloadApk(release: UpdateRelease): File {
-        val directory = File(context.cacheDir, "updates").apply { mkdirs() }
+        val directory = File(context.cacheDir, UPDATE_DOWNLOAD_DIRECTORY).apply { mkdirs() }
         val partial = File(directory, "${release.tag.sanitizeFileName()}.apk.part")
         val output = File(directory, "${release.tag.sanitizeFileName()}.apk")
         val request = Request.Builder()

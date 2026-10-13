@@ -190,13 +190,19 @@ class AgentLoop @Inject constructor(
             .map(::toChatMessage)
         // 只有最新一条 user 消息重发真实图片/文件内容，历史轮降级为占位标记控成本
         val lastUserId = entities.lastOrNull { it.role == ChatRole.USER.wire }?.id
+        // 互动回答：最近几条保留原始界面源码（用户说「把滑块上限改成 30」时模型能照着改），
+        // 更早的换成纯文字投影，几十 KB 的数据表不再每轮计费。
+        val rawWidgetIds = entities
+            .filter { it.role == ChatRole.ASSISTANT.wire && it.id > consolidatedThrough && isInteractiveReply(it.content) }
+            .takeLast(KEEP_RAW_WIDGET_REPLIES)
+            .mapTo(hashSetOf()) { it.id }
         val persisted = entities
             .filter { it.id > consolidatedThrough && it.role != ChatRole.SYSTEM.wire }
             .map { entity ->
                 if (entity.id == lastUserId) {
                     toChatMessage(entity).copy(parts = hydrateParts(entity))
                 } else {
-                    toChatMessage(entity)
+                    toChatMessage(entity, compactWidgets = entity.id !in rawWidgetIds)
                 }
             }
         val system = systemPrompt?.let { listOf(ChatMessage(ChatRole.SYSTEM, it)) }
@@ -403,9 +409,9 @@ class AgentLoop @Inject constructor(
         return 0
     }
 
-    private fun toChatMessage(entity: MessageEntity): ChatMessage = ChatMessage(
+    private fun toChatMessage(entity: MessageEntity, compactWidgets: Boolean = false): ChatMessage = ChatMessage(
         role = ChatRole.fromWire(entity.role),
-        content = contentWithAttachmentMarks(entity),
+        content = contentWithAttachmentMarks(entity, compactWidgets),
         toolCalls = entity.toolCallsJson?.let { json ->
             runCatching {
                 AiJson.decodeFromString(ListSerializer(ToolCall.serializer()), json)
@@ -414,10 +420,26 @@ class AgentLoop @Inject constructor(
         toolCallId = entity.toolCallId
     )
 
-    /** 历史消息的附件降级为占位标记，避免每轮重发 base64。 */
-    private fun contentWithAttachmentMarks(entity: MessageEntity): String {
+    private fun isInteractiveReply(content: String): Boolean =
+        com.mozhi.reader.ai.genui.GenUiDocument.mightContainDil(content) &&
+            com.mozhi.reader.ai.genui.GenUiDocument.parse(content).isInteractive
+
+    /**
+     * 历史消息的附件降级为占位标记，避免每轮重发 base64。
+     * 用户消息若带着发送时的界面状态摘要（uiContextJson），拼在正文前交给模型——只在组装请求时注入，
+     * 聊天里看不到。较早的互动回复换成纯文字投影 + 一行占位说明。
+     */
+    private fun contentWithAttachmentMarks(entity: MessageEntity, compactWidgets: Boolean = false): String {
+        val uiContext = if (entity.role == ChatRole.USER.wire) {
+            com.mozhi.reader.ai.genui.GenUiStateDigest.decodeContext(entity.uiContextJson)
+        } else null
+        val body = if (compactWidgets && entity.role == ChatRole.ASSISTANT.wire && isInteractiveReply(entity.content)) {
+            com.mozhi.reader.ai.genui.GenUiFallback.projectSource(entity.content) + "\n[此处原有互动卡片，已按文字概括]"
+        } else {
+            entity.content
+        }
         val attachments = MessageAttachment.decode(entity.attachmentsJson)
-        if (attachments.isEmpty()) return entity.content
+        if (attachments.isEmpty()) return listOfNotNull(uiContext, body).filter(String::isNotBlank).joinToString("\n")
         val marks = attachments.joinToString(" ") { attachment ->
             if (attachment.type == MessageAttachment.TYPE_IMAGE) {
                 "[图片]"
@@ -425,7 +447,7 @@ class AgentLoop @Inject constructor(
                 "[文件：${attachment.name ?: "附件"}]"
             }
         }
-        return listOf(marks, entity.content).filter(String::isNotBlank).joinToString("\n")
+        return listOfNotNull(uiContext, marks, body).filter(String::isNotBlank).joinToString("\n")
     }
 
     /** 最新 user 轮：图片转 base64 part，文本文件内容并入 text part。 */
@@ -445,7 +467,8 @@ class AgentLoop @Inject constructor(
                     "【附件 ${attachment.name ?: "文件"}】\n$text"
                 }
             }
-        val text = (fileTexts + entity.content).filter(String::isNotBlank).joinToString("\n\n")
+        val uiContext = com.mozhi.reader.ai.genui.GenUiStateDigest.decodeContext(entity.uiContextJson)
+        val text = (listOfNotNull(uiContext) + fileTexts + entity.content).filter(String::isNotBlank).joinToString("\n\n")
         parts += ChatPart.Text(text.ifBlank { entity.content })
         return parts
     }
@@ -455,6 +478,8 @@ class AgentLoop @Inject constructor(
         const val INTERRUPTED_TOOL_RESULT = "（这次工具调用被中断，没有结果）"
         const val DETACHED_MAX_ROUNDS = 3
         const val WINDOW_MESSAGES = 20
+        /** 历史里保留原始界面源码的互动回复条数；更早的换成纯文字投影。 */
+        const val KEEP_RAW_WIDGET_REPLIES = 2
         const val MAX_TOOL_STATUS_CHARS = 120
         /** 「过程」卡展开后显示的结果预览上限；只进内存与界面，不进日志。 */
         const val MAX_TOOL_PREVIEW_CHARS = 600

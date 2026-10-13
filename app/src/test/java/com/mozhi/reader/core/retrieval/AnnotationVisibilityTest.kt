@@ -8,6 +8,13 @@ class AnnotationVisibilityTest {
     private val row = AnnotationEntity(id = 1, bookId = 1, personaId = 2, chapterIndex = 3,
         startCharOffset = 20, endCharOffset = 30, selectedText = "原文", createdAt = 0,
         sourceScopeChapterIndex = 3, sourceScopeCharOffset = 80)
+    @Test fun savedAnnotationsDisplayImmediatelyAndOnlyTheExplicitAiDisplaySwitchHidesThem() {
+        val mine = row.copy(id = 2, personaId = null)
+        assertEquals(listOf(row, mine), AnnotationVisibility.forDisplay(listOf(row, mine)))
+        assertEquals(listOf(mine), AnnotationVisibility.forDisplay(listOf(row, mine), showAiAnnotations = false))
+        assertEquals(row, AnnotationVisibility.firstVisible(listOf(row), listOf(row.id), ReadingScope.upto(0, 0),
+            spoilerProtection = false))
+    }
     @Test fun sourceEndNotQuoteStartControlsVisibility() {
         assertFalse(AnnotationVisibility.isVisible(row, ReadingScope.upto(3, 79)))
         assertTrue(AnnotationVisibility.isVisible(row, ReadingScope.upto(3, 80)))

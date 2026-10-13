@@ -27,11 +27,11 @@ class AnnotationNavigationSheetTest {
     private val annotations = (1..50).map { id -> AnnotationEntity(id = id.toLong(), bookId = 7,
         personaId = if (id % 2 == 0) 3 else null, chapterIndex = id, startCharOffset = 40, endCharOffset = 54,
         selectedText = "雨后的灯塔，原文片段 $id", note = "想法 $id：这段描写让人想再慢慢读一次。", textAnchorJson = "anchor-$id", createdAt = id.toLong()) }
-    private var hidden by mutableStateOf(0)
+    private var displayed by mutableStateOf(annotations)
 
     private fun show(onLocate: (AnnotationEntity) -> Unit = {}, onDismiss: () -> Unit = {}) {
         compose.setContent { MoReadTheme {
-            AnnotationIndexSheet(annotations, mapOf(3L to "知秋"), hidden, {}, onDismiss, onLocate)
+            AnnotationIndexSheet(displayed, mapOf(3L to "知秋"), {}, onDismiss, onLocate)
         } }
     }
     private fun top(tag: String) = compose.onNodeWithTag(tag).fetchSemanticsNode().boundsInRoot.top
@@ -67,7 +67,7 @@ class AnnotationNavigationSheetTest {
         compose.onNodeWithTag("annotation-list").performScrollToIndex(15)
         val all = scroll()
         val tabsTop = top("annotation-tabs")
-        compose.runOnIdle { hidden = 8 }
+        compose.runOnIdle { displayed = displayed.map { it.copy(note = it.note.replace("描写", "文字")) } }
         assertEquals(all, scroll(), 0.001f)
         compose.onNodeWithText("我的 25").performClick()
         compose.onNodeWithTag("annotation-list").performScrollToIndex(9)
@@ -75,7 +75,7 @@ class AnnotationNavigationSheetTest {
         compose.onNodeWithText("AI 25").performClick()
         compose.onNodeWithTag("annotation-list").performScrollToIndex(11)
         val ai = scroll()
-        compose.runOnIdle { hidden = 19 }
+        compose.runOnIdle { displayed = displayed.map { it.copy(note = it.note.replace("文字", "场景")) } }
         assertEquals(ai, scroll(), 0.001f)
         compose.onNodeWithText("全部 50").performClick()
         assertEquals(all, scroll(), 0.001f)

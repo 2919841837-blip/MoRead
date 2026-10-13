@@ -22,7 +22,6 @@ import com.mozhi.reader.core.library.AnnotationRepository
 import com.mozhi.reader.core.library.IllustrationRepository
 import com.mozhi.reader.core.library.ResolvedTextAnchor
 import com.mozhi.reader.core.retrieval.AnnotationVisibility
-import com.mozhi.reader.core.retrieval.ReadingScope
 import com.mozhi.reader.feature.reader.engine.*
 import java.io.File
 import kotlinx.coroutines.launch
@@ -34,7 +33,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 
-/** Actual proactive SQLite commits -> repository flows -> scope -> marks -> native reader ink. */
+/** Actual proactive SQLite commits -> repository flows -> marks -> native reader ink. */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35], application = Application::class, qualifiers = "w411dp-h891dp-mdpi")
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -92,9 +91,8 @@ class ReaderLiveAnnotationUiTest {
             val scrollHolder = remember(controller) { ScrollPaneHolder(controller) }
             DisposableEffect(controller) { onDispose { pageHolder.release(); scrollHolder.release() } }
             val observation by observations.collectAsState(ReaderAnnotationObservation(emptyList(), emptyList(), emptySet()))
-            val book by remember { database.bookDao().observeBook(1) }.collectAsState(null)
-            val boundary = book?.let { ReadingScope.uptoProgress(it) } ?: ReadingScope.upto(0, 0)
-            val visible = observation.annotations.filter { AnnotationVisibility.isVisible(it, boundary) }
+            val book = remember { database.bookDao().observeBook(1) }.collectAsState(null).value
+            val visible = AnnotationVisibility.forDisplay(observation.annotations)
             val resolved = rememberReaderAnnotationMarks(visible, observation.repliedIds, chapter.intValue,
                 revision.intValue, ChineseConversionMode.OFF, controller, remember(controller) {
                     { row -> controller.chapterSource(row.chapterIndex)?.let { ResolvedTextAnchor(row.startCharOffset, row.endCharOffset) } }
@@ -129,8 +127,10 @@ class ReaderLiveAnnotationUiTest {
             }
         }
         compose.waitUntil(15_000) { ::reader.isInitialized && reader.isReady && observedBook != null &&
+            reader.laidChapter(1) != null &&
             (if (mode == PageMode.SCROLL) scrolling.captureVisibleRead() != null else paging.curBitmap != null) }
         compose.waitForIdle()
+        draw().recycle()
     }
 
     private fun commit(row: AnnotationEntity): Long = runBlocking {
@@ -147,6 +147,8 @@ class ReaderLiveAnnotationUiTest {
             bitmap = Bitmap.createBitmap(root.width, root.height, Bitmap.Config.ARGB_8888)
             root.draw(Canvas(bitmap))
         }
+        // Native drawing posts its read snapshot to Android's main queue before the Compose callback.
+        org.robolectric.shadows.ShadowLooper.idleMainLooper()
         compose.waitForIdle()
         return bitmap
     }
@@ -160,21 +162,20 @@ class ReaderLiveAnnotationUiTest {
             selectedText = body.substring(line.chapterPosition + 1, line.chapterPosition + 7), note = "刚生成的段评",
             style = "UNDERLINE", colorTag = "green", sourceScopeChapterIndex = 0,
             sourceScopeCharOffset = line.chapterPosition + line.charLength, createdAt = 1)
-        val visibleId = commit(row)
-        val futureId = commit(row.copy(sourceScopeCharOffset = body.length, note = "后文段评"))
-        compose.waitUntil(10_000) { stored.size == 2 }
-        assertTrue(marks.isEmpty())
-        assertEquals(0, observedBook!!.maxReachedCharOffset)
         val generation = reader.layoutGeneration
         val offset = reader.charOffset
         val anchor = scrolling.anchorY
         val before = draw()
         try {
+            val visibleId = commit(row)
+            val futureId = commit(row.copy(sourceScopeCharOffset = body.length, note = "后文段评"))
+            compose.waitUntil(10_000) { stored.size == 2 && marks.any { it.id == visibleId } && marks.any { it.id == futureId } }
+            assertEquals(0, observedBook!!.maxReachedCharOffset)
             compose.runOnIdle { tracking.value = true }
             draw().recycle()
             compose.waitUntil(10_000) { marks.any { it.id == visibleId } }
             compose.waitForIdle()
-            assertFalse(marks.any { it.id == futureId })
+            assertTrue(marks.any { it.id == futureId })
             val repeatedId = commit(row.copy(note = "第二条已提交段评"))
             compose.waitUntil(10_000) { marks.any { it.id == repeatedId } }
             compose.waitForIdle()
@@ -184,7 +185,7 @@ class ReaderLiveAnnotationUiTest {
                 val column = line.columns.filter { it.sourceLength > 0 }[2]
                 val point = origin + Offset((column.start + column.end) / 2, (line.lineTop + line.lineBottom) / 2)
                 val ids = if (mode == PageMode.SCROLL) scrolling.annotationIdsAt(point) else paging.annotationIdsAt(point)
-                assertEquals(setOf(visibleId, repeatedId), ids.toSet())
+                assertEquals(setOf(visibleId, futureId, repeatedId), ids.toSet())
                 assertEquals(offset, reader.charOffset)
                 assertEquals(generation, reader.layoutGeneration)
                 assertEquals(anchor, scrolling.anchorY, 0f)

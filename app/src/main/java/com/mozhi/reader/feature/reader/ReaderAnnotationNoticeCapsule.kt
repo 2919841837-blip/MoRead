@@ -41,7 +41,8 @@ fun ReaderAnnotationNoticeCapsule(
 ) {
     val dismiss = rememberUpdatedState(onDismiss)
     val view = rememberUpdatedState(onView)
-    val target = rememberUpdatedState(AnnotationVisibility.firstVisible(annotations, result.annotationIds, readingScope))
+    val target = rememberUpdatedState(AnnotationVisibility.firstVisible(annotations, result.annotationIds, readingScope,
+        spoilerProtection = false))
     LaunchedEffect(result) { delay(5_000); dismiss.value() }
     Surface(
         shape = RoundedCornerShape(50),

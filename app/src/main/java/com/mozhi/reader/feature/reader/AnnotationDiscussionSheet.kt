@@ -19,6 +19,13 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.width
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.res.stringResource
+import com.mozhi.reader.R
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -289,15 +296,6 @@ private fun StyleSample(
     }
 }
 
-/** 讨论串参与者（楼主与回复的去重作者序列，用户以 null 表示）。 */
-private fun participants(
-    annotations: List<AnnotationEntity>,
-    replies: List<AnnotationReplyEntity>
-): List<Long?> = buildList {
-    annotations.forEach { if (it.personaId !in this) add(it.personaId) }
-    replies.forEach { if (it.personaId !in this) add(it.personaId) }
-}
-
 @Composable
 private fun ParticipantAvatar(
     personaId: Long?,
@@ -311,14 +309,14 @@ private fun ParticipantAvatar(
             modifier = Modifier
                 .size(size)
                 .clip(CircleShape)
-                .background(palette.accentContainer),
+                .background(palette.onBackground.copy(alpha = if (palette.isDark) 0.85f else 0.88f)),
             contentAlignment = Alignment.Center
         ) {
             Icon(
                 Icons.Outlined.Person,
                 contentDescription = "我",
-                tint = palette.accent,
-                modifier = Modifier.size(size * 0.62f)
+                tint = palette.background,
+                modifier = Modifier.size(size * 0.58f)
             )
         }
     } else if (persona != null) {
@@ -341,8 +339,10 @@ private fun ParticipantAvatar(
 }
 
 /**
- * 段评讨论串弹层：头像叠排 + 原文引用 + 楼层（楼主 = 批注想法，回复来自
- * annotation_replies）+ @ 角色行 + 胶囊输入。AI 回复流式渲染。
+ * 段评讨论串弹层，「页边批注」的写法：
+ * 被讨论的原文用宋体排在顶部，并按它在正文里的样子画出划线（荧光 / 直线 / 波浪），
+ * 样式与颜色就地可改；批注沿一根朱砂线挂下来，每条用一小段横线挂在线上，回复再缩进一级。
+ * 不再套引文胶囊、描边卡、弹层边三层容器——纸是同一张纸。
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -374,10 +374,14 @@ internal fun AnnotationDiscussionSheet(
     val respondTarget = if (overridden) overriddenTarget else fallbackTarget
     val respondPersona = personas.firstOrNull { it.id == respondTarget }
     val clipboard = LocalClipboardManager.current
-    val quote = annotations.firstOrNull()?.selectedText.orEmpty()
+    val ownAnnotation = annotations.firstOrNull { it.personaId == null }
+    val quoteSource = ownAnnotation ?: annotations.firstOrNull()
+    val quote = quoteSource?.selectedText.orEmpty()
     val talkCount = annotations.count { it.note.isNotBlank() } + replies.size
     val listState = rememberLazyListState()
     val timeFormat = remember { SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()) }
+    val focusRequester = remember { FocusRequester() }
+    val seal = palette.seal
 
     // 新回复落地或 AI 开始应答时跟到底部；流式正文逐 token 长高不再拽视口，
     // 回复在视口下方生长，生成期间可自由上滑回看。
@@ -398,52 +402,60 @@ internal fun AnnotationDiscussionSheet(
         val total = listState.layoutInfo.totalItemsCount
         if (total > 0) listState.scrollToItem(total - 1)
     }
+    val replyTo: (Long?) -> Unit = { personaId ->
+        if (personaId != null && personas.any { it.id == personaId }) {
+            overridden = true
+            overriddenTarget = personaId
+            onRememberRespondPersona(personaId)
+        }
+        runCatching { focusRequester.requestFocus() }
+    }
 
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 18.dp, vertical = 6.dp)
+            .padding(horizontal = 20.dp, vertical = 2.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            val people = participants(annotations, replies)
-            val visible = people.take(3)
-            Box(modifier = Modifier.widthIn(min = (26 + (visible.size - 1).coerceAtLeast(0) * 17).dp)) {
-                visible.forEachIndexed { index, personaId ->
-                    Box(modifier = Modifier.offset(x = (index * 17).dp)) {
-                        ParticipantAvatar(personaId, personas, palette, 26.dp)
-                    }
-                }
+            Text(
+                text = buildString {
+                    append("段落讨论")
+                    if (talkCount > 0) append(" · ").append(talkCount)
+                },
+                style = MaterialTheme.typography.labelMedium.copy(letterSpacing = 2.sp),
+                fontWeight = FontWeight.SemiBold,
+                color = seal,
+                modifier = Modifier.weight(1f)
+            )
+            TextButton(onClick = onDismiss) {
+                Text("完成", color = palette.onBackground, fontWeight = FontWeight.SemiBold)
             }
-            Column(
-                modifier = Modifier
-                    .weight(1f)
-                    .padding(start = 9.dp)
-            ) {
-                Text("段落讨论", style = MaterialTheme.typography.titleMedium)
-                Text(
-                    text = if (talkCount > 0) "$talkCount 条讨论" else "还没有讨论，说点什么吧",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = palette.muted
-                )
-            }
-            TextButton(onClick = onDismiss) { Text("完成", color = palette.accent) }
         }
 
-        if (quote.isNotBlank()) {
-            Surface(
-                color = palette.accentContainer.copy(alpha = 0.4f),
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.padding(top = 4.dp, bottom = 8.dp)
-            ) {
-                Text(
-                    text = "“${quote.take(160)}${if (quote.length > 160) "…" else ""}”",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = palette.onBackground.copy(alpha = 0.85f),
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
-                )
-            }
+        if (quote.isNotBlank() && quoteSource != null) {
+            val quoteStyle = AnnotationStyle.fromWire(quoteSource.style)
+            val quoteInk = annotationSolidColor(
+                quoteSource.colorTag.ifBlank {
+                    quoteSource.personaId?.let(AnnotationColors::forPersona) ?: AnnotationColors.AMBER
+                },
+                palette
+            )
+            QuoteExcerpt(
+                text = quote,
+                style = quoteStyle,
+                ink = quoteInk,
+                palette = palette,
+                modifier = Modifier.padding(top = 2.dp, bottom = 10.dp)
+            )
+        }
+        ownAnnotation?.let { own ->
+            InlineStyleControls(
+                selectedStyle = AnnotationStyle.fromWire(own.style),
+                selectedColor = AnnotationColors.normalize(own.colorTag),
+                palette = palette,
+                onChange = { style, color -> onUpdateStyle(own.id, style, color) },
+                modifier = Modifier.padding(bottom = 12.dp)
+            )
         }
 
         LazyColumn(
@@ -452,45 +464,94 @@ internal fun AnnotationDiscussionSheet(
                 .fillMaxWidth()
                 // fill=false：内容短时按内容高，键盘弹出时优先压缩列表、保住输入区
                 .weight(1f, fill = false)
-                .blockSheetDrag(listState),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
+                .blockSheetDrag(listState)
+                .drawBehind {
+                    // 一根朱砂线从原文下沿垂下来，越往下越淡。
+                    val x = THREAD_LINE_X.toPx()
+                    drawLine(
+                        brush = androidx.compose.ui.graphics.Brush.verticalGradient(
+                            listOf(seal.copy(alpha = 0.75f), seal.copy(alpha = 0.08f))
+                        ),
+                        start = Offset(x, 0f),
+                        end = Offset(x, size.height),
+                        strokeWidth = 1.5.dp.toPx()
+                    )
+                },
+            verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             if (annotations.isEmpty()) {
                 item {
                     Text(
                         "这段批注已删除。",
                         color = palette.muted,
-                        modifier = Modifier.padding(12.dp)
+                        modifier = Modifier.padding(start = THREAD_CONTENT_START, top = 8.dp, bottom = 8.dp)
                     )
                 }
             }
             annotations.forEach { annotation ->
                 item(key = "annotation-${annotation.id}") {
-                    AnnotationOpenerBlock(
-                        annotation = annotation,
+                    ThreadComment(
+                        authorId = annotation.personaId,
                         personas = personas,
                         palette = palette,
-                        illustrations = illustrations,
-                        onPlayAudio = onPlayAudio,
                         timeText = timeFormat.format(Date(annotation.createdAt)),
-                        onUpdateStyle = onUpdateStyle,
-                        onCopy = {
-                            clipboard.setText(AnnotatedString(annotation.note))
-                        },
+                        depth = 0,
+                        onReply = { replyTo(annotation.personaId) },
+                        onCopy = if (annotation.note.isNotBlank()) {
+                            { clipboard.setText(AnnotatedString(annotation.note)) }
+                        } else null,
+                        deleteLabel = "删除批注",
                         onDelete = { onDeleteAnnotation(annotation.id) }
-                    )
+                    ) {
+                        if (annotation.note.isNotBlank()) {
+                            ThreadText(annotation.note, palette)
+                        } else {
+                            Text(
+                                "划了这段原文，还没写想法",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = palette.muted
+                            )
+                        }
+                        AnnotationMediaContent(
+                            media = AnnotationMedia.decode(annotation.mediaJson),
+                            text = annotation.note,
+                            illustrations = illustrations,
+                            palette = palette,
+                            onPlayAudio = onPlayAudio
+                        )
+                    }
                 }
                 val threadReplies = replies.filter { it.annotationId == annotation.id }
                 items(threadReplies, key = { "reply-${it.id}" }) { reply ->
-                    ReplyRow(
-                        reply = reply,
+                    ThreadComment(
+                        authorId = reply.personaId,
                         personas = personas,
                         palette = palette,
-                        illustrations = illustrations,
-                        onPlayAudio = onPlayAudio,
                         timeText = timeFormat.format(Date(reply.createdAt)),
+                        depth = 1,
+                        onReply = { replyTo(reply.personaId) },
                         onCopy = { clipboard.setText(AnnotatedString(reply.contentMarkdown)) },
+                        deleteLabel = "删除",
                         onDelete = { onDeleteReply(reply.id) }
+                    ) {
+                        ThreadText(reply.contentMarkdown, palette)
+                        AnnotationMediaContent(
+                            media = AnnotationMedia.decode(reply.mediaJson),
+                            text = reply.contentMarkdown,
+                            illustrations = illustrations,
+                            palette = palette,
+                            onPlayAudio = onPlayAudio
+                        )
+                    }
+                }
+            }
+            if (talkCount == 0 && annotations.isNotEmpty() && streaming == null) {
+                item(key = "empty") {
+                    Text(
+                        text = "还没有讨论，说点什么吧",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = palette.muted,
+                        modifier = Modifier.padding(start = THREAD_CONTENT_START, top = 4.dp, bottom = 4.dp)
                     )
                 }
             }
@@ -510,7 +571,7 @@ internal fun AnnotationDiscussionSheet(
                         text = message,
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.padding(start = 12.dp, top = 2.dp)
+                        modifier = Modifier.padding(start = THREAD_CONTENT_START, top = 2.dp)
                     )
                 }
             }
@@ -521,13 +582,13 @@ internal fun AnnotationDiscussionSheet(
                 modifier = Modifier
                     .fillMaxWidth()
                     .horizontalScroll(rememberScrollState())
-                    .padding(top = 10.dp),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    .padding(top = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
                     "@",
-                    style = MaterialTheme.typography.labelMedium,
+                    style = MaterialTheme.typography.titleSmall,
                     color = palette.muted,
                     modifier = Modifier.padding(end = 2.dp)
                 )
@@ -543,27 +604,31 @@ internal fun AnnotationDiscussionSheet(
                                 onRememberRespondPersona(persona.id)
                             }
                         },
-                        shape = RoundedCornerShape(15.dp),
-                        color = if (selected) palette.accentContainer.copy(alpha = 0.65f) else palette.glass,
-                        contentColor = if (selected) palette.accent else palette.muted,
-                        border = BorderStroke(1.dp, if (selected) palette.accent else palette.glassBorder)
+                        shape = CircleShape,
+                        color = if (selected) palette.background else Color.Transparent,
+                        contentColor = if (selected) palette.onBackground else palette.muted,
+                        border = BorderStroke(
+                            if (selected) 1.5.dp else 0.5.dp,
+                            if (selected) palette.onBackground else palette.glassBorder
+                        )
                     ) {
                         Row(
-                            modifier = Modifier.padding(start = 4.dp, end = 10.dp, top = 3.dp, bottom = 3.dp),
+                            modifier = Modifier.padding(start = 4.dp, end = 12.dp, top = 4.dp, bottom = 4.dp),
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(5.dp)
+                            horizontalArrangement = Arrangement.spacedBy(7.dp)
                         ) {
                             PersonaAvatarImage(
                                 name = persona.name,
                                 avatarPath = persona.avatarPath,
-                                modifier = Modifier.size(20.dp)
+                                modifier = Modifier.size(24.dp)
                             )
                             Text(
                                 persona.name,
-                                style = MaterialTheme.typography.labelSmall,
+                                style = MaterialTheme.typography.labelLarge,
+                                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.widthIn(max = 88.dp)
+                                modifier = Modifier.widthIn(max = 96.dp)
                             )
                         }
                     }
@@ -575,8 +640,8 @@ internal fun AnnotationDiscussionSheet(
         ReaderComposerBar(
             input = input,
             onInputChange = { input = it },
-            placeholder = respondPersona?.let { "说点什么，${it.name}会接话（留空＝请 TA 点评原文）" }
-                ?: "写下你的想法…",
+            placeholder = respondPersona?.let { stringResource(R.string.discussion_placeholder_persona, it.name) }
+                ?: stringResource(R.string.discussion_placeholder),
             canSend = canSend,
             isStreaming = streaming != null,
             palette = palette,
@@ -587,203 +652,380 @@ internal fun AnnotationDiscussionSheet(
             },
             onStop = onCancelStreaming,
             maxLines = 4,
-            modifier = Modifier.padding(top = 8.dp, bottom = 10.dp)
+            textFieldModifier = Modifier.focusRequester(focusRequester),
+            modifier = Modifier.padding(top = 10.dp, bottom = 10.dp)
         )
     }
 }
 
-/** 楼主层：作者行 + 想法正文 + （自己的批注）样式调整入口；长按复制/删除。 */
+/** 朱砂线的横坐标与批注正文的起始缩进；挂钩横线从线伸到头像。 */
+private val THREAD_LINE_X = 5.dp
+private val THREAD_HOOK_END = 18.dp
+private val THREAD_CONTENT_START = 22.dp
+private val THREAD_REPLY_INDENT = 34.dp
+
+/**
+ * 被讨论的原文：宋体，按它在正文里的样子画划线——读者一眼看出这是哪一种划线、什么颜色，
+ * 改样式时这里立刻跟着变。逐行取文字边界作画，换行处不会连成一整块。
+ */
+@Composable
+private fun StyledQuote(
+    text: String,
+    style: AnnotationStyle,
+    ink: Color,
+    palette: ReaderPalette,
+    modifier: Modifier = Modifier
+) {
+    var layout by remember { mutableStateOf<androidx.compose.ui.text.TextLayoutResult?>(null) }
+    val display = remember(text) { if (text.length > QUOTE_MAX_CHARS) text.take(QUOTE_MAX_CHARS) + "…" else text }
+    Text(
+        text = display,
+        style = MaterialTheme.typography.bodyLarge.copy(
+            fontFamily = androidx.compose.ui.text.font.FontFamily.Serif,
+            fontSize = 17.sp,
+            lineHeight = 31.sp
+        ),
+        color = palette.onBackground,
+        maxLines = 4,
+        overflow = TextOverflow.Ellipsis,
+        onTextLayout = { layout = it },
+        modifier = modifier.drawBehind {
+            val result = layout ?: return@drawBehind
+            for (line in 0 until result.lineCount) {
+                val left = result.getLineLeft(line)
+                val right = result.getLineRight(line)
+                if (right - left < 1f) continue
+                val baseline = result.getLineBaseline(line)
+                when (style) {
+                    AnnotationStyle.HIGHLIGHT -> drawRoundRect(
+                        color = ink.copy(alpha = if (palette.isDark) 0.26f else 0.30f),
+                        topLeft = Offset(left - 2.dp.toPx(), baseline - 19.sp.toPx()),
+                        size = androidx.compose.ui.geometry.Size(right - left + 4.dp.toPx(), 24.sp.toPx()),
+                        cornerRadius = androidx.compose.ui.geometry.CornerRadius(3.dp.toPx())
+                    )
+                    AnnotationStyle.UNDERLINE -> drawLine(
+                        color = ink,
+                        start = Offset(left, baseline + 5.dp.toPx()),
+                        end = Offset(right, baseline + 5.dp.toPx()),
+                        strokeWidth = 1.6.dp.toPx(),
+                        cap = StrokeCap.Round
+                    )
+                    AnnotationStyle.WAVY -> {
+                        val amplitude = 1.8.dp.toPx()
+                        val y = baseline + 5.dp.toPx()
+                        val segments = AnnotationInk.wavySegments(right - left, 8.dp.toPx())
+                        if (segments > 0) {
+                            val path = Path()
+                            val step = (right - left) / segments
+                            path.moveTo(left, y)
+                            var x = left
+                            var up = true
+                            repeat(segments) {
+                                path.quadraticTo(x + step / 2f, if (up) y - amplitude else y + amplitude, x + step, y)
+                                x += step
+                                up = !up
+                            }
+                            drawPath(path, ink, style = Stroke(1.5.dp.toPx(), cap = StrokeCap.Round))
+                        }
+                    }
+                }
+            }
+        }
+    )
+}
+
+private const val QUOTE_MAX_CHARS = 200
+
+/**
+ * 原文摘录：书里的字和讨论里的话必须一眼分开。原文是宋体、带划线、垫一层淡纸色、
+ * 左上角一枚朱砂引号，上方一行「原文」小标；讨论用界面黑体，直接排在纸上。
+ */
+@Composable
+private fun QuoteExcerpt(
+    text: String,
+    style: AnnotationStyle,
+    ink: Color,
+    palette: ReaderPalette,
+    modifier: Modifier = Modifier
+) {
+    Column(modifier = modifier.fillMaxWidth()) {
+        Text(
+            text = stringResource(R.string.discussion_quote_label),
+            style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 2.sp),
+            color = palette.muted,
+            modifier = Modifier.padding(bottom = 6.dp)
+        )
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(16.dp))
+                .background(palette.onBackground.copy(alpha = if (palette.isDark) 0.06f else 0.035f))
+                .padding(start = 14.dp, end = 14.dp, top = 12.dp, bottom = 12.dp)
+        ) {
+            Text(
+                text = "\u201C",
+                style = MaterialTheme.typography.displaySmall.copy(
+                    fontFamily = androidx.compose.ui.text.font.FontFamily.Serif,
+                    fontSize = 40.sp,
+                    lineHeight = 40.sp
+                ),
+                color = palette.seal.copy(alpha = 0.55f),
+                modifier = Modifier.offset(x = (-2).dp, y = (-8).dp)
+            )
+            StyledQuote(
+                text = text,
+                style = style,
+                ink = ink,
+                palette = palette,
+                modifier = Modifier.padding(start = 18.dp)
+            )
+        }
+    }
+}
+
+/** 紧跟原文的样式条：三段小分段 + 四枚色点 + 自定义取色，点一下上面那句立刻变。 */
+@Composable
+private fun InlineStyleControls(
+    selectedStyle: AnnotationStyle,
+    selectedColor: String,
+    palette: ReaderPalette,
+    onChange: (AnnotationStyle, String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var pickerOpen by remember { mutableStateOf(false) }
+    val customActive = selectedColor.startsWith("#")
+    Row(
+        // 三段分段 + 五枚色点约 350dp，窄屏上横向滑动而不是被裁掉。
+        modifier = modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Row(
+            modifier = Modifier
+                .clip(RoundedCornerShape(12.dp))
+                .background(palette.onBackground.copy(alpha = if (palette.isDark) 0.08f else 0.055f))
+                .padding(3.dp),
+            horizontalArrangement = Arrangement.spacedBy(2.dp)
+        ) {
+            AnnotationStyle.entries.forEach { style ->
+                val selected = style == selectedStyle
+                Box(
+                    modifier = Modifier
+                        .then(if (selected) Modifier.shadow(1.dp, RoundedCornerShape(9.dp)) else Modifier)
+                        .clip(RoundedCornerShape(9.dp))
+                        .background(if (selected) palette.background else Color.Transparent)
+                        .clickable { onChange(style, selectedColor) }
+                        .padding(horizontal = 13.dp, vertical = 7.dp)
+                ) {
+                    Text(
+                        text = stringResource(
+                            when (style) {
+                                AnnotationStyle.HIGHLIGHT -> R.string.annotation_style_highlight
+                                AnnotationStyle.UNDERLINE -> R.string.annotation_style_underline
+                                AnnotationStyle.WAVY -> R.string.annotation_style_wavy
+                            }
+                        ),
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                        color = if (selected) palette.onBackground else palette.muted
+                    )
+                }
+            }
+        }
+        Spacer(Modifier.width(14.dp))
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            AnnotationColors.ALL.forEach { tag ->
+                InkDot(
+                    color = annotationSolidColor(tag, palette),
+                    selected = tag == selectedColor,
+                    palette = palette,
+                    onClick = { onChange(selectedStyle, tag) }
+                )
+            }
+            Box(
+                modifier = Modifier
+                    .size(26.dp)
+                    .clip(CircleShape)
+                    .background(if (customActive) annotationSolidColor(selectedColor, palette) else Color.Transparent)
+                    .border(
+                        width = if (customActive) 2.dp else 1.dp,
+                        color = if (customActive) palette.background else palette.glassBorder,
+                        shape = CircleShape
+                    )
+                    .clickable { pickerOpen = true },
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    Icons.Outlined.Colorize,
+                    contentDescription = "自定义划线颜色",
+                    tint = if (customActive) palette.background else palette.muted,
+                    modifier = Modifier.size(13.dp)
+                )
+            }
+        }
+    }
+    if (pickerOpen) {
+        InkColorPickerDialog(
+            initial = annotationSolidColor(selectedColor, palette),
+            onDismiss = { pickerOpen = false },
+            onConfirm = { hex ->
+                pickerOpen = false
+                onChange(selectedStyle, hex)
+            }
+        )
+    }
+}
+
+@Composable
+private fun InkDot(color: Color, selected: Boolean, palette: ReaderPalette, onClick: () -> Unit) {
+    // 选中态：外圈一道同色细环，与纸之间留一线空隙，像印泥盒里拿起的那一枚。
+    Box(
+        modifier = Modifier
+            .size(26.dp)
+            .clip(CircleShape)
+            .border(if (selected) 1.5.dp else 0.dp, if (selected) color else Color.Transparent, CircleShape)
+            .clickable(onClick = onClick)
+            .padding(if (selected) 4.dp else 1.dp)
+            .clip(CircleShape)
+            .background(color)
+    )
+}
+
+/** 讨论正文：界面黑体、比正文略大一档的行高——它是对话，不是书。原文那段才用宋体。 */
+@Composable
+private fun ThreadText(content: String, palette: ReaderPalette) {
+    val base = MaterialTheme.typography
+    val talk = remember(base) {
+        base.copy(bodyMedium = base.bodyMedium.copy(fontSize = 15.sp, lineHeight = 24.sp))
+    }
+    MaterialTheme(colorScheme = MaterialTheme.colorScheme, shapes = MaterialTheme.shapes, typography = talk) {
+        AiRichText(content = content, palette = palette)
+    }
+}
+
+/**
+ * 讨论串里的一条：挂在朱砂线上的头像、名字与身份、时间、宋体正文，下面一行「回复 / 复制」。
+ * [depth] 为 1 时是回复：再缩进一级，用一段折角线接回上一条。
+ */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun AnnotationOpenerBlock(
-    annotation: AnnotationEntity,
+private fun ThreadComment(
+    authorId: Long?,
     personas: List<PersonaEntity>,
     palette: ReaderPalette,
-    illustrations: List<IllustrationEntity>,
-    onPlayAudio: (String) -> Unit,
     timeText: String,
-    onUpdateStyle: (Long, AnnotationStyle, String) -> Unit,
-    onCopy: () -> Unit,
-    onDelete: () -> Unit
+    depth: Int,
+    onReply: () -> Unit,
+    onCopy: (() -> Unit)?,
+    deleteLabel: String,
+    onDelete: () -> Unit,
+    content: @Composable () -> Unit
 ) {
     var menuOpen by remember { mutableStateOf(false) }
-    var stylePanelOpen by remember { mutableStateOf(false) }
-    val authorName = annotation.personaId?.let { id ->
+    val seal = palette.seal
+    val muted = palette.muted
+    val authorName = authorId?.let { id ->
         personas.firstOrNull { it.id == id }?.name ?: "已删除角色"
     } ?: "我"
-    val inkTag = annotation.colorTag.ifBlank {
-        annotation.personaId?.let(AnnotationColors::forPersona) ?: AnnotationColors.AMBER
-    }
-    Surface(
-        color = palette.glass,
-        shape = RoundedCornerShape(14.dp),
-        border = BorderStroke(1.dp, palette.glassBorder),
+    val avatarSize = if (depth == 0) 30.dp else 26.dp
+    val start = if (depth == 0) THREAD_CONTENT_START else THREAD_CONTENT_START + THREAD_REPLY_INDENT
+    Row(
         modifier = Modifier
             .fillMaxWidth()
+            .drawBehind {
+                val cy = 10.dp.toPx() + avatarSize.toPx() / 2f
+                if (depth == 0) {
+                    drawLine(
+                        color = seal.copy(alpha = 0.7f),
+                        start = Offset(THREAD_LINE_X.toPx(), cy),
+                        end = Offset(THREAD_HOOK_END.toPx(), cy),
+                        strokeWidth = 1.5.dp.toPx()
+                    )
+                } else {
+                    // 折角线：从上一条头像正下方垂下，圆角转向这条回复的头像。
+                    val x = THREAD_CONTENT_START.toPx() + 15.dp.toPx()
+                    val end = start.toPx() - 4.dp.toPx()
+                    val r = 7.dp.toPx()
+                    val path = Path().apply {
+                        moveTo(x, 0f)
+                        lineTo(x, cy - r)
+                        quadraticTo(x, cy, x + r, cy)
+                        lineTo(end, cy)
+                    }
+                    drawPath(path, muted.copy(alpha = 0.45f), style = Stroke(1.2.dp.toPx()))
+                }
+            }
             .combinedClickable(onClick = {}, onLongClick = { menuOpen = true })
+            .padding(start = start, top = 10.dp, bottom = 2.dp),
+        verticalAlignment = Alignment.Top
     ) {
-        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                ParticipantAvatar(annotation.personaId, personas, palette, 24.dp)
-                Column(modifier = Modifier
-                    .weight(1f)
-                    .padding(start = 8.dp)
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            authorName,
-                            style = MaterialTheme.typography.labelMedium,
-                            fontWeight = FontWeight.SemiBold,
-                            color = palette.accent
-                        )
-                        Box(
-                            modifier = Modifier
-                                .padding(start = 6.dp)
-                                .size(8.dp)
-                                .clip(CircleShape)
-                                .background(annotationSolidColor(inkTag, palette))
-                        )
-                    }
-                    Text(
-                        timeText,
-                        style = MaterialTheme.typography.labelSmall,
-                        fontSize = 9.sp,
-                        color = palette.muted
-                    )
-                }
-                if (annotation.personaId == null) {
-                    TextButton(onClick = { stylePanelOpen = !stylePanelOpen }) {
-                        Text("样式", style = MaterialTheme.typography.labelSmall, color = palette.muted)
-                    }
-                }
-                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                    if (annotation.note.isNotBlank()) {
-                        DropdownMenuItem(
-                            text = { Text("复制") },
-                            onClick = {
-                                menuOpen = false
-                                onCopy()
-                            }
-                        )
-                    }
-                    DropdownMenuItem(
-                        text = { Text("删除批注") },
-                        onClick = {
-                            menuOpen = false
-                            onDelete()
-                        }
-                    )
-                }
-            }
-            if (annotation.note.isNotBlank()) {
-                AiRichText(
-                    content = annotation.note,
-                    palette = palette,
-                    modifier = Modifier.padding(top = 6.dp)
-                )
-            } else {
+        ParticipantAvatar(authorId, personas, palette, avatarSize)
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .padding(start = 10.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.heightIn(min = avatarSize)) {
                 Text(
-                    "划了这段原文，还没写想法",
-                    style = MaterialTheme.typography.bodySmall,
+                    authorName,
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    color = palette.onBackground,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.widthIn(max = 140.dp)
+                )
+                Text(
+                    text = stringResource(if (authorId == null) R.string.discussion_role_me else R.string.discussion_role_persona),
+                    style = MaterialTheme.typography.labelSmall,
                     color = palette.muted,
-                    modifier = Modifier.padding(top = 6.dp)
+                    modifier = Modifier
+                        .padding(start = 7.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(palette.onBackground.copy(alpha = if (palette.isDark) 0.09f else 0.06f))
+                        .padding(horizontal = 6.dp, vertical = 1.dp)
+                )
+                Text(
+                    timeText,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = palette.muted,
+                    modifier = Modifier.padding(start = 8.dp)
                 )
             }
-            AnnotationMediaContent(
-                media = AnnotationMedia.decode(annotation.mediaJson),
-                text = annotation.note,
-                illustrations = illustrations,
-                palette = palette,
-                onPlayAudio = onPlayAudio
-            )
-            if (stylePanelOpen && annotation.personaId == null) {
-                AnnotationStylePanel(
-                    selectedStyle = AnnotationStyle.fromWire(annotation.style),
-                    selectedColor = AnnotationColors.normalize(annotation.colorTag),
-                    palette = palette,
-                    onChange = { style, color -> onUpdateStyle(annotation.id, style, color) }
+            Box(Modifier.padding(top = 2.dp)) { content() }
+            Row(
+                modifier = Modifier.padding(top = 2.dp),
+                horizontalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                ThreadAction(stringResource(R.string.discussion_reply), palette, onReply)
+                onCopy?.let { copy -> ThreadAction(stringResource(R.string.discussion_copy), palette, copy) }
+            }
+            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                DropdownMenuItem(
+                    text = { Text(deleteLabel) },
+                    onClick = {
+                        menuOpen = false
+                        onDelete()
+                    }
                 )
             }
         }
     }
 }
 
-/** 回复层：缩进一级；长按复制/删除。 */
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun ReplyRow(
-    reply: AnnotationReplyEntity,
-    personas: List<PersonaEntity>,
-    palette: ReaderPalette,
-    illustrations: List<IllustrationEntity>,
-    onPlayAudio: (String) -> Unit,
-    timeText: String,
-    onCopy: () -> Unit,
-    onDelete: () -> Unit
-) {
-    var menuOpen by remember { mutableStateOf(false) }
-    val authorName = reply.personaId?.let { id ->
-        personas.firstOrNull { it.id == id }?.name ?: "已删除角色"
-    } ?: "我"
-    Row(
+private fun ThreadAction(label: String, palette: ReaderPalette, onClick: () -> Unit) {
+    Text(
+        text = label,
+        style = MaterialTheme.typography.labelMedium,
+        color = palette.muted,
         modifier = Modifier
-            .fillMaxWidth()
-            .padding(start = 22.dp)
-            .clip(RoundedCornerShape(12.dp))
-            .combinedClickable(onClick = {}, onLongClick = { menuOpen = true })
-            .padding(horizontal = 6.dp, vertical = 3.dp),
-        verticalAlignment = Alignment.Top
-    ) {
-        ParticipantAvatar(reply.personaId, personas, palette, 22.dp)
-        Column(modifier = Modifier
-            .weight(1f)
-            .padding(start = 8.dp)
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    authorName,
-                    style = MaterialTheme.typography.labelSmall,
-                    fontWeight = FontWeight.SemiBold,
-                    color = if (reply.personaId != null) palette.accent else palette.onBackground
-                )
-                Text(
-                    timeText,
-                    style = MaterialTheme.typography.labelSmall,
-                    fontSize = 9.sp,
-                    color = palette.muted,
-                    modifier = Modifier.padding(start = 6.dp)
-                )
-            }
-            AiRichText(
-                content = reply.contentMarkdown,
-                palette = palette,
-                modifier = Modifier.padding(top = 2.dp)
-            )
-            AnnotationMediaContent(
-                media = AnnotationMedia.decode(reply.mediaJson),
-                text = reply.contentMarkdown,
-                illustrations = illustrations,
-                palette = palette,
-                onPlayAudio = onPlayAudio
-            )
-        }
-        DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-            DropdownMenuItem(
-                text = { Text("复制") },
-                onClick = {
-                    menuOpen = false
-                    onCopy()
-                }
-            )
-            DropdownMenuItem(
-                text = { Text("删除") },
-                onClick = {
-                    menuOpen = false
-                    onDelete()
-                }
-            )
-        }
-    }
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 6.dp, vertical = 8.dp)
+    )
 }
 
 @Composable
@@ -821,7 +1063,7 @@ private fun AnnotationMediaContent(
     }
 }
 
-/** AI 正在回复：头像 + 流式正文 + 工具活动行 + 停止。 */
+/** AI 正在回复：挂在讨论串末尾的一条回复，头像 + 流式正文 + 工具活动行 + 停止。 */
 @Composable
 private fun StreamingReplyRow(
     streaming: DiscussionStreaming,
@@ -833,26 +1075,26 @@ private fun StreamingReplyRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(start = 22.dp, end = 4.dp),
+            .padding(start = THREAD_CONTENT_START + THREAD_REPLY_INDENT, top = 10.dp, end = 4.dp),
         verticalAlignment = Alignment.Top
     ) {
-        ParticipantAvatar(streaming.personaId, personas, palette, 22.dp)
+        ParticipantAvatar(streaming.personaId, personas, palette, 26.dp)
         Column(modifier = Modifier
             .weight(1f)
-            .padding(start = 8.dp)
+            .padding(start = 10.dp)
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.heightIn(min = 26.dp)) {
                 Text(
                     persona?.name ?: "角色",
-                    style = MaterialTheme.typography.labelSmall,
+                    style = MaterialTheme.typography.labelLarge,
                     fontWeight = FontWeight.SemiBold,
-                    color = palette.accent
+                    color = palette.onBackground
                 )
                 CircularProgressIndicator(
                     strokeWidth = 1.5.dp,
-                    color = palette.accent,
+                    color = palette.seal,
                     modifier = Modifier
-                        .padding(start = 7.dp)
+                        .padding(start = 8.dp)
                         .size(11.dp)
                 )
             }
@@ -865,20 +1107,25 @@ private fun StreamingReplyRow(
                 )
             }
             if (streaming.text.isNotBlank()) {
-                StreamingAiRichText(
-                    content = streaming.text,
-                    palette = palette,
-                    modifier = Modifier.padding(top = 2.dp)
-                )
+                val base = MaterialTheme.typography
+                val serif = remember(base) {
+                    base.copy(bodyMedium = base.bodyMedium.copy(fontSize = 15.sp, lineHeight = 24.sp))
+                }
+                MaterialTheme(colorScheme = MaterialTheme.colorScheme, shapes = MaterialTheme.shapes, typography = serif) {
+                    StreamingAiRichText(
+                        content = streaming.text,
+                        palette = palette,
+                        modifier = Modifier.padding(top = 2.dp)
+                    )
+                }
             }
         }
         Surface(
             onClick = onCancel,
             shape = CircleShape,
-            color = palette.glass,
+            color = palette.onBackground.copy(alpha = if (palette.isDark) 0.10f else 0.06f),
             contentColor = palette.muted,
-            border = BorderStroke(1.dp, palette.glassBorder),
-            modifier = Modifier.size(26.dp)
+            modifier = Modifier.size(28.dp)
         ) {
             Box(contentAlignment = Alignment.Center) {
                 Icon(

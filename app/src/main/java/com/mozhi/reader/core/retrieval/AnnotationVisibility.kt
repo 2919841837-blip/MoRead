@@ -2,8 +2,11 @@ package com.mozhi.reader.core.retrieval
 
 import com.mozhi.reader.core.database.entity.AnnotationEntity
 
-/** The same boundary guards render markers, discussion targets, prompts, tools and notices. */
+/** Scope checks for automatic AI context; saved annotations are immediately available to readers. */
 object AnnotationVisibility {
+    fun forDisplay(annotations: List<AnnotationEntity>, showAiAnnotations: Boolean = true): List<AnnotationEntity> =
+        annotations.filter { showAiAnnotations || it.personaId == null }
+
     /** Shared SQL equivalent for count-only tools, without materializing note/quote/media payloads. */
     const val SQL_PREDICATE = """
         (:wholeBook OR personaId IS NULL OR

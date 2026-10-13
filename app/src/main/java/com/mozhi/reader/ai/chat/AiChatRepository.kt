@@ -117,6 +117,7 @@ class AiChatRepository @Inject constructor(
     /**
      * @param maskId 发送这条消息时生效的用户面具（0 = 本人）。记忆固化据此区分
      *   「用户真实偏好」与「面具内的扮演经历」，两者不能混为一谈。
+     * @param uiContextJson 发送时附带给模型的互动界面状态摘要（不显示，组装请求时注入）
      */
     suspend fun appendUserMessage(
         conversationId: Long,
@@ -125,7 +126,8 @@ class AiChatRepository @Inject constructor(
         maskId: Long = 0L,
         sourceScopeChapterIndex: Int = -1,
         sourceScopeCharOffset: Int = -1,
-        clientRoundId: String? = null
+        clientRoundId: String? = null,
+        uiContextJson: String? = null
     ) {
         val clean = content.trim()
         require(clean.isNotEmpty() || attachmentsJson != null) { "消息不能为空" }
@@ -141,7 +143,8 @@ class AiChatRepository @Inject constructor(
                     maskId = maskId,
                     sourceScopeChapterIndex = sourceScopeChapterIndex,
                     sourceScopeCharOffset = sourceScopeCharOffset,
-                    clientRoundId = clientRoundId?.takeIf(String::isNotBlank) ?: UUID.randomUUID().toString()
+                    clientRoundId = clientRoundId?.takeIf(String::isNotBlank) ?: UUID.randomUUID().toString(),
+                    uiContextJson = uiContextJson
                 )
             )
             val conversation = chatDao.getConversation(conversationId)
@@ -210,6 +213,11 @@ class AiChatRepository @Inject constructor(
             role = message.role,
             shouldRegenerate = message.role == ChatRole.USER.wire
         )
+    }
+
+    /** 互动回答的界面状态（用户拖过的滑块、答过的题）；重开聊天页时据此恢复。 */
+    suspend fun updateMessageUiState(messageId: Long, stateJson: String?) {
+        chatDao.updateUiState(messageId, stateJson)
     }
 
     /** 删除一个可见消息；用户消息连同本轮隐藏的 assistant/tool 管道一起删除。 */

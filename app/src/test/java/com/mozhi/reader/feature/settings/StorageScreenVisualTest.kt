@@ -79,6 +79,23 @@ class StorageScreenVisualTest {
         compose.onAllNodesWithText(storagePercentage(500_000_000, categories.sumOf { it.bytes })).assertCountEquals(2)
     }
 
+    @Test fun selectingCacheShowsWhereItComesFrom() {
+        val categories = chartUsage.take(3) + StorageCategoryUsage(StorageCategory.CACHE, 58_300_000)
+        val buckets = listOf(CacheBucketUsage(CacheBucket.UPDATES, 48_000_000), CacheBucketUsage(CacheBucket.WEB_VIEW, 10_300_000))
+        var updatesLabel = ""
+        show {
+            updatesLabel = LocalContext.current.getString(CacheBucket.UPDATES.title)
+            MoReadSecondaryPage("存储与数据", {}) {
+                item { MoReadSection(title = "空间分布") { StorageDistributionChart(categories, cacheBuckets = buckets) } }
+            }
+        }
+        compose.onNodeWithTag("storage-cache-breakdown").assertDoesNotExist()
+        compose.onNodeWithText(StorageCategory.CACHE.title).performClick()
+        compose.onNode(hasScrollAction()).performScrollToNode(hasTestTag("storage-cache-breakdown"))
+        compose.onNodeWithText(updatesLabel).assertIsDisplayed()
+        capture("storage-cache-breakdown.png")
+    }
+
     @Test @Config(qualifiers = "w320dp-h740dp-mdpi") fun chartRemainsReadableOnSmallDarkScreens() {
         show(dark = true) { MoReadSecondaryPage("存储与数据", {}) {
             item { MoReadSection(title = "空间分布") { StorageDistributionChart(chartUsage) } }
