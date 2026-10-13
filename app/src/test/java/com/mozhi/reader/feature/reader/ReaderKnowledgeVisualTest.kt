@@ -230,6 +230,32 @@ class ReaderKnowledgeVisualTest {
         capture("characters-manual-search.png")
     }
 
+    @Test fun namedScanKeepsTheTypedNamesAndTheirAliasesAndStartsItsOwnPreview() {
+        var asked: Triple<Boolean, Boolean, List<CharacterTarget>>? = null
+        show(tab = 2, actions = ReaderKnowledgeActions(previewCharacters = { bounded, quick, targets ->
+            asked = Triple(bounded, quick, targets)
+        }))
+        compose.onNodeWithText("提取").performClick()
+        compose.onNodeWithText("点名扫描…").performClick()
+        targetsField().performTextInput("黄晓明（晓明、绿大暗）\n林舟")
+        compose.onNodeWithText("已识别 2 位").assertIsDisplayed()
+        capture("characters-named-scan.png")
+        compose.onNodeWithTag("character-targets-confirm").performClick()
+        val requested = checkNotNull(asked) { "点名扫描没有触发预览" }
+        assertEquals(listOf("黄晓明", "林舟"), requested.third.map { it.name })
+        assertEquals(listOf("晓明", "绿大暗"), requested.third.first().aliases)
+        // 点名扫描不走「整理主要人物」那条快速流程，否则预览会去解析对话模型。
+        assertFalse(requested.second)
+    }
+
+    @Test fun aNamedScanResultIsLabelledByItsCountInsteadOfClaimingAWholeBookScan() {
+        val targeted = guide.copy(mode = BookCharacterGuide.MODE_TARGETED)
+        show(tab = 2, input = { state.copy(characters = BookCharactersSnapshot(VisibleBookCharacters(personEntry, targeted))) })
+        compose.onNodeWithText("按名单整理 · 2 位人物").assertIsDisplayed()
+        compose.onNodeWithText("已扫描全书 40 章").assertDoesNotExist()
+        capture("characters-named-status.png")
+    }
+
     @Test @Config(qualifiers = "zh-rCN-w320dp-h640dp-mdpi") fun emptyStateHasClearManualEntryOnSmallScreens() {
         var generated = 0
         show(input = { state.copy(snapshot = KnowledgeSnapshot(book)) }, actions = ReaderKnowledgeActions(preview = { generated++ }))
@@ -468,6 +494,8 @@ class ReaderKnowledgeVisualTest {
     }
 
     private fun selectTab(label: String) { compose.onNode(hasText(label) and hasClickAction()).performClick() }
+    /** 名单输入用 [com.mozhi.reader.ui.components.MoReadTextField]：testTag 在外层容器上，可输入的节点是它的子节点。 */
+    private fun targetsField() = compose.onNode(hasSetTextAction() and hasAnyAncestor(hasTestTag("character-targets")))
     private fun top(tag: String): Float = compose.onNodeWithTag(tag).fetchSemanticsNode().boundsInRoot.top
     private fun scroll(tag: String): Float = compose.onNodeWithTag(tag).fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value()
 

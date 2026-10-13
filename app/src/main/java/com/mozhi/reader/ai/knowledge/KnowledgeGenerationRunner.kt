@@ -43,7 +43,8 @@ class KnowledgeGenerationRunner @Inject constructor(
     }
 
     fun generateCharacters(plan: BookCharactersPlan) = start(KnowledgeTaskKey(plan.bookId), plan.bookTitle) { key ->
-        if (plan.quick) characters.generateQuick(plan) { detail -> progress(key, "", detail) }
+        // 点名扫描与快速模式是同一条链路（名单 → 逐人档案），只是名单来自用户。
+        if (plan.quick || plan.targeted) characters.generateQuick(plan) { detail -> progress(key, "", detail) }
         else characters.generate(plan, { completed, total, _ ->
             progress(key, "已扫描 $completed / $total 章", KnowledgeProgress(KnowledgeProgress.Stage.SCANNING, completed, total))
         }) { done, total -> progress(key, "正在写小传 $done / $total", KnowledgeProgress(KnowledgeProgress.Stage.WRITING, done, total)) }

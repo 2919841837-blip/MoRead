@@ -89,6 +89,25 @@ class BookCharacterMergeTest {
         assertEquals(fresh, BookCharactersCodec.mergeTargeted(fresh, null))
     }
 
+    @Test fun `a freshly written dossier beats the evidence a full scan left behind`() {
+        val previous = guide(BookCharacter("林舟", listOf(fact("在灯塔等候"))))
+        val fresh = guide(BookCharacter("林舟", emptyList(), dossier = CharacterDossier(tagline = "守灯人"),
+            role = CharacterRole.SUPPORTING, mentions = 7))
+        val merged = BookCharactersCodec.mergeTargeted(fresh, previous).characters.single()
+        assertEquals("守灯人", merged.dossier?.tagline)
+        assertEquals(CharacterRole.SUPPORTING, merged.role)
+        assertEquals(7, merged.mentions)
+        assertEquals(listOf("在灯塔等候"), merged.evidence.map { it.fact.text })
+    }
+
+    @Test fun `a later scan without a dossier never wipes one that is already there`() {
+        val previous = guide(BookCharacter("林舟", listOf(fact("在灯塔等候")),
+            dossier = CharacterDossier(tagline = "守灯人"), role = CharacterRole.PROTAGONIST))
+        val merged = BookCharactersCodec.mergeTargeted(guide(BookCharacter("林舟", listOf(fact("灯还亮着")))), previous).characters.single()
+        assertEquals("守灯人", merged.dossier?.tagline)
+        assertEquals(CharacterRole.PROTAGONIST, merged.role)
+    }
+
     @Test fun `merged people stay uniquely keyed`() {
         val previous = guide(person("林冲"), person("武松"))
         val fresh = guide(person("林冲", fact("后来的事")), person("林冲", fact("再后来的事")))

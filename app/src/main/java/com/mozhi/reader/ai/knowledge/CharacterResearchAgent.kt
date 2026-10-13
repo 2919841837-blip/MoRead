@@ -51,6 +51,11 @@ internal class CharacterResearchRequest(
     val webModel: ResolvedChatClient?,
     val modelKey: String,
     val cache: DossierCache,
+    /**
+     * 用户点名的人物（`黄晓明（晓明、绿大暗）` 里括号内是别称）。非空时跳过名单请求：
+     * 名字就是用户给的，不让模型再挑一遍（既省一次调用，也免得它把点名的人删掉）。
+     */
+    val targets: List<CharacterTarget>? = null,
     val validate: suspend () -> Unit
 )
 
@@ -81,10 +86,14 @@ class CharacterResearchAgent @Inject internal constructor(
     private val readerTools: ReaderToolset
 ) {
     internal suspend fun run(request: CharacterResearchRequest, onProgress: (KnowledgeProgress) -> Unit): CharacterResearchResult {
-        onProgress(KnowledgeProgress(KnowledgeProgress.Stage.ROSTER))
         val counter = OccurrenceCounter(request.chapters)
-        val candidates = CharacterCandidates.rank(request.chapters, limit = CANDIDATES)
-        val (roster, rosterKey) = roster(request, candidates, counter)
+        val named = request.targets
+        // 点名的名单不发请求、也不整理，所以没有「整理名单」这一步可报，直接进档案阶段。
+        val (roster, rosterKey) = if (named != null) namedRoster(request, named) else {
+            onProgress(KnowledgeProgress(KnowledgeProgress.Stage.ROSTER))
+            val candidates = CharacterCandidates.rank(request.chapters, limit = CANDIDATES)
+            roster(request, candidates, counter)
+        }
         request.validate()
         require(roster.isNotEmpty()) { "正文里没有找到明显的人物，可以手动添加，或改用完整扫描" }
 
@@ -138,6 +147,31 @@ class CharacterResearchAgent @Inject internal constructor(
             usedKeys = listOfNotNull(rosterKey) + people.map { it.second },
             failed = failed.toList()
         )
+    }
+
+    /**
+     * 用户点名的名单：一个请求都不发，只在正文里核对名字。
+     *
+     * 每个人都**单独**检索一次（[CharacterPassages.collect] 有全局 5000 次命中上限，
+     * 合并成一次会让高频的名字把后面的挤成假「未找到」）。全都对不上说明名字写错或不在
+     * 读到的范围内，就在本地停下——不花任何模型调用。零命中的少数名字仍留在名单里，
+     * 走到档案阶段会直接失败，界面把它们列进「没整理成」。
+     */
+    private fun namedRoster(request: CharacterResearchRequest, targets: List<CharacterTarget>):
+        Pair<List<RosterEntry>, String?> {
+        // 主次由点名的人自己定不了；统一按配角收进「其他人物」，与逐段扫描的默认一致。
+        val entries = targets.map { RosterEntry(it.name, it.aliases, CharacterRole.SUPPORTING) }
+        val found = HashSet<String>()
+        entries.forEach { entry ->
+            if (CharacterPassages.collect(request.chapters, (listOf(entry.name) + entry.aliases).distinct()).isNotEmpty()) {
+                found += entry.name
+            }
+        }
+        require(found.isNotEmpty()) {
+            val missing = targets.filterNot { it.name in found }.joinToString("、") { it.name }
+            "没有在正文中找到$missing，检查书名，或把别称写进括号。"
+        }
+        return entries to null
     }
 
     /** 名单：命中缓存直接用；请求失败回落本地候选（回落结果不缓存，下次还会再试一次名单）。 */

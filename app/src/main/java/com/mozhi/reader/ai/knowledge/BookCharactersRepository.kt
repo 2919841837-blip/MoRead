@@ -38,9 +38,8 @@ class BookCharactersPlan internal constructor(
     /** 快速模式联网补充用的对话模型（按用户的联网搜索开关；没配对话模型时为 null，跳过联网）。 */
     internal val webModel: ResolvedChatClient? = null,
     /**
-     * 用户点名的人物。1.4.0 的管线尚未接上（见 docs/CODE_MAP.md 的「点名扫描」一节）：
-     * 目前只有 [BookCharactersRepository.preview] 会收集、去重并计入费用，
-     * 逐人建档仍走 [CharacterResearchAgent] 自己的名单。
+     * 用户点名的人物。非空时 [CharacterResearchAgent] 跳过名单请求，直接用这份名单逐人建档，
+     * 发布时并入已有资料（见 [BookCharactersCodec.mergeTargeted]）。
      */
     val targets: List<CharacterTarget> = emptyList()
 ) {
@@ -59,8 +58,8 @@ class BookCharactersPlan internal constructor(
     val webModelLabel: String? get() = webModel?.modelName
     // A paragraph-aware part is at least half PART_CHARS, except for the final part.
     val maximumRequests: Long = when {
-        // 点名的每个人一次提交，外加一次引文纠错机会。
-        targeted -> targets.size * 2L
+        // 点名的每个人一次提交，外加一次修正机会；没有名单请求，联网补充另算。
+        targeted -> targets.size * 2L + if (webModel != null) CharacterResearchAgent.WEB_ROUNDS else 0
         quick -> CharacterResearchAgent.MAX_REQUESTS.toLong() + if (webModel != null) CharacterResearchAgent.WEB_ROUNDS else 0
         else -> chapters.sumOf {
             (scannedChars(it).toLong() + ChapterKnowledgeCodec.PART_CHARS / 2 - 1) / (ChapterKnowledgeCodec.PART_CHARS / 2)
@@ -119,7 +118,7 @@ class BookCharactersRepository @Inject constructor(
         val targeted = requested.isNotEmpty()
         val model = clients.forRole(ModelRole.CHEAP)
         // 联网补充需要会调工具的对话模型；没配就跳过联网，名单与档案照样只用批量任务模型。
-        val webModel = if (quick && webSearchSettings.current().enabled) runCatching { clients.forRole(ModelRole.CHAT) }.getOrNull() else null
+        val webModel = if ((quick || targeted) && webSearchSettings.current().enabled) runCatching { clients.forRole(ModelRole.CHAT) }.getOrNull() else null
         BookContentMutation.withBook(bookId) {
             val book = library.getBook(bookId)?.takeIf { it.removedAt == 0L } ?: error("书籍正文已移除")
             val scope = if (progressBounded) ReadingScope.uptoProgress(book) else ReadingScope.WholeBook
@@ -146,9 +145,13 @@ class BookCharactersRepository @Inject constructor(
      * 快速模式：名单 + 逐人档案，结果与逐段扫描走同一套手动资料保留与发布。
      * 每位人物整理完就进 [BookCharacterDossierEntity] 缓存——停止、失败或进程被杀后再跑只补剩下的人；
      * 失败或取消时已发布的资料不变。
+     *
+     * [BookCharactersPlan.targeted] 走同一条链路，只是名单换成用户点名的那些人：
+     * 不请模型整理名单，因此也不会删掉点名的人；发布时改为**并入**已有人物资料
+     * （[BookCharactersCodec.mergeTargeted]），不用只保留手动条目的 `mergeManual`。
      */
     suspend fun generateQuick(plan: BookCharactersPlan, onProgress: (KnowledgeProgress) -> Unit = {}): BookCharacterGuideEntity {
-        require(plan.quick)
+        require(plan.quick || plan.targeted) { "既不是快速模式，也没有点名的人物" }
         check(generating.add(plan.bookId)) { "这本书正在提取人物" }
         try {
             val chapters = withContext(Dispatchers.IO) { BookContentMutation.withBook(plan.bookId) {
@@ -175,6 +178,8 @@ class BookCharactersRepository @Inject constructor(
                 webModel = plan.webModel,
                 modelKey = plan.modelKey,
                 cache = cache,
+                // 点名的名单直接给进去，管线跳过名单请求；空列表按「没点名」处理。
+                targets = plan.targets.takeIf { it.isNotEmpty() },
                 validate = { validate(plan) }
             ), onProgress)
             val roleOrder = listOf(CharacterRole.PROTAGONIST, CharacterRole.MAJOR, CharacterRole.SUPPORTING)
@@ -187,18 +192,22 @@ class BookCharactersRepository @Inject constructor(
                         attributes = profile.attributes, dossier = profile.dossier, role = person.entry.role, mentions = person.mentions)
                 }
             val guide = BookCharacterGuide(characters, plan.chapterCount, plan.sourceCharacters, plan.progressBounded,
-                result.externalNotes, BookCharacterGuide.MODE_QUICK)
+                result.externalNotes, if (plan.targeted) BookCharacterGuide.MODE_TARGETED else BookCharacterGuide.MODE_QUICK)
             val generationId = UUID.randomUUID().toString()
             return withContext(Dispatchers.IO) { BookContentMutation.withBook(plan.bookId) {
                 validateLocked(plan)
                 val previous = BookCharactersCodec.visible(dao.getGuide(plan.bookId), plan.revision)?.guide
+                // 只认出别称时把 identity 钉回用户输入的大名，才和已有的那个人对得上。
+                val named = if (plan.targeted) BookCharactersCodec.anchor(guide, plan.targets) else guide
                 val published = BookCharacterGuideEntity(plan.bookId, generationId, plan.revision, plan.modelKey,
                     listOfNotNull(plan.modelLabel, plan.webModelLabel).distinct().joinToString(" + "), BookCharactersCodec.PROMPT_VERSION,
-                    AiJson.encodeToString(BookCharactersCodec.mergeManual(guide, previous)), System.currentTimeMillis())
+                    AiJson.encodeToString(if (plan.targeted) BookCharactersCodec.mergeTargeted(named, previous) else BookCharactersCodec.mergeManual(guide, previous)),
+                    System.currentTimeMillis())
                 database.withTransaction {
                     dao.saveGuide(published)
                     // 只留下这一次用到的缓存；发布成功后才清，失败或取消时进度原样保留。
-                    dao.pruneDossiers(plan.bookId, result.usedKeys)
+                    // 点名扫描只碰自己那几个人，清缓存会把上一次名单扫描留下的档案一起删掉。
+                    if (!plan.targeted) dao.pruneDossiers(plan.bookId, result.usedKeys)
                 }
                 published
             } }

@@ -123,7 +123,7 @@ internal fun ReaderKnowledgeContentsSheet(
         confirmButton = { TextButton(onClick = startCharacters) { Text(stringResource(R.string.characters_quick_start)) } },
         dismissButton = { TextButton(onClick = viewModel::dismissPreview) { Text(stringResource(R.string.characters_cancel)) } }
     ) }
-    // 点名扫描有自己的确认文案：不派主 agent，也不复用「重要人物」那套说法。
+    // 点名扫描有自己的确认文案：名单是用户给的，与「整理主要人物」不是一回事。
     state.pendingCharacters?.takeIf { it.targeted }?.let { plan -> AlertDialog(
         onDismissRequest = viewModel::dismissPreview,
         title = { Text(stringResource(R.string.characters_targets_title)) },
@@ -448,6 +448,7 @@ internal fun BookCharactersPanel(state: KnowledgeUiState, chapters: List<Chapter
     var query by rememberSaveable(state.bookId) { mutableStateOf("") }
     var searching by rememberSaveable { mutableStateOf(false) }
     var options by rememberSaveable { mutableStateOf(false) }
+    var pointing by rememberSaveable { mutableStateOf(false) }
     var information by remember { mutableStateOf(false) }
     var deleting by remember { mutableStateOf(false) }
     val task = state.characterTask
@@ -457,6 +458,7 @@ internal fun BookCharactersPanel(state: KnowledgeUiState, chapters: List<Chapter
         (listOf(person.name, person.identity) + person.aliases).any { it.contains(query.trim(), ignoreCase = true) }
     } }
     val titles = remember(chapters) { chapters.associate { it.chapterIndex to it.title } }
+    var targetsInput by rememberSaveable(state.bookId) { mutableStateOf("") }
     var progressBounded by rememberSaveable(state.bookId, saved?.guide?.progressBounded) { mutableStateOf(saved?.guide?.progressBounded ?: true) }
     var quickMode by rememberSaveable(state.bookId) { mutableStateOf(saved?.guide?.mode != BookCharacterGuide.MODE_FULL || saved == null) }
     var openedIdentity by rememberSaveable(state.bookId) { mutableStateOf<String?>(null) }
@@ -475,6 +477,8 @@ internal fun BookCharactersPanel(state: KnowledgeUiState, chapters: List<Chapter
         state.characters.pendingProfiles > 0 -> stringResource(R.string.characters_pending_resume, state.characters.pendingProfiles)
         state.characters.checkpointParts > 0 -> "已有提取进度，点击「提取」继续"
         state.characters.outdated -> "正文已变化，可重新提取；手动资料保留"
+        // 点名扫描的结果并进旧资料，scannedChapters 沿用旧值，不能说成「已扫描全书」。
+        saved?.guide?.mode == BookCharacterGuide.MODE_TARGETED -> stringResource(R.string.characters_targets_status, people.size)
         saved?.guide?.scannedChapters == 0 -> "手动整理"
         saved != null -> if (saved.guide.progressBounded) "已扫描到第 ${saved.guide.scannedChapters} 章" else "已扫描全书 ${saved.guide.scannedChapters} 章"
         else -> "可从正文提取，也可手动添加"
@@ -594,8 +598,8 @@ internal fun BookCharactersPanel(state: KnowledgeUiState, chapters: List<Chapter
                 }
             }
             Text(stringResource(if (quickMode) R.string.characters_mode_quick_hint else R.string.characters_mode_full_hint), style = MaterialTheme.typography.bodySmall)
-            // 点名扫描的入口暂时摘除：1.4.0 把逐人建档换成了 CharacterResearchAgent 的新管线，
-            // CharacterScanTargets / CharacterScanTargetsDialog / mergeTargeted 都在，等接上新管线后再把入口接回来。
+            // 名单输入有自己的一页：AlertDialog 装文本框会让重组停不下来（见 CharacterScanTargetsDialog）。
+            TextButton(onClick = { options = false; pointing = true }, enabled = !busy) { Text(stringResource(R.string.characters_targets_entry)) }
             TextButton(onClick = { options = false; information = true }) { Icon(Icons.Outlined.Info, "书籍资料说明"); Spacer(Modifier.width(6.dp)); Text("提取说明") }
             if (saved != null || state.characters.checkpointParts > 0) TextButton(onClick = { options = false; deleting = true }, enabled = !busy) { Text("删除人物资料") }
         }
@@ -614,6 +618,11 @@ internal fun BookCharactersPanel(state: KnowledgeUiState, chapters: List<Chapter
             })
         }
     }, dismissButton = { TextButton(onClick = { options = false }) { Text("关闭") } })
+    if (pointing) CharacterScanTargetsDialog(input = targetsInput, onInputChange = { targetsInput = it }, enabled = !busy,
+        onDismiss = { pointing = false }, onConfirm = { targets ->
+            pointing = false
+            actions.previewCharacters(progressBounded, false, targets)
+        })
     if (editorVisible) BookCharacterEditorDialog(editing, people, onDismiss = { editorVisible = false }, onSave = { key, name, description ->
         actions.saveCharacter(key, name, description); editorVisible = false
     })

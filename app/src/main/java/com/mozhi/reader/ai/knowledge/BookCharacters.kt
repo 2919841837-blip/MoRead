@@ -100,6 +100,11 @@ internal object BookCharactersCodec {
                     evidence = unionEvidence(old.evidence, fresh.evidence),
                     attributes = (old.attributes + fresh.attributes).distinctBy { it.kind to it.value }.takeLast(48),
                     relationships = (old.relationships + fresh.relationships).distinctBy { it.target to it.relation }.takeLast(96),
+                    // 本次新写的档案与主次要盖过旧的（旧条目可能只是逐段扫描留下的 evidence）；
+                    // 但手动条目从来没有档案，不能被 null 抹掉。
+                    dossier = fresh.dossier ?: old.dossier,
+                    role = fresh.role ?: old.role,
+                    mentions = maxOf(old.mentions, fresh.mentions),
                     sourceName = old.sourceName ?: fresh.sourceName
                 )
             }
