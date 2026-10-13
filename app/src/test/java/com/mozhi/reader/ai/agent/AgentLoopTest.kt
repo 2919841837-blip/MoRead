@@ -105,6 +105,7 @@ class AgentLoopTest {
             content: String,
             editedAt: Long
         ) = Unit
+        override suspend fun updateUiState(messageId: Long, stateJson: String?) = Unit
         override suspend fun deleteMessage(messageId: Long) = Unit
         override suspend fun deleteMessagesAfter(conversationId: Long, messageId: Long) = Unit
         override suspend fun deleteMessageRange(

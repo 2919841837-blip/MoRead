@@ -109,11 +109,14 @@ class ReadingAndCompanionVisualTest {
         compose.onNodeWithText("请先发送或清空草稿").assertIsDisplayed()
     }
 
-    private fun show(content: @Composable () -> Unit) {
+    private fun show(
+        appearance: com.mozhi.reader.ui.theme.AppearanceSettings = com.mozhi.reader.ui.theme.AppearanceSettings(),
+        content: @Composable () -> Unit
+    ) {
         compose.setContent {
             val view = LocalView.current
             SideEffect { root = view.rootView }
-            MoReadTheme { content() }
+            MoReadTheme(appearance) { content() }
         }
     }
 
@@ -154,7 +157,10 @@ class ReadingAndCompanionVisualTest {
             persona.copy(id = 4, name = "拾光", personality = "把读到的好句子，留给以后的自己。")), 3, mapOf(3L to 18L), loaded = true))
         var opened = 0
         var stats = 0
-        show { MoReadBackdrop { CompanionScreen(PaddingValues(), {}, {}, { opened++ }, { stats++ }, vm) } }
+        // 悬浮舱下「书库伴读」在舱右侧的圆钮里；通栏导航没有那枚圆钮，页面里保留浮钮。
+        show(com.mozhi.reader.ui.theme.AppearanceSettings(navStyle = com.mozhi.reader.ui.theme.NavStyle.BAR)) {
+            MoReadBackdrop { CompanionScreen(PaddingValues(), {}, {}, { opened++ }, { stats++ }, vm) }
+        }
         compose.onNodeWithContentDescription("书库伴读").assertIsDisplayed().performClick()
         compose.onNodeWithContentDescription("陪伴足迹").performClick()
         assertEquals(1, opened); assertEquals(1, stats)

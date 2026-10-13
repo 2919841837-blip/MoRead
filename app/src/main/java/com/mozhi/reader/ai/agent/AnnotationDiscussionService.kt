@@ -55,8 +55,8 @@ class AnnotationDiscussionService @Inject constructor(
                 ?: run { emit(Event.Failed("书籍不存在")); return@flow }
             val scope = com.mozhi.reader.core.retrieval.ReadingScopeResolver.resolve(
                 settingsRepository.companionSpoilerProtectionEnabled.first(), book)
-            if (annotation.bookId != bookId || !com.mozhi.reader.core.retrieval.AnnotationVisibility.isVisible(annotation, scope)) {
-                emit(Event.Failed("读到这段正文后才能参与讨论")); return@flow
+            if (annotation.bookId != bookId) {
+                emit(Event.Failed("这条批注不属于当前书籍")); return@flow
             }
             val replies = annotationRepository.getReplies(annotationId)
             val personaNames = personaRepository.getPersonas().associate { it.id to it.name }
@@ -117,11 +117,9 @@ class AnnotationDiscussionService @Inject constructor(
                 emit(Event.Failed("角色没有说出话来，请重试"))
                 return@flow
             }
-            val currentBook = libraryRepository.getBook(bookId) ?: return@flow
+            libraryRepository.getBook(bookId) ?: return@flow
             val currentAnnotation = annotationRepository.getAnnotation(annotationId) ?: return@flow
-            val currentScope = com.mozhi.reader.core.retrieval.ReadingScopeResolver.resolve(
-                settingsRepository.companionSpoilerProtectionEnabled.first(), currentBook)
-            if (!com.mozhi.reader.core.retrieval.AnnotationVisibility.isVisible(currentAnnotation, currentScope)) return@flow
+            if (currentAnnotation.bookId != bookId) return@flow
             val replyId = annotationRepository.addReply(
                 annotationId = annotationId,
                 personaId = personaId,

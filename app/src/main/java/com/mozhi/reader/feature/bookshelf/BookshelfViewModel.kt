@@ -90,6 +90,17 @@ class BookshelfViewModel @Inject constructor(
     private val filter = MutableStateFlow(ShelfFilter())
     private val selectionActive = MutableStateFlow(false)
     private val selectedBookIds = MutableStateFlow<Set<Long>>(emptySet())
+    private val _searchQuery = MutableStateFlow("")
+
+    /**
+     * 书架搜索词。输入框在根导航的搜索舱里（MoReadApp），过滤在书架页，
+     * 两处共用同一个 ViewModel 实例，所以搜索词放在这里而不是页面局部状态。
+     */
+    val searchQuery: kotlinx.coroutines.flow.StateFlow<String> = _searchQuery
+
+    fun setSearchQuery(value: String) {
+        _searchQuery.value = value
+    }
     private val eventChannel = Channel<BookshelfEvent>(Channel.BUFFERED)
     val events = eventChannel.receiveAsFlow()
 

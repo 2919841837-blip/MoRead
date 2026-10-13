@@ -26,6 +26,9 @@ import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mozhi.reader.R
 import com.mozhi.reader.core.datastore.CompanionProcessMode
+import com.mozhi.reader.core.datastore.GenUiLevel
+import com.mozhi.reader.core.datastore.GenUiStyleFreedom
+import androidx.compose.material.icons.outlined.Widgets
 import com.mozhi.reader.ui.components.MoReadBlock
 import com.mozhi.reader.ui.components.MoReadRow
 import com.mozhi.reader.ui.components.MoReadRowDivider
@@ -108,6 +111,64 @@ fun ChatDisplaySettingsScreen(onBack: () -> Unit, viewModel: SettingsViewModel) 
                     checked = display.expandWhileStreaming,
                     enabled = visible,
                     onCheckedChange = { viewModel.setProcessDisplay(display.copy(expandWhileStreaming = it)) }
+                )
+            }
+        }
+        item {
+            val genUi by viewModel.genUiSettings.collectAsStateWithLifecycle()
+            MoReadSection(
+                title = stringResource(R.string.settings_genui_title),
+                icon = Icons.Outlined.Widgets,
+                tone = SemanticSlot.AI,
+                footer = stringResource(R.string.settings_genui_summary)
+            ) {
+                val levelLabels = mapOf(
+                    GenUiLevel.OFF to stringResource(R.string.settings_genui_level_off),
+                    GenUiLevel.MODERATE to stringResource(R.string.settings_genui_level_moderate),
+                    GenUiLevel.ACTIVE to stringResource(R.string.settings_genui_level_active)
+                )
+                MoReadBlock(title = stringResource(R.string.settings_genui_title)) {
+                    Column {
+                        MoReadSegmented(
+                            options = GenUiLevel.entries,
+                            selected = genUi.level,
+                            onSelect = { viewModel.setGenUiSettings(genUi.copy(level = it)) },
+                            label = { levelLabels.getValue(it) }
+                        )
+                        Text(
+                            text = stringResource(R.string.settings_genui_level_footer),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                MoReadRowDivider()
+                val styleLabels = mapOf(
+                    GenUiStyleFreedom.FREE to stringResource(R.string.settings_genui_style_free),
+                    GenUiStyleFreedom.HOUSE to stringResource(R.string.settings_genui_style_house)
+                )
+                MoReadBlock(title = stringResource(R.string.settings_genui_style)) {
+                    Column {
+                        MoReadSegmented(
+                            options = GenUiStyleFreedom.entries,
+                            selected = genUi.style,
+                            onSelect = { viewModel.setGenUiSettings(genUi.copy(style = it)) },
+                            label = { styleLabels.getValue(it) }
+                        )
+                        Text(
+                            text = stringResource(R.string.settings_genui_style_footer),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                MoReadRowDivider()
+                MoReadSwitchRow(
+                    icon = Icons.Outlined.Brush,
+                    title = stringResource(R.string.settings_genui_night_adapt),
+                    checked = genUi.nightAdapt,
+                    enabled = genUi.enabled,
+                    onCheckedChange = { viewModel.setGenUiSettings(genUi.copy(nightAdapt = it)) }
                 )
             }
         }

@@ -25,7 +25,7 @@ sealed class AiClientException(message: String, cause: Throwable? = null) :
 
     class Unsupported(detail: String) : AiClientException(detail)
 
-    class Http(code: Int, detail: String?) : AiClientException(
+    class Http(val code: Int, detail: String?) : AiClientException(
         if (detail.isNullOrBlank()) "服务返回错误（HTTP $code）" else "服务返回错误（HTTP $code）：$detail"
     )
 

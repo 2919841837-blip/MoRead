@@ -1,0 +1,6 @@
+model-*.dil.md are real model generations (DeepSeek) collected by the
+intelligent-ui-demo project and used here as robustness fixtures for the
+companion interactive-UI compiler: every streamed prefix must compile.
+
+Source: https://github.com/Disdjj/intelligent-ui-demo (replica/test/fixtures)
+License: MIT License, Copyright (c) 2026 DJJ

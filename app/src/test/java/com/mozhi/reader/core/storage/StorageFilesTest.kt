@@ -12,14 +12,27 @@ class StorageFilesTest {
     private fun entry(path: String, age: Long = STORAGE_CLEANUP_MIN_AGE_MS + 1): StorageFile =
         StorageFile(File(temporary.root, path).absoluteFile, path, 10L, now - age)
 
-    @Test fun safeCleanupExcludesActiveImportsAudioAndCurrentInstaller() {
+    @Test fun safeCleanupExcludesActiveImportsAudioAndPendingInstaller() {
         assertTrue(isSafeTemporaryFile(entry("cache/updates/v1.0.8.apk"), now, "1.0.9"))
         assertTrue(isSafeTemporaryFile(entry("cache/export/notes.md"), now, "1.0.9"))
-        listOf("cache/updates/v1.0.9.apk", "cache/updates/v1.0.8.apk.part", "cache/reader-font-import/a.ttf",
+        // 已安装的当前版本安装包再也用不上，刚下载完也可以清。
+        assertTrue(isSafeTemporaryFile(entry("cache/updates/v1.0.9.apk", age = 100L), now, "1.0.9"))
+        assertTrue(isSafeTemporaryFile(entry("cache/updates/v1.0.8.apk.part"), now, "1.0.9"))
+        listOf("cache/updates/v1.1.0.apk", "cache/reader-font-import/a.ttf",
             "cache/reader-image-import/a.png", "cache/agent-speech/1/a.mp3", "backups/restore/a.zip").forEach {
             assertFalse(it, isSafeTemporaryFile(entry(it), now, "1.0.9"))
         }
         assertFalse(isSafeTemporaryFile(entry("cache/export/active.md", age = 100L), now, "1.0.9"))
+        assertFalse(isSafeTemporaryFile(entry("cache/updates/v1.1.0.apk.part", age = 100L), now, "1.0.9"))
+    }
+
+    @Test fun cacheBreakdownNamesTheBigSources() {
+        assertEquals(CacheBucket.UPDATES, cacheBucketOf("cache/updates/v1.1.1.apk"))
+        assertEquals(CacheBucket.WEB_VIEW, cacheBucketOf("cache/WebView/Default/HTTP Cache/index"))
+        assertEquals(CacheBucket.IMPORTS, cacheBucketOf("cache/lan-inbox/book.epub"))
+        assertEquals(CacheBucket.PREVIEWS, cacheBucketOf("cache/voice-design-previews/a.wav"))
+        assertEquals(CacheBucket.EXPORTS, cacheBucketOf("cache/chart-exports/a.png"))
+        assertEquals(CacheBucket.OTHER, cacheBucketOf("cache/loose-file.tmp"))
     }
 
     @Test fun ownershipProtectsRemovedBookRecordsAndUnselectedLibraryAssets() {

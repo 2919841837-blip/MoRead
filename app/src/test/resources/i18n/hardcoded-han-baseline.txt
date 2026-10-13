@@ -1,5 +1,5 @@
 # path<TAB>含汉字的字符串字面量数；由 HardcodedTextRatchetTest 生成，勿手改
-feature/bookdetail/AnnotationIndex.kt	22
+feature/bookdetail/AnnotationIndex.kt	21
 feature/bookdetail/BookDescriptionExtractor.kt	12
 feature/bookdetail/BookDetailAssets.kt	26
 feature/bookdetail/BookDetailContent.kt	37
@@ -8,10 +8,13 @@ feature/bookdetail/BookDetailMetadata.kt	20
 feature/bookdetail/BookDetailScreen.kt	31
 feature/bookdetail/BookDetailViewModel.kt	41
 feature/bookshelf/BookCollectionComponents.kt	18
-feature/bookshelf/BookshelfScreen.kt	76
+feature/bookshelf/BookCovers.kt	1
+feature/bookshelf/BookshelfHeader.kt	37
+feature/bookshelf/BookshelfLayouts.kt	22
+feature/bookshelf/BookshelfScreen.kt	16
 feature/bookshelf/BookshelfViewModel.kt	31
 feature/bookshelf/ShelfCollectionDrag.kt	3
-feature/bookshelf/ShelfOrganizationComponents.kt	29
+feature/bookshelf/ShelfOrganizationComponents.kt	28
 feature/bookshelf/TabletBookshelfComponents.kt	13
 feature/bookshelf/manage/ShelfGroupScreen.kt	27
 feature/bookshelf/manage/ShelfManageViewModel.kt	20
@@ -62,11 +65,10 @@ feature/listen/AudiobookScriptViewModel.kt	17
 feature/listen/ListenChapterGrouping.kt	3
 feature/listen/ListenPlayerScreen.kt	34
 feature/reader/AiRichText.kt	1
-feature/reader/AnnotationDiscussionSheet.kt	31
+feature/reader/AnnotationDiscussionSheet.kt	23
 feature/reader/AutoReadSession.kt	7
 feature/reader/BilingualReadingDialog.kt	22
 feature/reader/BookCharacterEditorDialog.kt	8
-feature/reader/CharacterProfileDetails.kt	3
 feature/reader/CompanionChatActions.kt	6
 feature/reader/CompanionChatDialogs.kt	18
 feature/reader/CompanionChatHeader.kt	7
@@ -97,15 +99,16 @@ feature/reader/ReaderComposerBar.kt	2
 feature/reader/ReaderCustomThemeEditor.kt	31
 feature/reader/ReaderEpubImageDialog.kt	12
 feature/reader/ReaderHardwareKeys.kt	16
-feature/reader/ReaderKnowledgeSheet.kt	135
+feature/reader/ReaderKnowledgeSheet.kt	111
 feature/reader/ReaderKnowledgeViewModel.kt	5
 feature/reader/ReaderListenOrb.kt	13
-feature/reader/ReaderNavigationSheets.kt	23
-feature/reader/ReaderPane.kt	3
+feature/reader/ReaderNavigationSheets.kt	9
+feature/reader/ReaderPane.kt	2
 feature/reader/ReaderPhysicalKeysSheet.kt	35
 feature/reader/ReaderScreen.kt	11
-feature/reader/ReaderScrollPane.kt	4
+feature/reader/ReaderScrollPane.kt	2
 feature/reader/ReaderSearch.kt	10
+feature/reader/ReaderSelectionController.kt	1
 feature/reader/ReaderSelectionMediaViewModel.kt	19
 feature/reader/ReaderSettingsSheet.kt	2
 feature/reader/ReaderStyleEditorComponents.kt	17
@@ -127,6 +130,8 @@ feature/reader/ReaderTypographySheet.kt	7
 feature/reader/ReaderTypographyStepper.kt	3
 feature/reader/ReaderTypographyThemePage.kt	25
 feature/reader/ReaderViewModel.kt	63
+feature/reader/ScrollPaneHolder.kt	1
+feature/reader/ScrollSelectionController.kt	1
 feature/reader/TextCleanupPreviewDialog.kt	10
 feature/reader/TextReplacementRuleAgent.kt	11
 feature/reader/TranslationModelSelector.kt	3
@@ -209,4 +214,4 @@ ui/components/SemanticPalettes.kt	4
 ui/components/SleepTimerSheet.kt	26
 ui/components/TtsTuningSections.kt	26
 ui/components/VoiceChoiceDialog.kt	3
-ui/theme/AppTheme.kt	26
+ui/theme/AppTheme.kt	16

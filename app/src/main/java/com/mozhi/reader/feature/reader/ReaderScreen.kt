@@ -405,6 +405,9 @@ fun ReaderScreen(
         highlightIsVisible = { viewModel.contentController.isReady && viewModel.isShowingPosition(it.chapterIndex, it.startCharOffset) }
     )
     val contentVisible = readerReady && state.isContentReady
+    // 目录弹层默认打开「目录」页；从人物进度球进来时打开「人物」页，弹层关掉后复位。
+    var contentsInitialTab by remember(bookId) { androidx.compose.runtime.mutableIntStateOf(0) }
+    LaunchedEffect(screenState.activeSheet) { if (screenState.activeSheet != ReaderSheet.CONTENTS) contentsInitialTab = 0 }
     val speechActive = listenState?.isPlaying == true || selectionMediaState.isPlaying || selectionMediaState.isWorking
     val generatedImageVisible = selectionMediaState.imagePath != null
     val autoReadBlockedByUi = screenState.blocksAutoRead(companionPaneVisible, generatedImageVisible)
@@ -453,11 +456,8 @@ fun ReaderScreen(
     val annotationScope = state.book?.let {
         com.mozhi.reader.core.retrieval.ReadingScopeResolver.resolve(companionState.spoilerProtectionEnabled, it)
     } ?: com.mozhi.reader.core.retrieval.ReadingScope.upto(0, 0)
-    val visibleAnnotations = remember(state.annotations, state.showAiAnnotations, annotationScope) {
-        state.annotations.filter { annotation ->
-            (state.showAiAnnotations || annotation.personaId == null) &&
-                com.mozhi.reader.core.retrieval.AnnotationVisibility.isVisible(annotation, annotationScope)
-        }
+    val visibleAnnotations = remember(state.annotations, state.showAiAnnotations) {
+        com.mozhi.reader.core.retrieval.AnnotationVisibility.forDisplay(state.annotations, state.showAiAnnotations)
     }
     val markKey = conversionMode
     val annotationMarks = rememberReaderAnnotationMarks(
@@ -466,7 +466,8 @@ fun ReaderScreen(
     )
     val visibleIllustrations = remember(state.illustrations, state.annotations, annotationScope) {
         state.illustrations.filter {
-            com.mozhi.reader.core.retrieval.AnnotationVisibility.isIllustrationVisible(it, state.annotations, annotationScope)
+            com.mozhi.reader.core.retrieval.AnnotationVisibility.isIllustrationVisible(it, state.annotations, annotationScope,
+                spoilerProtection = false)
         }
     }
     val illustrationMarks = remember(visibleIllustrations, state.contentRevision, markKey) {
@@ -1034,6 +1035,19 @@ fun ReaderScreen(
             interactionSignal = state.currentChapterIndex * 10_000 + state.pageIndex
         )
 
+        // 人物整理在后台跑时的进度球；点开直接落到目录弹层的「人物」页。
+        val knowledgeTasks: ReaderKnowledgeViewModel = hiltViewModel()
+        val characterTask by remember(bookId) { knowledgeTasks.characterTask(bookId) }.collectAsStateWithLifecycle(null)
+        ReaderKnowledgeTaskOrb(
+            task = characterTask,
+            palette = palette,
+            visible = contentVisible && !screenState.detailsVisible && screenState.activeSheet != ReaderSheet.CONTENTS,
+            onOpen = {
+                contentsInitialTab = KNOWLEDGE_CHARACTERS_TAB
+                screenState.activeSheet = ReaderSheet.CONTENTS
+            }
+        )
+
         ReaderBookDetailOverlay(
             visible = screenState.detailsVisible,
             book = state.book,
@@ -1262,6 +1276,13 @@ fun ReaderScreen(
                 tocEntries = state.tocEntries,
                 currentChapterIndex = state.currentChapterIndex,
                 palette = palette,
+                initialTab = contentsInitialTab,
+                bookmarks = state.bookmarks,
+                onBookmarkClick = { bookmark ->
+                    screenState.activeSheet = null
+                    viewModel.goToBookmark(bookmark)
+                },
+                onDeleteBookmark = viewModel::deleteBookmark,
                 onDismiss = { screenState.activeSheet = null },
                 onChapterClick = { index, href ->
                     screenState.activeSheet = null

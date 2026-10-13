@@ -25,7 +25,12 @@ data class ChatBubbleStyle(
     val container: Color,
     val content: Color,
     val border: BorderStroke?,
-    val corner: Int
+    val corner: Int,
+    /**
+     * 角色的话不装气泡、直接排在纸上（默认外观）。长回答按正文的行高读，
+     * 只有读者自己的话是墨色气泡——两堵墙变成一页纸上的一问一答。
+     */
+    val inline: Boolean = false
 ) {
     /**
      * 尖角朝向说话的一方，与常见 IM 一致。
@@ -57,7 +62,12 @@ fun rememberChatBubbleStyle(
         ?: if (fromUser) defaultUserContainer else defaultAssistantContainer
     val onBase = if (fromUser) defaultUserContent else defaultAssistantContent
     return when (appearance.shape) {
-        ChatBubbleShape.ROUNDED -> ChatBubbleStyle(base, onBase, null, 16)
+        // 默认外观下角色侧没有底色：文字直接落在页面上，前景取页面色。
+        ChatBubbleShape.ROUNDED -> if (!fromUser && custom == null) {
+            ChatBubbleStyle(Color.Transparent, surfaceContent, null, 20, inline = true)
+        } else {
+            ChatBubbleStyle(base, onBase, null, 20)
+        }
         // 描边与玻璃都要让背景透出来，所以文字色改用页面前景色而不是气泡的 on-color。
         ChatBubbleShape.OUTLINED -> ChatBubbleStyle(
             container = Color.Transparent,

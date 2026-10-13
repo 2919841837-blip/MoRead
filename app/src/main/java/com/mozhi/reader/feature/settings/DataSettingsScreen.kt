@@ -88,7 +88,7 @@ fun DataSettingsScreen(
             item {
                 MoReadSection(title = "空间分布", icon = Icons.Outlined.Storage) {
                     if (usage == null) LinearProgressIndicator(Modifier.fillMaxWidth().padding(16.dp))
-                    else StorageDistributionChart(usage!!.categories)
+                    else StorageDistributionChart(usage!!.categories, cacheBuckets = usage!!.cacheBuckets)
                 }
             }
             item {

@@ -13,4 +13,16 @@ class ExtractedCharacterCardTest {
         assertEquals("", imported.greeting)
         assertTrue(imported.worldBook.isEmpty())
     }
+
+    @Test fun dossierCardsCarryTheBiographyRelationsAndPersonality() {
+        val person = BookCharacter("林舟", emptyList(), manualDescription = "手动补充：怕水。", dossier = CharacterDossier(
+            tagline = "守灯人", bio = "他守着灯塔。", identity = "灯塔守望人",
+            personality = listOf(DossierTrait("执着", "雨夜也点灯"), DossierTrait("沉默")),
+            experiences = listOf(DossierEvent("收到来信", 1)), relationships = listOf(DossierRelation("小满", "同伴", "一起出发"))))
+        val card = ExtractedCharacterCard.from(person)
+        listOf("守灯人", "身份：灯塔守望人", "他守着灯塔。", "小满（同伴）：一起出发", "- 收到来信", "手动补充：怕水。").forEach {
+            assertTrue(it, card.description.contains(it))
+        }
+        assertEquals("执着（雨夜也点灯）、沉默", card.personality)
+    }
 }

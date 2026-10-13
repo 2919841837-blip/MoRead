@@ -41,14 +41,17 @@ class CharacterResearchPartsTest {
         }
     }
 
-    @Test fun `quotes are mapped back to their own chapter coordinates`() {
-        val passages = listOf(SourcePassage(3, 100, "林冲在灯塔等候多时。"), SourcePassage(7, 40, "林冲与鲁智深结为兄弟。"))
-        val raw = """{"characters":[{"name":"林冲","facts":[{"text":"等候","quote":"林冲在灯塔等候多时。"},{"text":"结义","quote":"林冲与鲁智深结为兄弟。"}]}]}"""
-        val result = ChapterKnowledgeCodec.parseCharactersAcross(raw, passages)
-        assertEquals(listOf(3, 7), result.map { it.first })
-        assertEquals(100, result[0].second.facts.single().start)
-        assertEquals(40, result[1].second.facts.single().start)
-        val crossing = """{"characters":[{"name":"林冲","facts":[{"text":"拼接","quote":"等候多时。\n\n〔……〕\n\n林冲与"}]}]}"""
-        assertTrue(runCatching { ChapterKnowledgeCodec.parseCharactersAcross(crossing, passages) }.isFailure)
+    @Test fun `major characters get more passages including scenes shared with other cast`() {
+        val filler = "风吹过原野。".repeat(80)
+        // 林冲出场 150 次，只有第 40 章与鲁智深同场——均匀抽样几乎不可能落到那一处。
+        val chapters = (0 until 150).map { index ->
+            index to if (index == 40) "${filler}林冲与鲁智深结为兄弟。$filler" else "${filler}林冲独自赶路。$filler"
+        }
+        val passages = CharacterPassages.collect(chapters, listOf("林冲"), related = listOf("鲁智深", "林冲"))
+        assertTrue(passages.size > 8)
+        assertTrue(passages.sumOf { it.text.length } <= 15_000)
+        assertTrue(passages.any { "鲁智深" in it.text })
+        val minor = CharacterPassages.collect(chapters.take(10), listOf("林冲"))
+        assertTrue(minor.size <= 8)
     }
 }

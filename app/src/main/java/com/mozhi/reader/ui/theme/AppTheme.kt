@@ -1,6 +1,8 @@
 package com.mozhi.reader.ui.theme
 
+import androidx.annotation.StringRes
 import androidx.compose.ui.graphics.Color
+import com.mozhi.reader.R
 import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.luminance
 
@@ -41,25 +43,31 @@ enum class AccentPreset(
 
 /**
  * 配色方案：决定整套 M3 ColorScheme（含 secondary/tertiary 家族）与扁平模式的画布色。
- * [NEUTRAL] 是开箱默认——零色相，与历史版本完全一致；莫兰迪三款是多色相但低饱和的
- * 协调方案；[DYNAMIC] 走 Material You 取壁纸色（Android 12+，低版本读出即回落 NEUTRAL）。
+ * [PAPER] 是开箱默认——暖白纸底、墨色文字、朱砂点睛；[NEUTRAL] 是历史版本的零色相灰阶；
+ * 莫兰迪三款是多色相但低饱和的协调方案；[DYNAMIC] 走 Material You 取壁纸色
+ * （Android 12+，低版本读出即回落 NEUTRAL）。
  */
-enum class ColorSchemePreset(val label: String, val description: String) {
-    NEUTRAL("原版", "经典灰阶、玻璃质感与悬浮导航舱"),
-    HAZE_BLUE("雾蓝", "莫兰迪雾蓝主色，灰绿 / 灰紫 / 灰粉做语义色"),
-    SAGE("苔绿", "莫兰迪苔绿主色，雾蓝 / 沙棕 / 灰粉做语义色"),
-    ROSE_DUST("灰粉", "莫兰迪灰粉主色，灰紫 / 灰绿 / 杏黄做语义色"),
-    DYNAMIC("跟随壁纸", "Android 12 及以上从壁纸取色");
+enum class ColorSchemePreset(@param:StringRes val labelRes: Int) {
+    PAPER(R.string.color_scheme_paper),
+    NEUTRAL(R.string.color_scheme_neutral),
+    HAZE_BLUE(R.string.color_scheme_haze_blue),
+    SAGE(R.string.color_scheme_sage),
+    ROSE_DUST(R.string.color_scheme_rose_dust),
+    DYNAMIC(R.string.color_scheme_dynamic);
+
+    /** 纸墨与原版共用经典外观：玻璃质感、标准形状、悬浮导航舱。 */
+    val isClassic: Boolean
+        get() = this == PAPER || this == NEUTRAL
 
     /** 该方案推荐的质感与形状；选方案时一并套用，之后可单独再调。 */
     val recommendedSurface: SurfaceStyle
-        get() = if (this == NEUTRAL) SurfaceStyle.GLASS else SurfaceStyle.FLAT
+        get() = if (isClassic) SurfaceStyle.GLASS else SurfaceStyle.FLAT
 
     val recommendedShape: ShapeStyle
-        get() = if (this == NEUTRAL) ShapeStyle.STANDARD else ShapeStyle.EXPRESSIVE
+        get() = if (isClassic) ShapeStyle.STANDARD else ShapeStyle.EXPRESSIVE
 
     companion object {
-        val Default = NEUTRAL
+        val Default = PAPER
     }
 }
 

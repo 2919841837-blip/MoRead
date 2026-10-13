@@ -129,6 +129,10 @@ interface ChatDao {
     @Query("UPDATE messages SET content = :content, editedAt = :editedAt WHERE id = :messageId")
     suspend fun updateMessageContent(messageId: Long, content: String, editedAt: Long)
 
+    /** 互动回答的界面状态；只改这一列，不动 content/editedAt（不算编辑）。 */
+    @Query("UPDATE messages SET uiStateJson = :stateJson WHERE id = :messageId AND role = 'assistant'")
+    suspend fun updateUiState(messageId: Long, stateJson: String?)
+
     @Query("UPDATE messages SET clientRoundId = :roundId WHERE id = :messageId AND role = 'user'")
     suspend fun updateUserRoundId(messageId: Long, roundId: String)
 

@@ -207,6 +207,11 @@
             android:name=".core.importer.lan.LanTransferService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+        <!-- 书籍资料（人物档案、章节大纲）：切到后台或熄屏时保持联网，通知栏显示进度。 -->
+        <service
+            android:name=".ai.knowledge.KnowledgeTaskService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
         <!-- 笔记导出分享用：cache/export 下的 Markdown 经内容 URI 交给其他应用。 -->
         <provider
             android:name="androidx.core.content.FileProvider"

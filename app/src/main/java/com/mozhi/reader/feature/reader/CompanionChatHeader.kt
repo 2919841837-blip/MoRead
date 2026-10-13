@@ -1,6 +1,13 @@
 package com.mozhi.reader.feature.reader
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.outlined.EditNote
+import androidx.compose.material3.Surface
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -42,37 +49,45 @@ internal fun CompanionChatHeader(
     onShowConversations: () -> Unit,
     embedded: Boolean = false
 ) {
+    val sidebar = LocalCompanionSidebarVisible.current
     Row(
         modifier = Modifier
             .fillMaxWidth()
             // 全 App 的顶栏都是 8~12dp 起步；这里原来是 4dp，切进聊天页时返回箭头会往左跳一下。
-            .padding(horizontal = 8.dp, vertical = 6.dp),
+            .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        if (!LocalCompanionSidebarVisible.current) IconButton(onClick = onBack, modifier = Modifier.size(44.dp)) {
-            Icon(
-                if (embedded) Icons.Outlined.Close else Icons.AutoMirrored.Outlined.ArrowBack,
-                contentDescription = if (embedded) "关闭伴读面板" else "返回",
-                tint = palette.onBackground
-            )
+        // 顶栏的按钮是浮在纸上的玻璃小件：返回一枚圆钮，右侧会话动作收进一枚胶囊。
+        if (!sidebar) HeaderGlass(palette, CircleShape) {
+            IconButton(onClick = onBack, modifier = Modifier.size(44.dp)) {
+                Icon(
+                    if (embedded) Icons.Outlined.Close else Icons.AutoMirrored.Outlined.ArrowBack,
+                    contentDescription = if (embedded) "关闭伴读面板" else "返回",
+                    tint = palette.onBackground,
+                    modifier = Modifier.size(21.dp)
+                )
+            }
         }
         Row(
             modifier = Modifier
                 .weight(1f)
-                .padding(start = 4.dp)
-                .clickable(onClick = onOpenPersonaMenu),
+                .padding(start = 10.dp)
+                .clip(RoundedCornerShape(22.dp))
+                .clickable(onClick = onOpenPersonaMenu)
+                .padding(end = 6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             PersonaAvatarImage(
                 name = persona?.name.orEmpty(),
                 avatarPath = persona?.avatarPath,
-                modifier = Modifier.size(36.dp)
+                modifier = Modifier.size(40.dp)
             )
             Column(modifier = Modifier.padding(start = 10.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         text = persona?.name ?: "伴读",
                         style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
                         color = palette.onBackground,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
@@ -81,7 +96,7 @@ internal fun CompanionChatHeader(
                         Icons.Outlined.ExpandMore,
                         contentDescription = "切换角色",
                         tint = palette.muted,
-                        modifier = Modifier.size(16.dp)
+                        modifier = Modifier.padding(start = 2.dp).size(18.dp)
                     )
                 }
                 Text(
@@ -111,19 +126,45 @@ internal fun CompanionChatHeader(
                 }
             }
         }
-        if (!LocalCompanionSidebarVisible.current) IconButton(
-            onClick = onNewConversation,
-            enabled = !isStreaming,
-            modifier = Modifier.size(44.dp)
-        ) {
-            Icon(Icons.Outlined.Add, contentDescription = "新会话", tint = palette.accent)
-        }
-        if (!LocalCompanionSidebarVisible.current) IconButton(onClick = onShowConversations, modifier = Modifier.size(44.dp)) {
-            Icon(
-                Icons.Outlined.History,
-                contentDescription = "会话历史",
-                tint = palette.onBackground
-            )
+        if (!sidebar) HeaderGlass(palette, RoundedCornerShape(22.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = onShowConversations, modifier = Modifier.size(44.dp)) {
+                    Icon(
+                        Icons.Outlined.History,
+                        contentDescription = "会话历史",
+                        tint = palette.onBackground,
+                        modifier = Modifier.size(21.dp)
+                    )
+                }
+                IconButton(
+                    onClick = onNewConversation,
+                    enabled = !isStreaming,
+                    modifier = Modifier.size(44.dp)
+                ) {
+                    Icon(
+                        Icons.Outlined.EditNote,
+                        contentDescription = "新会话",
+                        tint = if (isStreaming) palette.muted else palette.onBackground,
+                        modifier = Modifier.size(22.dp)
+                    )
+                }
+            }
         }
     }
+}
+
+@Composable
+private fun HeaderGlass(
+    palette: ReaderPalette,
+    shape: androidx.compose.ui.graphics.Shape,
+    content: @Composable () -> Unit
+) {
+    Surface(
+        shape = shape,
+        color = palette.glassStrong,
+        contentColor = palette.onBackground,
+        border = BorderStroke(0.5.dp, palette.glassBorder),
+        shadowElevation = 3.dp,
+        content = content
+    )
 }

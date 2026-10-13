@@ -13,6 +13,10 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.material3.LocalContentColor
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -304,6 +308,105 @@ internal fun CompanionChatBubble(
     val context = LocalContext.current
     val style = chatBubbleStyleFor(appearance, fromUser, palette)
     val showTokenUsage = LocalShowCompanionTokenUsage.current
+    val meta: @Composable () -> Unit = {
+        AnimatedVisibility(visible = showActions, enter = fadeIn(), exit = fadeOut()) {
+            if (readOnlyActions) {
+                Row {
+                    TextButton(onClick = {
+                        clipboard.setText(AnnotatedString(entry.part.text))
+                        showActions = false
+                    }) { Text("复制", color = palette.accent) }
+                    TextButton(onClick = { showActions = false }) { Text("收起", color = palette.muted) }
+                }
+            } else BubbleActionBar(
+                palette = palette,
+                fromUser = fromUser,
+                canReroll = entry.canReroll,
+                onDismiss = { showActions = false },
+                onCopy = {
+                    clipboard.setText(AnnotatedString(entry.part.text))
+                    Toast.makeText(context, "已复制", Toast.LENGTH_SHORT).show()
+                },
+                onSpeak = onSpeak?.let { speak -> { speak(entry.part.text) } },
+                onEdit = onEdit,
+                onReroll = onReroll,
+                onBranch = onBranch,
+                onDelete = onDelete
+            )
+        }
+        if (showTokenUsage && !fromUser && message != null && entry.isLastMessagePart) {
+            Text(
+                text = companionTokenUsageLabel(message),
+                style = MaterialTheme.typography.labelSmall,
+                color = palette.muted,
+                modifier = Modifier.padding(top = 4.dp, start = 4.dp, end = 4.dp)
+            )
+        }
+        entry.timestamp?.takeIf { !showActions }?.let { timestamp ->
+            val formatter = remember { SimpleDateFormat("HH:mm", Locale.getDefault()) }
+            Text(
+                text = formatter.format(Date(timestamp)),
+                style = MaterialTheme.typography.labelSmall,
+                color = palette.muted.copy(alpha = 0.55f),
+                modifier = Modifier.padding(top = 4.dp, start = 4.dp, end = 4.dp)
+            )
+        }
+    }
+    val body: @Composable () -> Unit = {
+        // 附件只挂在这条消息的第一个气泡上，多气泡时不会重复出现。
+        if ((message != null && entry.showAvatar) || fromUser) {
+            message?.let { BubbleAttachments(it, palette, context) }
+        }
+        BubbleBody(
+            entry = entry,
+            palette = palette,
+            locatedCitations = locatedCitations,
+            onLocateCitation = onLocateCitation,
+            voiceClip = voiceClip,
+            onPrepareVoice = onPrepareVoice,
+            onRegenerateVoice = onRegenerateVoice,
+            onPlayVoice = onPlayVoice,
+            libraryFootnotes = libraryFootnotes
+        )
+        footer?.invoke()
+        if (message?.editedAt != null && entry.isTail) {
+            Text(
+                "已编辑",
+                style = MaterialTheme.typography.labelSmall,
+                color = style.content.copy(alpha = 0.65f),
+                modifier = Modifier.padding(top = 3.dp)
+            )
+        }
+    }
+    if (style.inline && !fromUser) {
+        val isWidget = entry.part is CompanionBubblePart.Widget
+        InlineAssistantMessage(
+            entry = entry,
+            palette = palette,
+            personaName = personaName,
+            personaAvatarPath = personaAvatarPath,
+            appearance = appearance,
+            fontFamily = fontFamily,
+            // 互动岛里到处是可点的控件，空白处轻点不再呼出操作行，只认长按。
+            tapToggles = !isWidget,
+            onToggleActions = { if (message != null) showActions = !showActions },
+            onShowActions = { if (message != null) showActions = true },
+            body = if (isWidget) {
+                {
+                    CompanionGenUiWidget(
+                        entry = entry,
+                        palette = palette,
+                        style = style,
+                        appearance = appearance,
+                        fontFamily = fontFamily,
+                        onLongPress = { if (message != null) showActions = true }
+                    )
+                }
+            } else body,
+            meta = meta
+        )
+        return
+    }
     BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
         val bubbleMaxWidth = maxWidth * BUBBLE_MAX_WIDTH_FRACTION
         Column(modifier = Modifier.fillMaxWidth()) {
@@ -335,11 +438,20 @@ internal fun CompanionChatBubble(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = if (fromUser) Arrangement.End else Arrangement.Start
             ) {
+                // 互动岛用满消息列宽度（头像在上方，不占横向空间），长按仍可呼出操作行。
+                val isWidget = entry.part is CompanionBubblePart.Widget
                 Column(
-                    modifier = Modifier.widthIn(max = bubbleMaxWidth),
+                    modifier = if (isWidget) Modifier.fillMaxWidth() else Modifier.widthIn(max = bubbleMaxWidth),
                     horizontalAlignment = if (fromUser) Alignment.End else Alignment.Start
                 ) {
-                    Surface(
+                    if (isWidget) CompanionGenUiWidget(
+                        entry = entry,
+                        palette = palette,
+                        style = style,
+                        appearance = appearance,
+                        fontFamily = fontFamily,
+                        onLongPress = { if (message != null) showActions = true }
+                    ) else Surface(
                         modifier = Modifier.combinedClickable(
                             enabled = message != null,
                             onClick = { showActions = !showActions },
@@ -352,82 +464,87 @@ internal fun CompanionChatBubble(
                     ) {
                         ChatTextStyling(appearance, fontFamily) {
                             Column(
-                                modifier = Modifier.padding(horizontal = 13.dp, vertical = 10.dp)
-                            ) {
-                                // 附件只挂在这条消息的第一个气泡上，多气泡时不会重复出现。
-                                if ((message != null && entry.showAvatar) || fromUser) {
-                                    message?.let { BubbleAttachments(it, palette, context) }
-                                }
-                                BubbleBody(
-                                    entry = entry,
-                                    palette = palette,
-                                    locatedCitations = locatedCitations,
-                                    onLocateCitation = onLocateCitation,
-                                    voiceClip = voiceClip,
-                                    onPrepareVoice = onPrepareVoice,
-                                    onRegenerateVoice = onRegenerateVoice,
-                                    onPlayVoice = onPlayVoice,
-                                    libraryFootnotes = libraryFootnotes
-                                )
-                                footer?.invoke()
-                                if (message?.editedAt != null && entry.isTail) {
-                                    Text(
-                                        "已编辑",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = style.content.copy(alpha = 0.65f),
-                                        modifier = Modifier.padding(top = 3.dp)
-                                    )
-                                }
-                            }
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
+                            ) { body() }
                         }
                     }
-                    AnimatedVisibility(visible = showActions, enter = fadeIn(), exit = fadeOut()) {
-                        if (readOnlyActions) {
-                            Row {
-                                TextButton(onClick = {
-                                    clipboard.setText(AnnotatedString(entry.part.text))
-                                    showActions = false
-                                }) { Text("复制", color = palette.accent) }
-                                TextButton(onClick = { showActions = false }) { Text("收起", color = palette.muted) }
-                            }
-                        } else BubbleActionBar(
-                            palette = palette,
-                            fromUser = fromUser,
-                            canReroll = entry.canReroll,
-                            onDismiss = { showActions = false },
-                            onCopy = {
-                                clipboard.setText(AnnotatedString(entry.part.text))
-                                Toast.makeText(context, "已复制", Toast.LENGTH_SHORT).show()
-                            },
-                            onSpeak = onSpeak?.let { speak -> { speak(entry.part.text) } },
-                            onEdit = onEdit,
-                            onReroll = onReroll,
-                            onBranch = onBranch,
-                            onDelete = onDelete
-                        )
-                    }
-                    if (showTokenUsage && !fromUser && message != null && entry.isLastMessagePart) {
-                        Text(
-                            text = companionTokenUsageLabel(message),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = palette.muted,
-                            modifier = Modifier.padding(top = 4.dp, start = 4.dp, end = 4.dp)
-                        )
-                    }
-                    entry.timestamp?.takeIf { !showActions }?.let { timestamp ->
-                        val formatter = remember { SimpleDateFormat("HH:mm", Locale.getDefault()) }
-                        Text(
-                            text = formatter.format(Date(timestamp)),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = palette.muted.copy(alpha = 0.55f),
-                            modifier = Modifier.padding(top = 4.dp, start = 4.dp, end = 4.dp)
-                        )
-                    }
+                    meta()
                 }
             }
         }
     }
 }
+
+/**
+ * 默认外观下角色的话：头像与名字署在上方，正文直接排在纸上，按正文行高读。
+ * 正文与名字左对齐（让出头像那一栏），连发的几段沿同一条边往下长。
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun InlineAssistantMessage(
+    entry: ChatEntry.Bubble,
+    palette: ReaderPalette,
+    personaName: String,
+    personaAvatarPath: String?,
+    appearance: PersonaChatAppearance,
+    fontFamily: FontFamily?,
+    tapToggles: Boolean,
+    onToggleActions: () -> Unit,
+    onShowActions: () -> Unit,
+    body: @Composable () -> Unit,
+    meta: @Composable () -> Unit
+) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        if (entry.showAvatar) {
+            Row(
+                modifier = Modifier.padding(bottom = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                PersonaAvatarImage(
+                    name = personaName,
+                    avatarPath = personaAvatarPath,
+                    modifier = Modifier.size(INLINE_AVATAR_SIZE)
+                )
+                if (personaName.isNotBlank()) {
+                    Text(
+                        text = personaName,
+                        style = MaterialTheme.typography.titleSmall,
+                        color = palette.onBackground,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(start = INLINE_AVATAR_GAP)
+                    )
+                }
+            }
+        }
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = INLINE_AVATAR_SIZE + INLINE_AVATAR_GAP)
+                .combinedClickable(
+                    enabled = entry.message != null,
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = { if (tapToggles) onToggleActions() },
+                    onLongClick = onShowActions
+                )
+        ) {
+            val base = MaterialTheme.typography
+            val reading = remember(base) {
+                base.copy(bodyMedium = base.bodyMedium.copy(fontSize = 15.5.sp, lineHeight = 27.sp))
+            }
+            MaterialTheme(colorScheme = MaterialTheme.colorScheme, shapes = MaterialTheme.shapes, typography = reading) {
+                CompositionLocalProvider(LocalContentColor provides palette.onBackground) {
+                    ChatTextStyling(appearance, fontFamily) { body() }
+                }
+            }
+            meta()
+        }
+    }
+}
+
+private val INLINE_AVATAR_SIZE = 30.dp
+private val INLINE_AVATAR_GAP = 10.dp
 
 @Composable
 private fun BubbleBody(

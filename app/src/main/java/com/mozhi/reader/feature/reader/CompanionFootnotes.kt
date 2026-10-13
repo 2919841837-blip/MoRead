@@ -26,6 +26,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
@@ -121,43 +122,68 @@ internal fun FootnotedRichText(
     }
 }
 
+/**
+ * 引文卡：被引用的原文用宋体单独成卡，下沿是脚注编号与出处，点一下回到正文那一段。
+ * 卡比纸亮一档、一圈发丝线，不投影——它是纸上的一张小卡片，不是浮层。
+ */
 @Composable
 private fun FootnoteList(footnotes: List<FootnoteDisplay>, palette: ReaderPalette) {
-    Column(modifier = Modifier.padding(top = 10.dp)) {
-        HorizontalDivider(color = palette.glassBorder)
-        Text(
-            text = stringResource(R.string.footnote_heading),
-            style = MaterialTheme.typography.labelSmall,
-            color = palette.muted,
-            modifier = Modifier.padding(top = 6.dp, bottom = 2.dp)
-        )
+    Column(
+        modifier = Modifier.padding(top = 12.dp),
+        verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp)
+    ) {
         footnotes.forEach { footnote ->
-            Row(
+            val enabled = footnote.onOpen != null
+            Surface(
+                color = palette.glassStrong,
+                contentColor = palette.onBackground,
+                shape = RoundedCornerShape(18.dp),
+                border = BorderStroke(1.dp, palette.glassBorder),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable(enabled = footnote.onOpen != null) { footnote.onOpen?.invoke() }
-                    .padding(vertical = 5.dp),
-                verticalAlignment = Alignment.Top
+                    .clip(RoundedCornerShape(18.dp))
+                    .clickable(enabled = enabled) { footnote.onOpen?.invoke() }
             ) {
-                FootnoteNumber(footnote.number, palette, enabled = footnote.onOpen != null)
-                Column(modifier = Modifier.padding(start = 8.dp)) {
+                Column(modifier = Modifier.padding(start = 16.dp, end = 14.dp, top = 12.dp, bottom = 10.dp)) {
                     Text(
-                        text = footnote.label,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = palette.muted,
-                        maxLines = 1,
+                        text = footnote.text,
+                        style = if (footnote.web) {
+                            MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
+                        } else {
+                            MaterialTheme.typography.bodyLarge.copy(fontFamily = FontFamily.Serif, lineHeight = 26.sp)
+                        },
+                        color = if (enabled) palette.onBackground else palette.muted,
+                        maxLines = if (footnote.web) 2 else 4,
                         overflow = TextOverflow.Ellipsis
                     )
-                    Text(
-                        text = if (footnote.web) footnote.text else "「${footnote.text}」",
-                        style = MaterialTheme.typography.bodySmall.copy(
-                            fontFamily = if (footnote.web) FontFamily.Default else FontFamily.Serif,
-                            lineHeight = 20.sp
-                        ),
-                        color = if (footnote.onOpen != null) palette.onBackground else palette.muted,
-                        maxLines = 3,
-                        overflow = TextOverflow.Ellipsis
-                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = footnote.number.toString(),
+                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp, fontWeight = FontWeight.SemiBold),
+                            color = palette.seal,
+                            modifier = Modifier.padding(end = 4.dp, bottom = 4.dp)
+                        )
+                        Text(
+                            text = footnote.label,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = palette.muted,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f)
+                        )
+                        if (enabled) {
+                            Text(
+                                text = stringResource(if (footnote.web) R.string.footnote_open_web else R.string.footnote_jump),
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = palette.seal,
+                                modifier = Modifier.padding(start = 8.dp)
+                            )
+                        }
+                    }
                 }
             }
         }

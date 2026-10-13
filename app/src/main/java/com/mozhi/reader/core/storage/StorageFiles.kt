@@ -1,5 +1,7 @@
 package com.mozhi.reader.core.storage
 
+import com.mozhi.reader.core.update.UPDATE_DOWNLOAD_DIRECTORY
+import com.mozhi.reader.core.update.isStaleUpdateDownload
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.LinkOption
@@ -22,16 +24,28 @@ internal fun storageFiles(root: File, prefix: String): List<StorageFile> {
 
 internal const val STORAGE_CLEANUP_MIN_AGE_MS = 24L * 60 * 60 * 1000
 
+/** 「临时与系统缓存」的下一级来源；只对 [categoryOf] 归入 CACHE 的路径有意义。 */
+internal fun cacheBucketOf(path: String): CacheBucket = when (path.removePrefix("cache/").substringBefore('/')) {
+    UPDATE_DOWNLOAD_DIRECTORY -> CacheBucket.UPDATES
+    "WebView", "org.chromium.android_webview" -> CacheBucket.WEB_VIEW
+    "lan-inbox", "reader-font-import", "reader-image-import", "epub-image-editor", "book-cover-drafts" -> CacheBucket.IMPORTS
+    "image-api-test", "voice-design-previews" -> CacheBucket.PREVIEWS
+    "export", "chart-exports" -> CacheBucket.EXPORTS
+    else -> CacheBucket.OTHER
+}
+
 internal fun isOldStorageFile(file: StorageFile, now: Long): Boolean =
     file.modifiedAt > 0 && now - file.modifiedAt >= STORAGE_CLEANUP_MIN_AGE_MS
 
 internal fun isSafeTemporaryFile(file: StorageFile, now: Long, versionName: String): Boolean {
-    if (!isOldStorageFile(file, now)) return false
     val path = file.relativePath
+    // 已安装或已过时的更新包随时可删；残留的 .part 仍按 24 小时判定。
+    if (path.startsWith("cache/$UPDATE_DOWNLOAD_DIRECTORY/")) {
+        return isStaleUpdateDownload(file.file.name, file.modifiedAt, versionName, now - STORAGE_CLEANUP_MIN_AGE_MS)
+    }
+    if (!isOldStorageFile(file, now)) return false
     // Do not sweep all cacheDir: it also contains active imports, playback and HTTP caches.
-    return path.startsWith("cache/export/") ||
-        (path.startsWith("cache/updates/") && file.file.extension == "apk" &&
-            file.file.nameWithoutExtension.removePrefix("v") != versionName)
+    return path.startsWith("cache/export/")
 }
 
 internal fun isOrphanStorageFile(

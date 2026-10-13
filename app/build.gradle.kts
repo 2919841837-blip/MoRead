@@ -44,8 +44,8 @@ android {
         minSdk = 26
         targetSdk = 37
         // 测试期曾发过仓库外的高编号包，编号跳档保证覆盖安装不降级。
-        versionCode = 81
-        versionName = "1.3.1"
+        versionCode = 84
+        versionName = "1.4.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
 
@@ -119,6 +119,13 @@ android {
 
     testOptions {
         unitTests.isIncludeAndroidResources = true
+        unitTests.all { test ->
+            // 2000+ 用例里约百个 Robolectric/Compose 类各要冷启动 Android 环境，单 JVM 串行是单测耗时大头。
+            // 按类分到多个 JVM；每个 fork 堆上限 1 GB，默认最多 4 个照顾 16 GB 内存，可用 -PmoreadTestForks=N 调整。
+            test.maxParallelForks = providers.gradleProperty("moreadTestForks").orNull?.toIntOrNull()
+                ?: (Runtime.getRuntime().availableProcessors() / 2).coerceIn(1, 4)
+            test.maxHeapSize = "1g"
+        }
     }
 
     lint {
@@ -143,6 +150,15 @@ kotlin {
 ksp {
     arg("room.schemaLocation", "$projectDir/schemas")
     arg("room.generateKotlin", "true")
+}
+
+// 桌面 JVM 加载不了 Android 的 libquickjs.so：本地单测换成带 Windows/Linux/macOS 原生库的
+// -jvm 产物，互动界面的编译与运行时可以在单测里跑真引擎。设备测试不受影响。
+configurations.matching { it.name.endsWith("UnitTestRuntimeClasspath") }.configureEach {
+    resolutionStrategy.dependencySubstitution {
+        substitute(module("io.github.dokar3:quickjs-kt-android"))
+            .using(module("io.github.dokar3:quickjs-kt-jvm:${libs.versions.quickjsKt.get()}"))
+    }
 }
 
 dependencies {
@@ -184,17 +200,17 @@ dependencies {
     implementation(libs.coil.network.okhttp)
     implementation(libs.juniversalchardet)
     implementation(libs.jsoup)
-    // MDX/MDD block compression and the format's RIPEMD-128 index decoding.
+    // MDX/MDD block compression.
     implementation("org.anarres.lzo:lzo-core:1.0.6") {
         // This old artifact bundles javax.annotation classes also provided by jsr305.
         exclude(group = "com.google.code.findbugs", module = "annotations")
     }
-    implementation("org.bouncycastle:bcprov-jdk18on:1.80")
     implementation(libs.opencc.java)
     implementation(libs.android.svg)
     implementation(libs.zxing.core)
     implementation(libs.vico.compose)
     implementation(libs.vico.compose.m3)
+    implementation(libs.quickjs.kt)
 
     implementation(libs.readium.shared)
     implementation(libs.readium.streamer)

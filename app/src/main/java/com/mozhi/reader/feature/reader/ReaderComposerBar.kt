@@ -59,6 +59,7 @@ internal fun ReaderComposerBar(
     onStop: () -> Unit,
     modifier: Modifier = Modifier,
     maxLines: Int = 5,
+    textFieldModifier: Modifier = Modifier,
     leading: @Composable (() -> Unit)? = null
 ) {
     Box(
@@ -67,7 +68,7 @@ internal fun ReaderComposerBar(
             .windowInsetsPadding(WindowInsets.navigationBars.exclude(WindowInsets.ime))
     ) {
         Surface(
-            shape = RoundedCornerShape(24.dp),
+            shape = RoundedCornerShape(28.dp),
             color = palette.glassStrong,
             contentColor = palette.onBackground,
             border = BorderStroke(1.dp, palette.glassBorder),
@@ -110,7 +111,7 @@ internal fun ReaderComposerBar(
                         ),
                         cursorBrush = SolidColor(palette.accent),
                         maxLines = maxLines,
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = textFieldModifier.fillMaxWidth()
                     )
                 }
                 if (isStreaming) {
@@ -176,5 +177,5 @@ internal fun ComposerRoundAction(
 }
 
 /** 单行时胶囊内所有元素同高，两端圆钮与文字行严丝合缝。 */
-private val COMPOSER_SLOT = 34.dp
-private val COMPOSER_BAR_MIN_HEIGHT = 48.dp
+private val COMPOSER_SLOT = 38.dp
+private val COMPOSER_BAR_MIN_HEIGHT = 52.dp

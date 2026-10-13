@@ -53,7 +53,7 @@ internal fun annotationAuthorLabel(annotation: AnnotationEntity, names: Map<Long
 
 @Composable
 internal fun AnnotationIndexSheet(
-    annotations: List<AnnotationEntity>, personaNames: Map<Long, String>, hiddenCount: Int,
+    annotations: List<AnnotationEntity>, personaNames: Map<Long, String>,
     onDelete: (Long) -> Unit, onDismiss: () -> Unit, onLocate: ((AnnotationEntity) -> Unit)?
 ) {
     NavigationSheet(onDismissRequest = onDismiss, containerColor = MaterialTheme.colorScheme.surface,
@@ -66,7 +66,7 @@ internal fun AnnotationIndexSheet(
             Text(if (onLocate != null) "点击段评跳到原文，短暂高亮所选段落。" else "正文已移除，保留的划线与批注仍可查看。", style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
             // Background generation changes the count, never the list's viewport or anchor.
-            Text(if (hiddenCount > 0) "还有 $hiddenCount 条读到后会出现" else "在原文点击划线可参与讨论",
+            Text("在原文点击划线可参与讨论",
                 style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.height(32.dp).padding(top = 6.dp))
             AnnotationIndex(annotations, personaNames, onDelete, onLocate, Modifier.weight(1f))
@@ -74,7 +74,7 @@ internal fun AnnotationIndexSheet(
     }
 }
 
-/** Input is already visibility-filtered by BookDetailViewModel; counts never include unread text. */
+/** All saved annotations are available; the reader chooses which comments to open. */
 @Composable
 internal fun AnnotationIndex(
     annotations: List<AnnotationEntity>,

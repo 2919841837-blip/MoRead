@@ -33,6 +33,7 @@ androidSvg = "1.4"
 zxing = "3.5.3"
 vico = "3.3.0"
 openccJava = "1.4.2"
+quickjsKt = "1.0.15"
 
 [libraries]
 androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "coreKtx" }
@@ -91,6 +92,8 @@ zxing-core = { module = "com.google.zxing:core", version.ref = "zxing" }
 # 伴读图表：柱状/折线/饼图；关系图、时间线与雷达图在 Canvas 上自绘
 vico-compose = { module = "com.patrykandpatrick.vico:compose", version.ref = "vico" }
 vico-compose-m3 = { module = "com.patrykandpatrick.vico:compose-m3", version.ref = "vico" }
+# 伴读互动界面：模型写的界面程序在 QuickJS 里跑（无网络、无 DOM），树交给 Compose 画
+quickjs-kt = { module = "io.github.dokar3:quickjs-kt", version.ref = "quickjsKt" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

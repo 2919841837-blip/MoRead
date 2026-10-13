@@ -9,11 +9,13 @@ import com.mozhi.reader.core.datastore.ReaderSettingsRepository
 import com.mozhi.reader.core.di.ApplicationScope
 import com.mozhi.reader.core.i18n.AppLocales
 import com.mozhi.reader.core.text.ChineseTextConverter
+import com.mozhi.reader.core.update.pruneUpdateDownloads
 import com.mozhi.reader.feature.importer.BookTextMaterializeWorker
 import dagger.hilt.android.HiltAndroidApp
 import javax.inject.Inject
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
@@ -35,6 +37,12 @@ class MoReadApplication : Application() {
         // 早于任何经 Application Context 取字符串的组件（Worker、通知、Hilt 单例）。
         AppLocales.applyToApplication(this)
         super.onCreate()
+        val startedAt = System.currentTimeMillis()
+        applicationScope.launch(Dispatchers.IO) {
+            // 新版装好后旧安装包再也用不上，每个十几 MB，不清会一直堆在缓存里。
+            runCatching { pruneUpdateDownloads(cacheDir, BuildConfig.VERSION_NAME, staleBefore = startedAt) }
+                .onFailure { Log.w("MoReadApplication", "Update download cleanup skipped", it) }
+        }
         applicationScope.launch {
             runCatching {
                 // Wait for persisted settings; cachedSettings initially contains defaults.

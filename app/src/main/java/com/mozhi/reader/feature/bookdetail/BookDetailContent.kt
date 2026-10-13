@@ -1,5 +1,11 @@
 package com.mozhi.reader.feature.bookdetail
 
+import com.mozhi.reader.ui.LocalBookOpener
+import com.mozhi.reader.ui.bookCoverCapture
+import com.mozhi.reader.ui.openBook
+import com.mozhi.reader.ui.rememberAnimationsEnabled
+import com.mozhi.reader.ui.rememberBookCoverCapture
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -247,6 +253,15 @@ internal fun DetailHero(
     chapterTitle: String = ""
 ) {
     var descriptionExpanded by remember(book.id, description) { mutableStateOf(false) }
+    // 继续阅读时，详情页这本书从原位长成整页、封面翻开（翻书转场）。
+    val coverCapture = rememberBookCoverCapture()
+    val opener = LocalBookOpener.current
+    val openScope = rememberCoroutineScope()
+    val animationsEnabled = rememberAnimationsEnabled()
+    val continueReading: () -> Unit = {
+        if (book.removedAt > 0L) onContinueReading()
+        else opener.openBook(coverCapture, openScope, animationsEnabled, onContinueReading)
+    }
     val accent = MaterialTheme.colorScheme.primary
     val wide = com.mozhi.reader.ui.rememberMoReadWindowWidth() == com.mozhi.reader.ui.MoReadWindowWidth.EXPANDED
     Column(
@@ -259,6 +274,7 @@ internal fun DetailHero(
             modifier = Modifier
                 .padding(top = if (wide) 24.dp else 6.dp)
                 .size(width = if (wide) 176.dp else 134.dp, height = if (wide) 250.dp else 190.dp)
+                .bookCoverCapture(coverCapture)
         )
         Text(
             text = book.title,
@@ -311,7 +327,7 @@ internal fun DetailHero(
                 }
             }
             Button(
-                onClick = onContinueReading,
+                onClick = continueReading,
                 enabled = book.removedAt == 0L,
                 colors = ButtonDefaults.buttonColors(
                     containerColor = accent,

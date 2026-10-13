@@ -70,7 +70,9 @@ object StorageModule {
                 DatabaseMigrations.Migration29To30,
                 DatabaseMigrations.Migration30To31,
                 DatabaseMigrations.Migration31To32,
-                DatabaseMigrations.Migration32To33
+                DatabaseMigrations.Migration32To33,
+                DatabaseMigrations.Migration33To34,
+                DatabaseMigrations.Migration34To35
             )
             .addCallback(PersonaSeeds.onCreate)
             .build()

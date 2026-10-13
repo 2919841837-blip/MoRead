@@ -11,7 +11,9 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createComposeRule
 import com.mozhi.reader.core.database.entity.*
+import com.mozhi.reader.ui.theme.AppearanceSettings
 import com.mozhi.reader.ui.theme.MoReadTheme
+import com.mozhi.reader.ui.theme.NavStyle
 import java.io.File
 import org.junit.Assert.*
 import org.junit.Rule
@@ -27,12 +29,17 @@ import org.robolectric.annotation.GraphicsMode
 class BookshelfPinnedSearchTest {
     @get:Rule val compose = createComposeRule()
     private lateinit var root: View
-    private fun check(grid: Boolean, fontScale: Float = 1f) {
+    // 通栏导航没有右下角搜索舱，书架仍吸顶一枚搜索胶囊。
+    private fun check(grid: Boolean, fontScale: Float = 1f) = render(grid, fontScale, AppearanceSettings(navStyle = NavStyle.BAR)) {
+        assertBarSearchPins(grid, fontScale)
+    }
+
+    private fun render(grid: Boolean, fontScale: Float, appearance: AppearanceSettings, verify: () -> Unit) {
         val books = (1..40).map { BookEntity(id = it.toLong(), title = "书籍 $it", author = "作者 $it", coverPath = null,
             epubPath = "", sourceType = BookSourceType.TXT, importedAt = 0, totalChapters = 10) }
-        var imports = 0
+        imports = 0
         compose.setContent {
-            CompositionLocalProvider(LocalDensity provides Density(1f, fontScale)) { MoReadTheme {
+            CompositionLocalProvider(LocalDensity provides Density(1f, fontScale)) { MoReadTheme(appearance) {
                 root = LocalView.current.rootView
                 var query by remember { mutableStateOf("") }
                 val drag = remember { ShelfCollectionDragState() }
@@ -43,6 +50,12 @@ class BookshelfPinnedSearchTest {
                     {}, {}, {}, { _, _ -> }, drag, { _, _ -> }, {}, {}, { _, _ -> }, {}, {}, {}, {}, {}, {}, {}, { imports++ })
             } }
         }
+        verify()
+    }
+
+    private var imports = 0
+
+    private fun assertBarSearchPins(grid: Boolean, fontScale: Float) {
         val date = compose.onNodeWithText("宜读书", substring = true).assertIsDisplayed().fetchSemanticsNode()
         // The complete date line must fit below the greeting, including larger accessibility text.
         assertTrue(date.boundsInRoot.height >= 12f * fontScale)
@@ -78,4 +91,10 @@ class BookshelfPinnedSearchTest {
     @Test fun gridPinsOnlySearchWhileTopRightActionsScrollAway() = check(true)
     @Test fun listPinsOnlySearchWhileTopRightActionsScrollAway() = check(false)
     @Test fun largeFontKeepsTheFullGreetingDateAndOnlySearchPinned() = check(true, 1.6f)
+
+    // 悬浮舱下搜索挪到右下角的搜索舱（MoReadApp），书架本身不再吸顶搜索胶囊。
+    @Test fun floatingDockMovesSearchOutOfTheShelf() = render(true, 1f, AppearanceSettings()) {
+        compose.onNodeWithText("宜读书", substring = true).assertIsDisplayed()
+        compose.onNodeWithTag("shelf-search-capsule").assertDoesNotExist()
+    }
 }

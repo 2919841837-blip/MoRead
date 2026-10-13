@@ -1,7 +1,9 @@
 package com.mozhi.reader.core.storage
 
 import android.content.Context
+import androidx.annotation.StringRes
 import com.mozhi.reader.BuildConfig
+import com.mozhi.reader.R
 import com.mozhi.reader.ai.embedding.EmbeddingProgressTracker
 import com.mozhi.reader.core.database.dao.ChatDao
 import com.mozhi.reader.core.database.entity.BookEntity
@@ -41,6 +43,17 @@ enum class StorageCategory(val title: String, val description: String) {
 }
 
 data class StorageCategoryUsage(val category: StorageCategory, val bytes: Long)
+
+enum class CacheBucket(@StringRes val title: Int) {
+    UPDATES(R.string.storage_cache_updates),
+    WEB_VIEW(R.string.storage_cache_web_view),
+    IMPORTS(R.string.storage_cache_imports),
+    PREVIEWS(R.string.storage_cache_previews),
+    EXPORTS(R.string.storage_cache_exports),
+    OTHER(R.string.storage_cache_other)
+}
+
+data class CacheBucketUsage(val bucket: CacheBucket, val bytes: Long)
 data class BookStorageUsage(
     val book: BookEntity,
     val originals: Long, val text: Long, val media: Long, val layout: Long,
@@ -50,7 +63,7 @@ data class BookStorageUsage(
     val total: Long get() = originals + text + media + layout + speech + illustrations + attachments
 }
 enum class StorageCleanup(val title: String, val explanation: String) {
-    TEMPORARY("清理过期临时文件", "仅删除超过 24 小时的旧版本安装包和导出副本，不影响原书或个人记录。当前版本安装包、导入中间文件和恢复数据不会清理。"),
+    TEMPORARY("清理过期临时文件", "删除已安装或已过时的更新安装包，以及超过 24 小时的导出副本，不影响原书或个人记录。尚未安装的新版安装包、导入中间文件和恢复数据不会清理。"),
     COVERS("清理可重建封面", "仅清理原书仍在本机、且没有手动更换过的 EPUB 封面；下次启动自动提取。自选封面与图片库不受影响。"),
     ORPHANS("清理无关联文件", "删除超过 24 小时且不再关联任何书籍或会话的原书、解析数据、语音、AI 插图和附件。生成图片与附件无法撤销，建议先备份。保留记录的书仍视为有效关联。")
 }
@@ -58,7 +71,9 @@ data class StorageSnapshot(
     val categories: List<StorageCategoryUsage>,
     val books: List<BookStorageUsage>,
     val cleanupBytes: Map<StorageCleanup, Long>,
-    val scannedAt: Long
+    val scannedAt: Long,
+    /** CACHE 分类的来源明细，按体积降序、不含空项。 */
+    val cacheBuckets: List<CacheBucketUsage> = emptyList()
 ) {
     val totalBytes: Long get() = categories.sumOf { it.bytes }
     fun bytes(category: StorageCategory): Long = categories.firstOrNull { it.category == category }?.bytes ?: 0
@@ -148,7 +163,11 @@ class StorageRepository @Inject constructor(
                 StorageCleanup.TEMPORARY to files.filter { isSafeTemporaryFile(it, now, BuildConfig.VERSION_NAME) }.sumOf { it.bytes },
                 StorageCleanup.COVERS to reExtractableCovers(books).sumOf { it.length() },
                 StorageCleanup.ORPHANS to orphanFiles.sumOf { it.bytes }
-            ), scannedAt = now
+            ), scannedAt = now,
+            cacheBuckets = categories[StorageCategory.CACHE].orEmpty()
+                .groupBy { cacheBucketOf(it.relativePath) }
+                .map { (bucket, rows) -> CacheBucketUsage(bucket, rows.sumOf(StorageFile::bytes)) }
+                .filter { it.bytes > 0 }.sortedByDescending(CacheBucketUsage::bytes)
         )
     }
 

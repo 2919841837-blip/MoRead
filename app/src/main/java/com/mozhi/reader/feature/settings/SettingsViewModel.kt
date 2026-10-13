@@ -196,6 +196,18 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
+    /** 伴读「互动回答」；独立于 [uiState] 的合并流，免得为一组设置改动整张大表。 */
+    val genUiSettings: StateFlow<com.mozhi.reader.core.datastore.CompanionGenUiSettings> =
+        readerSettingsRepository.companionGenUi.stateIn(
+            viewModelScope,
+            SharingStarted.Eagerly,
+            com.mozhi.reader.core.datastore.CompanionGenUiSettings()
+        )
+
+    fun setGenUiSettings(value: com.mozhi.reader.core.datastore.CompanionGenUiSettings) {
+        viewModelScope.launch { readerSettingsRepository.setCompanionGenUi(value) }
+    }
+
     fun assignModel(role: ModelRole, modelId: Long?) {
         viewModelScope.launch {
             runCatching { providerRepository.assign(role, modelId) }

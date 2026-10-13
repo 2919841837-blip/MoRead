@@ -652,7 +652,6 @@ fun BookDetailScreen(
         AnnotationIndexSheet(
             annotations = state.annotations,
             personaNames = state.personaNames,
-            hiddenCount = state.hiddenAnnotationCount,
             onDelete = viewModel::deleteAnnotation,
             onDismiss = { showAnnotations = false },
             onLocate = if (state.book?.removedAt == 0L) ({ annotation: AnnotationEntity ->

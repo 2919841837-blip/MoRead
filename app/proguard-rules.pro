@@ -19,3 +19,13 @@
 #   grep -aoE "io/objectbox/[A-Za-z0-9/_]+" lib/arm64-v8a/libobjectbox-jni.so | sort -u
 -keep class io.objectbox.query.ObjectWithScore { *; }
 -keep class io.objectbox.query.IdWithScore { *; }
+
+# 伴读互动界面的 QuickJS（quickjs-kt）同样有 JNI 反向访问。1.0.15 自带的 consumer 规则
+# keep 了 QuickJs / QuickJsException / binding.JsProperty|JsFunction|JsObject / UByteArray，
+# 但 libquickjs.so 还按名字找 com/dokar/quickjs/MemoryUsage（26 个 long 的构造器，
+# getMemoryUsage() 用）和 kotlin/Unit（宿主函数返回 Unit 时的类型判定）。
+# 升级后重新核对：
+#   grep -aoE "(com/dokar/[A-Za-z0-9/_$]+|kotlin/[A-Za-z0-9/_$]+)" jni/arm64-v8a/libquickjs.so | sort -u
+# 约定由 GenUiJniKeepRulesTest 守住。
+-keep class com.dokar.quickjs.MemoryUsage { *; }
+-keep class kotlin.Unit { *; }

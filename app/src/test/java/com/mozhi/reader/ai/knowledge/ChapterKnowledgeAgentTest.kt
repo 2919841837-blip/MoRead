@@ -71,9 +71,17 @@ class ChapterKnowledgeAgentTest {
         assertEquals(2, client.requests.size)
     }
 
-    @Test fun emptyAndTruncatedResponsesFailClearlyWithinTwoRequests() = runBlocking {
+    @Test fun emptyRepliesGetACorrectionAndATruncatedTailIsRecovered() = runBlocking {
         client.responses += emptyList<ChatDelta>()
         client.responses += listOf(ChatDelta.Text(valid.dropLast(1)))
+        val people = agent.extractCharacters(model, "灯塔", "第十一章", part) {}
+        assertEquals("林舟", people.single().name)
+        assertEquals(30, people.single().facts.single().start)
+        assertEquals(2, client.requests.size)
+    }
+
+    @Test fun twoEmptyRepliesFailClearly() = runBlocking {
+        repeat(2) { client.responses += emptyList<ChatDelta>() }
         val error = runCatching { agent.extractCharacters(model, "灯塔", "第十一章", part) {} }.exceptionOrNull()
         assertTrue(error!!.message.orEmpty().contains("不是完整的 JSON 对象"))
         assertFalse(error.message.orEmpty().contains("Unexpected JSON"))

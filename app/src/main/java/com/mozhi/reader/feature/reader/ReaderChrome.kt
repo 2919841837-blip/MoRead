@@ -115,6 +115,10 @@ data class ReaderPalette(
     val isDark: Boolean
 )
 
+/** 朱砂按纸色明暗取变体：只给眉标、当前位置、跳回原文这类极少数强调。 */
+internal val ReaderPalette.seal: Color
+    get() = if (isDark) com.mozhi.reader.ui.theme.MoReadTokens.SealDark else com.mozhi.reader.ui.theme.MoReadTokens.SealLight
+
 /**
  * 七套阅读底色。背景与正文色沿用原有取值（纸黄、青简的淡青底是护眼需求，保留），
  * 但 accent 一律来自用户在「设置 › 外观」选的强调色 —— 阅读页不再自带绿色。

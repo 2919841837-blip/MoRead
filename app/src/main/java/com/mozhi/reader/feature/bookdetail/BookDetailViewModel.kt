@@ -57,7 +57,6 @@ data class BookDetailUiState(
     val bookmarks: List<BookmarkEntity> = emptyList(),
     val notes: List<NoteEntity> = emptyList(),
     val annotations: List<AnnotationEntity> = emptyList(),
-    val hiddenAnnotationCount: Int = 0,
     val illustrations: List<IllustrationEntity> = emptyList(),
     /** personaId → 角色名，批注列表按作者筛选/署名用。 */
     val personaNames: Map<Long, String> = emptyMap(),
@@ -137,8 +136,7 @@ class BookDetailViewModel @Inject constructor(
         val notes: List<NoteEntity>,
         val annotations: List<AnnotationEntity>,
         val illustrations: List<IllustrationEntity>,
-        val personaNames: Map<Long, String>,
-        val hiddenAnnotationCount: Int
+        val personaNames: Map<Long, String>
     )
 
     private val libraryContent = combine(
@@ -160,7 +158,7 @@ class BookDetailViewModel @Inject constructor(
         settingsRepository.companionSpoilerProtectionEnabled) { library, assets, names, protected ->
         val scope = library.first?.let { com.mozhi.reader.core.retrieval.ReadingScopeResolver.resolve(protected, it) }
             ?: com.mozhi.reader.core.retrieval.ReadingScope.upto(0, 0)
-        val visible = assets.second.filter { com.mozhi.reader.core.retrieval.AnnotationVisibility.isVisible(it, scope, protected) }
+        val visible = assets.second
         BookContent(
             book = library.first,
             chapters = library.second,
@@ -168,10 +166,10 @@ class BookDetailViewModel @Inject constructor(
             notes = assets.first,
             annotations = visible,
             illustrations = assets.third.filter { image ->
-                com.mozhi.reader.core.retrieval.AnnotationVisibility.isIllustrationVisible(image, assets.second, scope, protected)
+                com.mozhi.reader.core.retrieval.AnnotationVisibility.isIllustrationVisible(image, assets.second, scope,
+                    spoilerProtection = false)
             },
-            personaNames = names,
-            hiddenAnnotationCount = assets.second.size - visible.size
+            personaNames = names
         )
     }
 
@@ -232,7 +230,6 @@ class BookDetailViewModel @Inject constructor(
             bookmarks = content.bookmarks,
             notes = content.notes,
             annotations = content.annotations,
-            hiddenAnnotationCount = content.hiddenAnnotationCount,
             illustrations = content.illustrations,
             personaNames = content.personaNames,
             totalDurationMs = days.sumOf(ReadingDailyEntity::durationMs),

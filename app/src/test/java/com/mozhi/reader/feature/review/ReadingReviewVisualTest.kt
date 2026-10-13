@@ -336,7 +336,8 @@ class ReadingReviewVisualTest {
                 ReviewExportDialog(state.entries.first { it.annotation != null }, {}, {}, { _, options -> chosen = options })
             }
         }
-        compose.waitUntil(10000) { compose.onAllNodesWithTag("review-export-preview").fetchSemanticsNodes().isNotEmpty() }
+        // 预览在 Dispatchers.Default 上真实渲染，冷启动 JVM 且单测多进程并行时 10 秒不够。
+        compose.waitUntil(30000) { compose.onAllNodesWithTag("review-export-preview").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithText("日期").performScrollTo().performClick()
         compose.waitUntil(10000) { compose.onAllNodesWithTag("review-export-preview").fetchSemanticsNodes().isNotEmpty() }
         capture("review-export-page.png", dialog = true)

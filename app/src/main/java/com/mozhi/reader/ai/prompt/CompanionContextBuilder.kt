@@ -44,7 +44,9 @@ data class ConversationShape(
     /** 语音开关已开 **且** 当前角色绑定了音色，两者缺一都是 false。 */
     val voiceEnabled: Boolean = false,
     /** 自主生图已开且本轮实际提供 generate_image；显式生图请求不等于自主授权。 */
-    val imageEnabled: Boolean = false
+    val imageEnabled: Boolean = false,
+    /** 互动回答（生成式界面）本轮可用的能力；默认关，关着时提示词里一个字都不写。 */
+    val genUi: com.mozhi.reader.ai.genui.GenUiCapabilities = com.mozhi.reader.ai.genui.GenUiCapabilities()
 ) {
     val active: Boolean get() = multiBubble || voiceEnabled || imageEnabled
 }
@@ -196,6 +198,7 @@ class CompanionContextBuilder @Inject constructor(
             loreTrigger: String = "",
             budgetChars: Int = DEFAULT_BUDGET_CHARS
         ): String {
+            val genUiBlock = com.mozhi.reader.ai.genui.GenUiPrompt.section(conversationShape.genUi)
             val fixedBlocks = listOfNotNull(
                 personaBlock(persona, loreTrigger),
                 // 画像与人设同级：它是「你认识的这个人是谁」，裁掉它角色立刻变得陌生。
@@ -205,8 +208,11 @@ class CompanionContextBuilder @Inject constructor(
                 spoilerBlock(progress, readingScope),
                 // 形态说明和人设同属「怎么说话」，永不参与预算裁剪——
                 // 裁掉它模型就会写回长段落，用户看到的是开关时灵时不灵。
-                conversationShapeBlock(conversationShape, progress)
+                conversationShapeBlock(conversationShape, progress),
+                // 互动回答的规格同样不裁；预算按它的长度放宽，不挤掉记忆与场景原文。
+                genUiBlock
             )
+            val budgetChars = budgetChars + (genUiBlock?.length ?: 0)
             val closing = buildString {
                 append("回答使用简体中文。")
                 if (progress != null) {

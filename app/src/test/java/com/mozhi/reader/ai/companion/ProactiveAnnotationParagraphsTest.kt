@@ -48,4 +48,20 @@ class ProactiveAnnotationParagraphsTest {
         }
         assertNotEquals(ProactiveAnnotationParagraphs.revision(body), ProactiveAnnotationParagraphs.revision(body + "新"))
     }
+    @Test fun longParagraphsBecomeSentenceSizedTargetsSoTheyRarelySpanAPage() {
+        val paragraph = "他沿着河岸慢慢地走，想起了很多年前的那个夏天。".repeat(25)
+        val targets = ProactiveAnnotationParagraphs.split(paragraph)
+        assertTrue(targets.size > 1)
+        assertTrue(targets.all { it.end - it.start <= ProactiveAnnotationParagraphs.MAX_TARGET_CHARS })
+        assertTrue(targets.dropLast(1).all { paragraph[it.end - 1] == '。' })
+    }
+    @Test fun bucketsStartAtTheReaderAndOfferAlternates() {
+        val body = (0..9).joinToString("\n") { "$it" + "句子。".repeat(20) }
+        val from = body.indexOf("5")
+        val buckets = ProactiveAnnotationParagraphs.buckets(body, 2, from)
+        assertEquals(2, buckets.size)
+        assertTrue(buckets.flatten().all { it.start >= from })
+        assertTrue(buckets.all { it.size > 1 })
+        assertEquals(buckets.map { it.first() }, ProactiveAnnotationParagraphs.candidates(body, 2, from))
+    }
 }

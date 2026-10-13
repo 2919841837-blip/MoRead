@@ -114,61 +114,6 @@ internal fun ShelfGroupDropdown(
 }
 
 @Composable
-internal fun ShelfQuickFilters(
-    tags: List<BookTagEntity>,
-    selectedTagIds: Set<Long>,
-    onToggle: (Long) -> Unit,
-    onClear: () -> Unit
-) {
-    if (tags.isEmpty()) return
-    LazyRow(
-        modifier = Modifier.fillMaxWidth(),
-        contentPadding = PaddingValues(vertical = 6.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        items(tags, key = BookTagEntity::id) { tag ->
-            val selected = tag.id in selectedTagIds
-            Surface(
-                onClick = { onToggle(tag.id) },
-                shape = CircleShape,
-                color = if (selected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
-                contentColor = if (selected) MaterialTheme.colorScheme.onPrimaryContainer
-                else MaterialTheme.colorScheme.onSurfaceVariant,
-                border = androidx.compose.foundation.BorderStroke(
-                    1.dp,
-                    if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.45f)
-                    else MaterialTheme.colorScheme.outlineVariant
-                )
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    Box(
-                        Modifier
-                            .size(7.dp)
-                            .then(Modifier)
-                    ) {
-                        Surface(
-                            modifier = Modifier.size(7.dp),
-                            shape = CircleShape,
-                            color = shelfTagColor(tag.colorTag)
-                        ) {}
-                    }
-                    Text(tag.name, style = MaterialTheme.typography.labelMedium)
-                }
-            }
-        }
-        if (selectedTagIds.isNotEmpty()) {
-            item {
-                TextButton(onClick = onClear) { Text("清除") }
-            }
-        }
-    }
-}
-
-@Composable
 internal fun ShelfSelectionBar(
     selectedCount: Int,
     allVisibleSelected: Boolean,

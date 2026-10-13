@@ -7,7 +7,11 @@ data class ProactiveAnnotationParagraph(val start: Int, val end: Int)
 /** All candidate selection happens locally; no model ever sees a suffix after its target. */
 object ProactiveAnnotationParagraphs {
     const val MAX_PREFIX_CHARS = 28_000
-    const val MAX_TARGET_CHARS = 1_800
+    /**
+     * 目标单元的上限。长段按句切成小块，缩短单次生成的目标范围，保留逐段点评和原文定位。
+     */
+    const val MAX_TARGET_CHARS = 200
+    private const val SCORE_LENGTH_CAP = 200
 
     private val heading = Regex("^(?:第.{1,20}[章节卷回]|序章|序言|序幕|楔子|前言|后记|尾声|chapter\\s+(?:[0-9]+|[ivxlcdm]+)\\b).*", RegexOption.IGNORE_CASE)
     internal fun isHeading(line: String): Boolean = heading.matches(line.trim())
@@ -38,25 +42,32 @@ object ProactiveAnnotationParagraphs {
         }
     }
 
-    fun candidates(body: String, limit: Int): List<ProactiveAnnotationParagraph> {
-        val paragraphs = split(body)
+    fun candidates(body: String, limit: Int, from: Int = 0): List<ProactiveAnnotationParagraph> =
+        buckets(body, limit, from).map { it.first() }
+
+    /**
+     * 按原文字符把 [from] 之后的正文均分成 [limit] 个区间，每个区间内的候选按分数从高到低排。
+     * 首位是正选；正选生成失败（引文对不上、格式不对）时可以改用同一区间的次选，不让这一格空着。
+     */
+    fun buckets(body: String, limit: Int, from: Int = 0): List<List<ProactiveAnnotationParagraph>> {
+        val start = from.coerceIn(0, body.length)
+        val paragraphs = split(body).filter { it.start >= start }
         val count = minOf(limit.coerceAtLeast(0), paragraphs.size)
         if (count == 0) return emptyList()
         // Balance by source characters, not paragraph count: long prose and short dialogue mix unevenly.
         var cursor = 0
         return (0 until count).map { bucket ->
-            val boundary = body.length.toLong() * (bucket + 1) / count
+            val boundary = start + (body.length - start).toLong() * (bucket + 1) / count
             val lastAllowed = paragraphs.size - (count - bucket - 1)
             var end = cursor + 1
             while (end < lastAllowed && paragraphs[end - 1].end < boundary) end++
             val group = paragraphs.subList(cursor, end)
             cursor = end
-            group
-                .maxBy { p ->
-                    minOf(p.end - p.start, 300) + body.substring(p.start, p.end)
-                        .count { it in "！!？?“”\"" } * 12
-                }
-        }.sortedBy { it.end }
+            group.sortedByDescending { p ->
+                minOf(p.end - p.start, SCORE_LENGTH_CAP) + body.substring(p.start, p.end)
+                    .count { it in "！!？?“”\"" } * 12
+            }
+        }.sortedBy { it.first().end }
     }
 
     fun prefix(body: String, paragraph: ProactiveAnnotationParagraph, maxChars: Int = MAX_PREFIX_CHARS): String {

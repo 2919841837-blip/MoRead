@@ -77,6 +77,47 @@ class ProactiveAnnotationServiceTest {
         assertTrue(rows.all { it.sourceScopeChapterIndex == 3 })
     }
 
+    @Test fun lookaheadPassYieldsAfterOneSlotAndResumesWithoutReducingUnlimitedCandidates() = runTest {
+        val messages = mutableListOf<List<ChatMessage>>()
+        coEvery { client.chat(capture(messages), any()) } answers {
+            val quote = if (messages.last().last().content.orEmpty().endsWith(second)) second else first
+            """{"quote":"$quote","note":"评论"}"""
+        }
+        val rows = mutableListOf<AnnotationEntity>()
+        val sliced = request.copy(candidateLimit = Int.MAX_VALUE, maxSlotsPerPass = 1)
+        val firstPass = service.generateForChapter(sliced, { permit }, { _, _ -> }, { row, _, _ -> rows += row; true })
+        assertTrue(firstPass.hasMore)
+        assertFalse(firstPass.stopped)
+        assertEquals(listOf(first), rows.map { it.selectedText })
+        assertEquals(setOf(first.length), firstPass.visitedParagraphEnds)
+        val lastPass = service.generateForChapter(sliced.copy(doneParagraphEnds = setOf(first.length),
+            visitedParagraphEnds = firstPass.visitedParagraphEnds),
+            { permit }, { _, _ -> }, { row, _, _ -> rows += row; true })
+        assertFalse(lastPass.hasMore)
+        assertFalse(lastPass.failed)
+        assertEquals(listOf(first, second), rows.map { it.selectedText })
+        assertEquals(2, messages.size)
+        coVerify(exactly = 1) { contextRepository.prepare(1, 3) }
+    }
+
+    @Test fun failedSlotDoesNotBlockLookaheadOrRepeatUntilTheNextGenerationRound() = runTest {
+        var calls = 0
+        coEvery { client.chat(any(), any()) } answers {
+            if (++calls == 1) error("request failed")
+            """{"quote":"$second","note":"评论"}"""
+        }
+        val sliced = request.copy(maxSlotsPerPass = 1)
+        val firstPass = service.generateForChapter(sliced, { permit }, { _, _ -> }, { _, _, _ -> true })
+        assertTrue(firstPass.failed)
+        assertTrue(firstPass.hasMore)
+        val rows = mutableListOf<AnnotationEntity>()
+        val lastPass = service.generateForChapter(sliced.copy(visitedParagraphEnds = firstPass.visitedParagraphEnds),
+            { permit }, { _, _ -> }, { row, _, _ -> rows += row; true })
+        assertFalse(lastPass.hasMore)
+        assertEquals(second, rows.single().selectedText)
+        assertEquals(2, calls)
+    }
+
     @Test fun allThreeModelSelectedStylesReachTheCommitSink() = runTest {
         val styles = listOf("HIGHLIGHT", "underline", "WAVY")
         coEvery { client.chat(any(), any()) } returnsMany styles.map { style ->
@@ -289,5 +330,44 @@ class ProactiveAnnotationServiceTest {
         assertTrue(text.contains(evidence))
         assertTrue(text.contains("第 1 章"))
         assertFalse(text.contains(second))
+    }
+
+    @Test fun quoteWithPunctuationDriftIsAnchoredToTheSourceText() = runTest {
+        val dialogue = "她低声说：“明天，我们就走。”窗外的雨一直没有停下来，他望着灯火发呆了很久很久，直到天色完全暗下来。"
+        coEvery { client.chat(any(), any()) } returns """{"quote":"她低声说: \"明天, 我们就走.\"","note":"评论"}"""
+        val rows = mutableListOf<AnnotationEntity>()
+        val result = service.generateForChapter(ProactiveAnnotationRequest(1, 3, dialogue, persona, 1, emptySet()),
+            { permit }, { _, _ -> }, { row, _, _ -> rows += row; true })
+        assertFalse(result.failed)
+        val row = rows.single()
+        assertEquals("她低声说：“明天，我们就走。”", row.selectedText)
+        assertEquals(row.selectedText, dialogue.substring(row.startCharOffset, row.endCharOffset))
+    }
+
+    @Test fun badOutputOnThePrimaryParagraphFallsBackToTheSlotAlternate() = runTest {
+        val strong = "“你到底想怎样？！”他吼道，声音在空荡的走廊里回响了很久，没人回答他的问题，只有远处的钟声。"
+        val plain = "走廊尽头的窗户半开着，冷风吹进来，地上的落叶被卷起又落下，四周安静得出奇，像是整栋楼都睡着了。"
+        val chapter = plain + "\n" + strong
+        val requests = mutableListOf<List<ChatMessage>>()
+        coEvery { client.chat(capture(requests), any()) } answers {
+            val target = requests.last().last().content.orEmpty().substringAfterLast("唯一目标段落：\n")
+            if (target.startsWith("“")) "抱歉，我无法完成" else """{"quote":"冷风吹进来，地上的落叶","note":"评论"}"""
+        }
+        val rows = mutableListOf<AnnotationEntity>()
+        val result = service.generateForChapter(ProactiveAnnotationRequest(1, 3, chapter, persona, 1, emptySet()),
+            { permit }, { _, _ -> }, { row, _, _ -> rows += row; true })
+        assertEquals(2, requests.size)
+        assertFalse(result.failed)
+        assertEquals("冷风吹进来，地上的落叶", rows.single().selectedText)
+        assertEquals(plain.length, rows.single().sourceScopeCharOffset)
+    }
+
+    @Test fun generationStartsAtTheReadersCurrentPage() = runTest {
+        val requests = mutableListOf<List<ChatMessage>>()
+        coEvery { client.chat(capture(requests), any()) } returns """{"quote":"$second","note":"评论"}"""
+        val rows = mutableListOf<AnnotationEntity>()
+        service.generateForChapter(request.copy(startAt = first.length + 1), { permit }, { _, _ -> }, { row, _, _ -> rows += row; true })
+        assertEquals(1, requests.size)
+        assertEquals(second, rows.single().selectedText)
     }
 }

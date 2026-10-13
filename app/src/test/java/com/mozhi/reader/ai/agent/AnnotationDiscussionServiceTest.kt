@@ -83,4 +83,17 @@ class AnnotationDiscussionServiceTest {
         assertTrue(history.captured.first().content.orEmpty().contains("已关闭防剧透限制"))
         assertFalse(history.captured.first().content.orEmpty().contains("绝不涉及第"))
     }
+
+    @Test fun readerCanDiscussAnAlreadyGeneratedAnnotationBeforeItsSourceIsRead() = runTest {
+        val service = prepare()
+        coEvery { annotations.getAnnotation(3) } returns AnnotationEntity(id = 3, bookId = 1, personaId = 7,
+            chapterIndex = 99, startCharOffset = 0, endCharOffset = 2, selectedText = "承诺", note = "这句话呼应了前文。",
+            sourceScopeChapterIndex = 99, sourceScopeCharOffset = 80, createdAt = 0)
+        coEvery { library.getChapterTitle(1, 99) } returns "重逢"
+        val events = service.respond(1, 3, 7).toList()
+        assertTrue(events.last() is AnnotationDiscussionService.Event.Done)
+        assertTrue(history.captured.first().content.orEmpty().contains("这句话呼应了前文。"))
+        assertEquals(ReadingScope.upto(98, 350), scope.captured)
+        coVerify(exactly = 1) { annotations.addReply(3, 7, any(), any(), any()) }
+    }
 }

@@ -128,9 +128,10 @@ internal fun CompanionComposer(
                 ComposerRoundAction(
                     icon = Icons.Outlined.Add,
                     description = if (panelExpanded) "收起更多输入" else "更多输入",
-                    tint = palette.accent,
-                    background = Color.Transparent,
-                    border = palette.glassBorder,
+                    tint = palette.onBackground,
+                    background = palette.onBackground.copy(alpha = if (palette.isDark) 0.10f else 0.06f),
+                    border = Color.Transparent,
+                    iconSize = 20.dp,
                     iconModifier = Modifier.rotate(plusRotation),
                     onClick = { panelExpanded = !panelExpanded }
                 )
@@ -303,18 +304,18 @@ internal fun SuggestionStrip(
                 onClick = { onPick(suggestion) },
                 shape = CircleShape,
                 color = palette.glassStrong,
-                contentColor = palette.accent,
-                border = BorderStroke(1.dp, palette.glassBorder),
-                shadowElevation = 4.dp
+                contentColor = palette.onBackground,
+                border = BorderStroke(0.5.dp, palette.glassBorder),
+                shadowElevation = 1.dp
             ) {
                 Text(
                     text = suggestion,
-                    style = MaterialTheme.typography.labelMedium,
+                    style = MaterialTheme.typography.bodyMedium,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier
                         .widthIn(max = 250.dp)
-                        .padding(horizontal = 14.dp, vertical = 8.dp)
+                        .padding(horizontal = 16.dp, vertical = 9.dp)
                 )
             }
         }

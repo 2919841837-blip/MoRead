@@ -1,26 +1,38 @@
 package com.mozhi.reader.ui
 
 import android.net.Uri
+import androidx.activity.compose.BackHandler
 import androidx.annotation.StringRes
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandHorizontally
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
@@ -29,6 +41,7 @@ import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.AutoStories
 import androidx.compose.material.icons.filled.InsertChartOutlined
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.AutoStories
 import androidx.compose.material.icons.outlined.InsertChartOutlined
@@ -46,11 +59,13 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.BiasAlignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
@@ -173,12 +188,29 @@ fun MoReadApp(
     // The permanent tablet navigator and the shelf operate on the same filter/selection state.
     val bookshelfViewModel: BookshelfViewModel = hiltViewModel()
     val shelfState by bookshelfViewModel.uiState.collectAsStateWithLifecycle()
+    val shelfQuery by bookshelfViewModel.searchQuery.collectAsStateWithLifecycle()
+    val dockState = rememberRootDockState()
+    val bookOpener = remember { BookOpenerState() }
     val selectRoot: (RootDestination) -> Unit = { item ->
         navController.navigate(item.route) {
             popUpTo(RootDestination.Bookshelf.route) { saveState = true }
             launchSingleTop = true
             restoreState = true
         }
+    }
+    val closeShelfSearch = {
+        bookshelfViewModel.setSearchQuery("")
+        dockState.closeSearch()
+    }
+    LaunchedEffect(currentRoute) {
+        if (currentRoute != null && isRootRoute(currentRoute)) {
+            dockState.reset()
+            // 搜索只属于书架：切到别的根页就收起并清空；推进二级页（读书、详情）再回来则保留。
+            if (currentRoute != RootDestination.Bookshelf.route && dockState.searchOpen) closeShelfSearch()
+        }
+    }
+    BackHandler(enabled = dockState.searchOpen && currentRoute == RootDestination.Bookshelf.route) {
+        closeShelfSearch()
     }
 
     LaunchedEffect(incomingBookUri) {
@@ -190,6 +222,7 @@ fun MoReadApp(
         }
     }
 
+    androidx.compose.runtime.CompositionLocalProvider(LocalBookOpener provides bookOpener) {
     MoReadBackdrop {
         MoReadWindowLayout { windowWidth ->
             val expanded = windowWidth == MoReadWindowWidth.EXPANDED
@@ -197,7 +230,7 @@ fun MoReadApp(
             MoReadNavigationScaffold { padding ->
                 MoReadNavigationHost(
                     navController = navController,
-                    modifier = Modifier.fillMaxSize().hazeSource(hazeState)
+                    modifier = Modifier.fillMaxSize().hazeSource(hazeState).nestedScroll(dockState.scrollConnection)
                 ) {
                 rootComposable(RootDestination.Bookshelf.route, expanded, medium) {
                     BookshelfScreen(
@@ -693,10 +726,23 @@ fun MoReadApp(
                 vertical = medium,
                 modifier = Modifier.align(if (medium) Alignment.CenterStart else Alignment.BottomCenter),
                 currentRoute = currentRoute,
+                dockState = dockState,
+                trailing = when (currentRoute) {
+                    RootDestination.Bookshelf.route -> DockAction.Search(shelfQuery, bookshelfViewModel::setSearchQuery)
+                    RootDestination.Companion.route -> DockAction.Button(
+                        icon = Icons.Outlined.Add,
+                        label = stringResource(R.string.dock_new_library_chat),
+                        onClick = { navController.navigate("library-companion") }
+                    )
+                    else -> null
+                },
+                collapsible = currentRoute == RootDestination.Bookshelf.route,
                 onSelect = selectRoot
             )
             AppUpdatePrompt()
+            BookOpenOverlay(bookOpener)
         }
+    }
     }
 }
 
@@ -708,6 +754,11 @@ internal fun MoReadNavigationDock(
     vertical: Boolean,
     currentRoute: String?,
     modifier: Modifier = Modifier,
+    dockState: RootDockState? = null,
+    /** 非空时在舱右侧显示书架搜索（仅书架页）。 */
+    /** 舱右侧的上下文动作（书架搜索 / 伴读新建），null = 留空但仍占位。 */
+    trailing: DockAction? = null,
+    collapsible: Boolean = false,
     onSelect: (RootDestination) -> Unit
 ) {
     var lastRootRoute by remember { mutableStateOf(RootDestination.Bookshelf.route) }
@@ -723,6 +774,9 @@ internal fun MoReadNavigationDock(
             hazeState = hazeState,
             vertical = vertical,
             selectedRoute = selectedRoute,
+            dockState = dockState,
+            trailing = trailing,
+            collapsible = collapsible,
             onSelect = { if (visible) onSelect(it) }
         )
     }
@@ -731,6 +785,9 @@ internal fun MoReadNavigationDock(
 /**
  * Haze 玻璃导航舱：只对这块小面积常驻浮层做真实背景采样与模糊；长列表卡片仍使用
  * 低成本玻璃材质，避免整页大量离屏合成。
+ *
+ * 手机横向悬浮舱是「可变」的：内容下滑收成一粒、上滑展开；书架页右侧另有一枚搜索钮，
+ * 展开成输入胶囊时舱收成一粒让位，键盘弹出时整排跟着抬到键盘上方。
  */
 @Composable
 internal fun AdaptiveNavDock(
@@ -738,6 +795,10 @@ internal fun AdaptiveNavDock(
     vertical: Boolean,
     modifier: Modifier = Modifier,
     selectedRoute: String?,
+    dockState: RootDockState? = null,
+    /** 舱右侧的上下文动作（书架搜索 / 伴读新建），null = 留空但仍占位。 */
+    trailing: DockAction? = null,
+    collapsible: Boolean = false,
     onSelect: (RootDestination) -> Unit
 ) {
     // 通栏样式只在手机宽度下成立；平板侧栏仍是竖向悬浮舱。
@@ -750,54 +811,59 @@ internal fun AdaptiveNavDock(
         )
         return
     }
-    Box(
-        modifier = if (vertical) {
-            modifier.padding(start = 14.dp)
-        } else {
-            modifier.fillMaxWidth()
-                .windowInsetsPadding(stableNavigationInsets().only(WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom))
-                .padding(bottom = 10.dp)
-        },
-        contentAlignment = Alignment.Center
-    ) {
-        BlurredGlassSurface(
-            hazeState = hazeState,
-            shape = MoReadTokens.CapsuleShape,
-            tint = MaterialTheme.colorScheme.surface,
-            shadowElevation = 6.dp
-        ) {
-            val items: @Composable () -> Unit = {
-                RootDestination.entries.forEach { item ->
-                    NavDockItem(
-                        item = item,
-                        selected = selectedRoute == item.route,
-                        vertical = vertical,
-                        onClick = { onSelect(item) }
-                    )
-                }
-            }
-            if (vertical) {
+    if (vertical) {
+        Box(modifier = modifier.padding(start = 14.dp), contentAlignment = Alignment.Center) {
+            BlurredGlassSurface(
+                hazeState = hazeState,
+                shape = MoReadTokens.CapsuleShape,
+                tint = MaterialTheme.colorScheme.surface,
+                shadowElevation = 6.dp
+            ) {
                 Column(
                     modifier = Modifier.padding(6.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
-                ) { items() }
-            } else {
-                Row(
-                    modifier = Modifier.padding(6.dp),
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) { items() }
+                ) {
+                    RootDestination.entries.forEach { item ->
+                        NavDockItem(
+                            item = item,
+                            selected = selectedRoute == item.route,
+                            vertical = true,
+                            onClick = { onSelect(item) }
+                        )
+                    }
+                }
             }
         }
+        return
     }
+    val searchOpen = dockState?.searchOpen == true && trailing is DockAction.Search
+    // 搜索打开时整排跟着键盘抬起；平时只让开导航栏。
+    val insets = if (searchOpen) {
+        stableNavigationInsets().union(WindowInsets.ime)
+    } else {
+        stableNavigationInsets()
+    }
+    FloatingRootDock(
+        hazeState = hazeState,
+        selectedRoute = selectedRoute,
+        dockState = dockState,
+        trailing = trailing,
+        collapsible = collapsible,
+        onSelect = onSelect,
+        modifier = modifier
+            .windowInsetsPadding(insets.only(WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom))
+            .padding(start = 18.dp, end = 18.dp, bottom = 14.dp)
+    )
 }
+
 
 @Composable
 private fun NavDockItem(
     item: RootDestination,
     selected: Boolean,
     vertical: Boolean = false,
+    compact: Boolean = false,
     onClick: () -> Unit
 ) {
     val containerColor by animateColorAsState(
@@ -842,8 +908,8 @@ private fun NavDockItem(
             modifier = Modifier
                 .animateContentSize(animationSpec = tween(240))
                 .padding(
-                    start = if (selected) 16.dp else 11.dp,
-                    end = if (selected) 18.dp else 11.dp,
+                    start = if (selected && !compact) 16.dp else 11.dp,
+                    end = if (selected && !compact) 18.dp else 11.dp,
                     top = 11.dp,
                     bottom = 11.dp
                 ),
@@ -855,7 +921,7 @@ private fun NavDockItem(
                 contentDescription = item.label,
                 modifier = Modifier.size(22.dp)
             )
-            if (selected) {
+            if (selected && !compact) {
                 Text(
                     text = item.label,
                     style = MaterialTheme.typography.labelLarge,

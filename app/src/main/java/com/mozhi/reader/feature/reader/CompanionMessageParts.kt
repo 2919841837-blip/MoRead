@@ -21,6 +21,12 @@ internal sealed interface CompanionBubblePart {
 
     /** 行首带语音标记；[text] 已去掉标记本身，既用于合成也用于展开后阅读。 */
     data class Voice(override val text: String) : CompanionBubblePart
+
+    /**
+     * 互动回答里的一个岛（第 [islandIndex] 个）。界面由该消息的互动会话渲染；
+     * [text] 是它的静态纯文字投影，只用于复制等需要文字的地方。
+     */
+    data class Widget(val islandIndex: Int, override val text: String) : CompanionBubblePart
 }
 
 /**
@@ -28,11 +34,33 @@ internal sealed interface CompanionBubblePart {
  *   并**原样还原段间的空行**——单个换行在 Markdown 里不是段落分隔，
  *   合并时丢掉空行会让整条回复渲染成一大坨。
  *   语音段无论开关如何都独立成泡——它是一条语音消息，没法和文字挤在一个气泡里。
+ * @param complete 回复是否已写完（流式中的半截互动标签暂不显示）
  */
 internal fun parseCompanionParts(
     content: String,
-    multiBubble: Boolean
+    multiBubble: Boolean,
+    complete: Boolean = true
 ): List<CompanionBubblePart> {
+    if (!com.mozhi.reader.ai.genui.GenUiDocument.mightContainDil(content)) return parseTextParts(content, multiBubble)
+    val document = com.mozhi.reader.ai.genui.GenUiDocument.parse(content, complete)
+    // 互动回答：岛之外的文字照旧按行切气泡、识别语音行；岛自己独立成一个条目。
+    // 没有岛时也走解析后的 Markdown 段：流式末尾半截的标签不会以原文闪现在气泡里。
+    return buildList {
+        document.segments.forEach { segment ->
+            when (segment) {
+                is com.mozhi.reader.ai.genui.GenUiSegment.Markdown -> addAll(parseTextParts(segment.text, multiBubble))
+                is com.mozhi.reader.ai.genui.GenUiSegment.Island -> add(
+                    CompanionBubblePart.Widget(
+                        islandIndex = segment.index,
+                        text = com.mozhi.reader.ai.genui.GenUiFallback.projectNodes(segment.nodes)
+                    )
+                )
+            }
+        }
+    }.capVoiceParts()
+}
+
+private fun parseTextParts(content: String, multiBubble: Boolean): List<CompanionBubblePart> {
     val segments = splitSegments(content)
     if (segments.isEmpty()) return emptyList()
     if (multiBubble) return segments.map(Segment::part).capVoiceParts()
@@ -53,7 +81,7 @@ internal fun parseCompanionParts(
                 }
                 buffer.append(part.text)
             }
-            is CompanionBubblePart.Voice -> {
+            is CompanionBubblePart.Voice, is CompanionBubblePart.Widget -> {
                 flush()
                 merged += part
             }
