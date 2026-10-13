@@ -73,6 +73,26 @@ class KnowledgeGenerationRunnerTest {
         assertEquals("已保存", runner.states.value.getValue(KnowledgeTaskKey(1)).progress)
     }
 
+    @Test fun aPlanCarryingTargetsRunsTheTargetedPathAndNotTheQuickOne() = runTest {
+        val finish = CompletableDeferred<Unit>()
+        val dispatched = mutableListOf<List<CharacterTarget>>()
+        coEvery { characters.generateTargeted(any(), any()) } coAnswers {
+            dispatched += firstArg<BookCharactersPlan>().targets
+            finish.await()
+            mockk<BookCharacterGuideEntity>()
+        }
+        coEvery { characters.generateQuick(any(), any()) } returns mockk<BookCharacterGuideEntity>()
+        val runner = KnowledgeGenerationRunner(outlines, characters, backgroundScope)
+        val plan = BookCharactersPlan(1, "book", "revision", emptyList(), model, null, 0, targets = listOf(CharacterTarget("林冲", listOf("豹子头"))))
+        assertTrue(runner.generateCharacters(plan))
+        runCurrent()
+        assertEquals(listOf(listOf(CharacterTarget("林冲", listOf("豹子头")))), dispatched)
+        coVerify(exactly = 0) { characters.generateQuick(any(), any()) }
+        finish.complete(Unit)
+        runCurrent()
+        assertEquals("已保存", runner.states.value.getValue(KnowledgeTaskKey(1)).progress)
+    }
+
     @Test fun modelLimiterAllowsThreeConcurrentRequestsAndReleasesCancelledSlots() = runTest {
         val limiter = KnowledgeRequestLimiter()
         val entered = mutableListOf<Int>()

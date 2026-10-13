@@ -274,7 +274,14 @@ class BookCharactersRepositoryTest {
                 emit(ChatDelta.Text("这段有人物，但结果未按格式返回。"))
                 return@flow
             }
-            val name = if ("小满带来一封信。" in source) "小满" else "林舟"
+            // 点名扫描的提示词写着「目标人物：大名（也可能称作：别称）」；模型只能用原文里真出现过的称呼，
+            // 所以先在大名与别称里挑一个正文中存在的写法，挑不出来才退回按正文猜名字。
+            val asked = source.lineSequence().firstOrNull { it.startsWith("目标人物：") }
+                ?.removePrefix("目标人物：")?.replace('（', '、')?.replace('）', '、')
+                ?.split('、')?.map(String::trim)?.filter(String::isNotEmpty).orEmpty()
+            val body = Regex("<passage[^>]*>\n(.*?)\n</passage>", RegexOption.DOT_MATCHES_ALL)
+                .findAll(source).joinToString("\n") { it.groupValues[1] }
+            val name = asked.firstOrNull { body.contains(it) } ?: if ("小满带来一封信。" in source) "小满" else "林舟"
             val quote = if (name == "小满") "小满带来一封信。" else "林舟在灯塔等候。"
             val json = if (empty) """{"characters":[]}""" else """{"characters":[{"name":"$name","facts":[{"text":"$quote","quote":"$quote"}]}]}"""
             emit(ChatDelta.ToolCalls(listOf(ToolCall("submit-$requests", tools.single().name, json))))
@@ -302,6 +309,75 @@ class BookCharactersRepositoryTest {
         val plan = repository.preview(1, progressBounded = true, quick = true)
         repository.generateQuick(plan)
         assertTrue(client.received.none { "没有读到" in it })
+    }
+
+    /** 点名扫描最要紧的一条：并入而不是覆盖，上一轮扫出来的人一个都不能少。 */
+    @Test fun targetedScanMergesIntoTheExistingQuickGuideWithoutDroppingItsPeople() = runBlocking {
+        repository.generateQuick(repository.preview(1, quick = true))
+        val before = client.requests
+        val plan = repository.preview(1, targets = listOf(CharacterTarget("小满")))
+        assertTrue(plan.targeted)
+        assertFalse(plan.quick)
+        assertEquals(2L, plan.maximumRequests)
+        val published = repository.generateTargeted(plan)
+        val guide = BookCharactersCodec.visible(published, revision)!!.guide
+        assertEquals(listOf("林舟", "小满"), guide.characters.map { it.identity })
+        // 并入已有资料时沿用原来的模式，只有首次点名扫描才标成 TARGETED。
+        assertEquals(BookCharacterGuide.MODE_QUICK, guide.mode)
+        assertEquals(before + 1, client.requests)
+        assertTrue(client.received.last().contains("目标人物：小满"))
+    }
+
+    @Test fun firstTargetedScanPublishesAsItsOwnMode() = runBlocking {
+        val plan = repository.preview(1, targets = listOf(CharacterTarget("林舟")))
+        val guide = BookCharactersCodec.visible(repository.generateTargeted(plan), revision)!!.guide
+        assertEquals(BookCharacterGuide.MODE_TARGETED, guide.mode)
+        assertEquals(listOf("林舟"), guide.characters.map { it.name })
+    }
+
+    @Test fun aNameThatNeverAppearsInTheTextFailsLocallyWithoutRequestingTheModel() = runBlocking {
+        val failure = runCatching { repository.generateTargeted(repository.preview(1, targets = listOf(CharacterTarget("查无此人")))) }.exceptionOrNull()
+        assertNotNull(failure)
+        assertTrue(failure!!.message.orEmpty().contains("没有在正文中找到"))
+        assertEquals(0, client.requests)
+        assertNull(database.bookCharacterDao().getGuide(1))
+        // 失败必须释放「正在提取」的占用，否则这本书再也扫不了。
+        repository.generateTargeted(repository.preview(1, targets = listOf(CharacterTarget("林舟"))))
+        assertEquals(1, client.requests)
+        assertNotNull(database.bookCharacterDao().getGuide(1))
+    }
+
+    @Test fun aNameOnlyMatchedThroughAnAliasKeepsTheTypedNameAsItsIdentity() = runBlocking {
+        val plan = repository.preview(1, targets = listOf(CharacterTarget("阿舟", listOf("林舟"))))
+        val guide = BookCharactersCodec.visible(repository.generateTargeted(plan), revision)!!.guide
+        val person = guide.characters.single()
+        // 正文里只有「林舟」；anchor 把 identity 钉成用户输入的大名，显示名仍是原文的称呼。
+        assertEquals("林舟", person.name)
+        assertEquals("阿舟", person.identity)
+        assertEquals(1, client.requests)
+    }
+
+    @Test fun cancelledTargetedScanLeavesThePublishedGuideUntouched() = runBlocking {
+        val existing = repository.generate(repository.preview(1))
+        val entered = CompletableDeferred<Unit>()
+        client.onStream = { entered.complete(Unit); awaitCancellation() }
+        val job = launch { repository.generateTargeted(repository.preview(1, targets = listOf(CharacterTarget("林舟")))) }
+        withTimeout(10_000) { entered.await() }
+        job.cancelAndJoin()
+        assertEquals(existing, database.bookCharacterDao().getGuide(1))
+    }
+
+    @Test fun targetedScanKeepsEarlierCharactersAndManualEdits() = runBlocking {
+        repository.generate(repository.preview(1))
+        repository.saveCharacter(1, "林舟", "阿舟", "手动整理：灯塔守望者。")
+        val before = client.requests
+        repository.generateTargeted(repository.preview(1, targets = listOf(CharacterTarget("小满"))))
+        val people = BookCharactersCodec.visible(database.bookCharacterDao().getGuide(1), revision)!!.guide.characters
+        assertEquals(setOf("林舟", "小满"), people.map { it.identity }.toSet())
+        val renamed = people.single { it.name == "阿舟" }
+        assertEquals("手动整理：灯塔守望者。", renamed.manualDescription)
+        assertTrue(people.single { it.identity == "小满" }.evidence.isNotEmpty())
+        assertEquals(before + 1, client.requests)
     }
 
     private inner class EditorClient : ChatApiClient {

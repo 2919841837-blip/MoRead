@@ -175,6 +175,51 @@ class ReaderKnowledgeVisualTest {
         capture("characters-manual-search.png")
     }
 
+    // 点名扫描的文案全部走字符串资源，所以要切到中文区域才看得到（这个类默认跑 en 资源）。
+    // MoReadTextField 的 testTag 落在容器上，输入要落到它内部的文本框：沿用 ImageStudioVisualTest 的写法。
+    private fun targetsField() = compose.onNode(hasSetTextAction() and hasAnyAncestor(hasTestTag("character-targets")))
+
+    @Test @Config(qualifiers = "zh-rCN-w411dp-h891dp-mdpi")
+    fun namedScanReadsAliasesFromBracketsAndNeverStartsFromAnEmptyList() {
+        val dispatched = mutableListOf<List<CharacterTarget>>()
+        var quick = true
+        val actions = ReaderKnowledgeActions(previewCharacters = { _, isQuick, targets -> quick = isQuick; dispatched += targets })
+        show(tab = 2, actions = actions)
+        compose.onNodeWithText("提取", substring = false).performClick()
+        compose.onNodeWithText("点名扫描…").performClick()
+        // 空白名单时不能开工：空名单会退化成整本书扫描，那是「提取」按钮的事。
+        compose.onNodeWithTag("character-targets-confirm").assertIsNotEnabled()
+        compose.onNodeWithText("一行一位", substring = true).assertIsDisplayed()
+        targetsField().performTextInput("（只有别称）")
+        compose.onNodeWithText("无法识别：只有别称").assertIsDisplayed()
+        compose.onNodeWithTag("character-targets-confirm").assertIsNotEnabled()
+        capture("character-targets-invalid.png")
+        targetsField().performTextReplacement((1..CharacterScanTargets.MAX_TARGETS + 1).joinToString("、") { "人物$it" })
+        compose.onNodeWithText("一次最多 ${CharacterScanTargets.MAX_TARGETS} 位，多余的已忽略").assertIsDisplayed()
+        targetsField().performTextReplacement("黄晓明（晓明、绿大暗）、林冲")
+        compose.onNodeWithText("已识别 2 位").assertIsDisplayed()
+        capture("character-targets.png")
+        compose.onNodeWithTag("character-targets-confirm").performClick()
+        assertEquals(listOf(CharacterTarget("黄晓明", listOf("晓明", "绿大暗")), CharacterTarget("林冲")), dispatched.single())
+        // 点名扫描不走「快速」那条主 agent 路径，取模型、确认文案、进度都不同。
+        assertFalse(quick)
+    }
+
+    @Test @Config(qualifiers = "zh-rCN-w411dp-h891dp-mdpi")
+    fun dismissingTheNamedScanKeepsWhateverWasAlreadyTyped() {
+        var dispatched = 0
+        show(tab = 2, actions = ReaderKnowledgeActions(previewCharacters = { _, _, _ -> dispatched++ }))
+        compose.onNodeWithText("提取", substring = false).performClick()
+        compose.onNodeWithText("点名扫描…").performClick()
+        targetsField().performTextInput("林冲")
+        compose.onNodeWithTag("character-targets-cancel").performClick()
+        compose.onNodeWithTag("character-targets").assertDoesNotExist()
+        assertEquals(0, dispatched)
+        compose.onNodeWithText("提取", substring = false).performClick()
+        compose.onNodeWithText("点名扫描…").performClick()
+        compose.onNodeWithText("林冲").assertIsDisplayed()
+    }
+
     @Test @Config(qualifiers = "w320dp-h640dp-mdpi") fun emptyStateHasClearManualEntryOnSmallScreens() {
         var generated = 0
         show(input = { state.copy(snapshot = KnowledgeSnapshot(book)) }, actions = ReaderKnowledgeActions(preview = { generated++ }))

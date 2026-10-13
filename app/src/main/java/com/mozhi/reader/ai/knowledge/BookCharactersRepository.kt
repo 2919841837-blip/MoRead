@@ -16,7 +16,11 @@ import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
@@ -36,9 +40,12 @@ class BookCharactersPlan internal constructor(
     val quick: Boolean = false,
     internal val mainModel: ResolvedChatClient? = null,
     /** 快速模式下主 agent 可以联网（按用户的联网搜索开关）。 */
-    val webSearch: Boolean = false
+    val webSearch: Boolean = false,
+    /** 用户点名的人物；非空时走 [BookCharactersRepository.generateTargeted]，与快速/完整扫描互斥。 */
+    val targets: List<CharacterTarget> = emptyList()
 ) {
     val chapterCount: Int get() = chapters.size
+    val targeted: Boolean get() = targets.isNotEmpty()
     /** 本次实际要送出的字数：整章，或边界章只到已读位置。 */
     internal fun scannedChars(chapter: ChapterEntity): Int = when {
         !progressBounded -> chapter.charCount
@@ -50,12 +57,15 @@ class BookCharactersPlan internal constructor(
     internal val modelKey = ChapterKnowledgeCodec.hash("${model.provider.id}|${model.provider.baseUrl}|${model.modelName}|${model.options}")
     // A paragraph-aware part is at least half PART_CHARS, except for the final part.
     val mainModelLabel: String get() = mainModel?.modelName ?: model.modelName
-    val maximumRequests: Long = if (quick) {
-        CharacterResearchAgent.MAX_MAIN_ROUNDS + QUICK_MAX_HELPERS * 2L
-    } else chapters.sumOf {
-        (scannedChars(it).toLong() + ChapterKnowledgeCodec.PART_CHARS / 2 - 1) / (ChapterKnowledgeCodec.PART_CHARS / 2)
-    } * 2
-    val resuming: Boolean get() = !quick && resumeGenerationId != null
+    val maximumRequests: Long = when {
+        // 点名的每个人一次提交，外加一次引文纠错机会。
+        targeted -> targets.size * 2L
+        quick -> CharacterResearchAgent.MAX_MAIN_ROUNDS + QUICK_MAX_HELPERS * 2L
+        else -> chapters.sumOf {
+            (scannedChars(it).toLong() + ChapterKnowledgeCodec.PART_CHARS / 2 - 1) / (ChapterKnowledgeCodec.PART_CHARS / 2)
+        } * 2
+    }
+    val resuming: Boolean get() = !quick && !targeted && resumeGenerationId != null
 
     internal companion object {
         /** 快速模式下子 agent 整理的人数上限（主 agent 自己决定派多少，这里只用于费用提示）。 */
@@ -94,8 +104,17 @@ class BookCharactersRepository @Inject constructor(
      *
      * [progressBounded] 把扫描范围收到 [ReadingScope.uptoProgress]（边界章只送已读部分）；
      * 全书模式保留自己的明确同意，不继承阅读进度边界。
+     * [targets] 非空时只整理这些人，结果并入已有人物资料；此时不取 CHAT 模型，也没有断点续跑。
      */
-    suspend fun preview(bookId: Long, progressBounded: Boolean = false, quick: Boolean = false): BookCharactersPlan = withContext(Dispatchers.IO) {
+    suspend fun preview(bookId: Long, progressBounded: Boolean = false, quick: Boolean = false,
+        targets: List<CharacterTarget> = emptyList()): BookCharactersPlan = withContext(Dispatchers.IO) {
+        // 界面已经解析过一次名单，这里不信任调用方：重新去重、限长、限量。
+        val requested = targets.map { target ->
+            CharacterTarget(target.name.trim(), target.aliases.map(String::trim).filter(String::isNotEmpty).distinct())
+        }.filter { it.name.isNotEmpty() }.distinctBy { it.name.lowercase() }
+        require(requested.size <= CharacterScanTargets.MAX_TARGETS) { "一次最多扫描 ${CharacterScanTargets.MAX_TARGETS} 位人物" }
+        require(requested.all { it.name.length <= CharacterScanTargets.MAX_NAME_LENGTH }) { "人物名不能超过 ${CharacterScanTargets.MAX_NAME_LENGTH} 字" }
+        val targeted = requested.isNotEmpty()
         val model = clients.forRole(ModelRole.CHEAP)
         val mainModel = if (quick) clients.forRole(ModelRole.CHAT) else null
         val webSearch = quick && webSearchSettings.current().enabled
@@ -115,8 +134,9 @@ class BookCharactersRepository @Inject constructor(
             val published = dao.getGuide(bookId)
             val checkpoint = dao.getCheckpoint(bookId)?.takeIf { it.generationId != published?.generationId &&
                 it.sourceRevision == revision && it.modelKey == key && it.promptVersion == BookCharactersCodec.PROMPT_VERSION }
-            BookCharactersPlan(bookId, book.title, revision, chapters, model, checkpoint?.generationId.takeUnless { quick },
-                if (quick) 0 else checkpoint?.completedParts ?: 0, progressBounded, scope, quick, mainModel, webSearch)
+            BookCharactersPlan(bookId, book.title, revision, chapters, model, checkpoint?.generationId.takeUnless { quick || targeted },
+                if (quick || targeted) 0 else checkpoint?.completedParts ?: 0, progressBounded, scope, quick, mainModel, webSearch,
+                targets = requested)
         }
     }
 
@@ -172,6 +192,86 @@ class BookCharactersRepository @Inject constructor(
                 dao.saveGuide(published)
                 published
             } }
+        } finally { generating.remove(plan.bookId) }
+    }
+
+    /**
+     * 点名扫描：只整理 [BookCharactersPlan.targets] 里的人，结果**并入**已发布资料，不删除任何已有人物。
+     *
+     * 与快速模式共用「检索段落 → 子 agent 逐字核对」这条链路，但名字来自用户而不是主 agent，
+     * 所以不需要 CHAT 模型，也不写分段缓存。名字在正文里零命中时在本地就停下，不花模型调用。
+     */
+    suspend fun generateTargeted(plan: BookCharactersPlan, onProgress: (String) -> Unit = {}): BookCharacterGuideEntity {
+        require(plan.targeted)
+        check(generating.add(plan.bookId)) { "这本书正在提取人物" }
+        try {
+            val chapters = withContext(Dispatchers.IO) { BookContentMutation.withBook(plan.bookId) {
+                validateLocked(plan)
+                var total = 0L
+                plan.chapters.mapNotNull { chapter ->
+                    if (total >= QUICK_MAX_SOURCE_CHARS) return@mapNotNull null
+                    val text = library.readChapterTextStrict(plan.bookId, chapter)
+                    val readable = if (plan.progressBounded) plan.scope.readableText(chapter.chapterIndex, text) else text
+                    total += readable.length
+                    readable.takeIf { it.isNotBlank() }?.let { chapter.chapterIndex to it }
+                }
+            } }
+            val titles = plan.chapters.associate { it.chapterIndex to it.title }
+            val chapterTitle = { index: Int -> titles[index] ?: "第${index + 1}章" }
+
+            // 每人各自检索：合并成一次 collect 会被全局 5000 命中上限互相挤掉，出现假的「未找到」。
+            val found = mutableListOf<CharacterTarget>()
+            val missing = mutableListOf<String>()
+            plan.targets.forEach { target ->
+                if (CharacterPassages.collect(chapters, listOf(target.name) + target.aliases).isEmpty()) missing += target.name
+                else found += target
+            }
+            check(found.isNotEmpty()) { "没有在正文中找到这些人物：${missing.joinToString("、")}。检查书名，或把别称写进括号。" }
+
+            onProgress(CharacterResearchAgent.PROGRESS_PROFILING + found.joinToString("、") { it.name })
+            val outcomes = coroutineScope {
+                found.map { target ->
+                    async {
+                        currentCoroutineContext().ensureActive()
+                        val passages = CharacterPassages.collect(chapters, listOf(target.name) + target.aliases)
+                        val result = try {
+                            Result.success(agent.profileCharacter(plan.model, plan.bookTitle, target.name, target.aliases,
+                                passages, chapterTitle) { validate(plan) })
+                        } catch (cancelled: CancellationException) {
+                            throw cancelled
+                        } catch (error: Exception) {
+                            Result.failure(error)
+                        }
+                        target to result
+                    }
+                }.awaitAll()
+            }
+            val accumulator = BookCharactersCodec.Accumulator()
+            val failed = mutableListOf<String>()
+            outcomes.forEach { (target, result) ->
+                val profiled = result.getOrNull()
+                if (profiled.isNullOrEmpty()) failed += target.name
+                else profiled.sortedBy { it.first }.forEach { (chapter, person) -> accumulator.add(chapter, listOf(person)) }
+            }
+
+            val built = accumulator.guide(plan.chapterCount, plan.sourceCharacters, plan.progressBounded)
+            val anchored = BookCharactersCodec.anchor(built.copy(mode = BookCharacterGuide.MODE_TARGETED), plan.targets)
+            val generationId = UUID.randomUUID().toString()
+            val entry = withContext(Dispatchers.IO) { BookContentMutation.withBook(plan.bookId) {
+                validateLocked(plan)
+                val previous = BookCharactersCodec.visible(dao.getGuide(plan.bookId), plan.revision)?.guide
+                val published = BookCharacterGuideEntity(plan.bookId, generationId, plan.revision, plan.modelKey, plan.modelLabel,
+                    BookCharactersCodec.PROMPT_VERSION,
+                    AiJson.encodeToString(BookCharactersCodec.mergeTargeted(anchored, previous)), System.currentTimeMillis())
+                dao.saveGuide(published)
+                published
+            } }
+            // 先发布再汇报：没有整理出来的人不能把已经成功的那部分一起丢掉。
+            val unresolved = missing + failed
+            if (unresolved.isNotEmpty()) {
+                error("已整理 ${plan.targets.size - unresolved.size} 位；未找到或未成功：${unresolved.joinToString("、")}")
+            }
+            return entry
         } finally { generating.remove(plan.bookId) }
     }
 

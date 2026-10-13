@@ -28,12 +28,14 @@ data class BookCharacterGuide(
     val progressBounded: Boolean = false,
     /** 联网查到的书外资料：单独展示，不作为原文依据，也不混进人物事实。 */
     val externalNotes: List<ExternalCharacterNote> = emptyList(),
-    /** QUICK = 主 agent 检索主要人物；FULL = 逐段扫描。旧存档都是逐段扫描。 */
+    /** QUICK = 主 agent 检索主要人物；FULL = 逐段扫描；TARGETED = 用户点名的若干人物。旧存档都是逐段扫描。 */
     val mode: String = MODE_FULL
 ) {
     companion object {
         const val MODE_FULL = "FULL"
         const val MODE_QUICK = "QUICK"
+        /** 按用户输入的名单扫描；[BookCharactersCodec.visible] 不读 mode，新旧存档都解得开。 */
+        const val MODE_TARGETED = "TARGETED"
     }
 }
 
@@ -69,6 +71,65 @@ internal object BookCharactersCodec {
         }
         return generated.copy(characters = result.distinctBy { it.name })
     }
+
+    /**
+     * 点名扫描的结果**并入**已发布资料：按 identity 取并集，不删除任何已有人物。
+     *
+     * 与 [mergeManual] 相反——后者只保留手动条目，会把上一次 AI 扫描出来的人整批丢掉，
+     * 所以两条发布路径互斥，不能先后调用。手动改名仍拥有显示名，新证据扩充到该条目上。
+     */
+    fun mergeTargeted(generated: BookCharacterGuide, previous: BookCharacterGuide?): BookCharacterGuide {
+        previous ?: return generated
+        val result = previous.characters.toMutableList()
+        generated.characters.forEach { fresh ->
+            val index = result.indexOfFirst { it.identity == fresh.identity || it.name.equals(fresh.name, true) }
+            if (index < 0) {
+                result += fresh
+            } else {
+                val old = result[index]
+                // copy 保留 old 的 name 与 manualDescription：手动改名拥有显示名。
+                result[index] = old.copy(
+                    evidence = unionEvidence(old.evidence, fresh.evidence),
+                    attributes = (old.attributes + fresh.attributes).distinctBy { it.kind to it.value }.takeLast(48),
+                    relationships = (old.relationships + fresh.relationships).distinctBy { it.target to it.relation }.takeLast(96),
+                    sourceName = old.sourceName ?: fresh.sourceName
+                )
+            }
+        }
+        return previous.copy(
+            characters = result.distinctBy { it.identity },
+            scannedChapters = maxOf(previous.scannedChapters, generated.scannedChapters),
+            sourceCharacters = maxOf(previous.sourceCharacters, generated.sourceCharacters),
+            // 只有两次都没越过阅读进度，合并结果才仍然无剧透。
+            progressBounded = previous.progressBounded && generated.progressBounded,
+            externalNotes = (previous.externalNotes + generated.externalNotes).distinctBy { it.text to it.url },
+            mode = previous.mode
+        )
+    }
+
+    /**
+     * 把人名钉到用户输入的大名上：模型被要求用「原文中最常用的称呼」，可能只认出别称。
+     * 命中大名或任一别称时把 [BookCharacter.sourceName] 设为该大名，使 identity 成为用户点名的那个名字，
+     * 后续并入与手动编辑才能对上同一个人。
+     */
+    fun anchor(guide: BookCharacterGuide, targets: List<CharacterTarget>): BookCharacterGuide {
+        if (targets.isEmpty()) return guide
+        val characters = guide.characters.map { person ->
+            val hit = targets.firstOrNull { target ->
+                person.name.equals(target.name, true) || target.aliases.any { it.equals(person.name, true) }
+            }
+            if (hit != null && person.sourceName == null) person.copy(sourceName = hit.name) else person
+        }
+        return guide.copy(characters = characters)
+    }
+
+    /** 与 [Accumulator] 相同的保留策略：介绍留前 4 条，最近的留 12 条。 */
+    private fun unionEvidence(first: List<CharacterEvidence>, second: List<CharacterEvidence>): List<CharacterEvidence> {
+        val merged = (first + second).distinctBy { it.fact.text }
+            .sortedWith(compareBy({ it.chapterIndex }, { it.fact.start }))
+        return if (merged.size <= 16) merged else merged.take(4) + merged.takeLast(12)
+    }
+
     fun fromChapters(
         chapters: List<Pair<Int, List<KnowledgeCharacter>>>,
         scannedChapters: Int,

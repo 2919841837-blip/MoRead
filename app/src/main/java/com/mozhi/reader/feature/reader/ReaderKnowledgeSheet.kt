@@ -45,7 +45,8 @@ import com.mozhi.reader.ui.components.blockSheetDrag
 internal data class ReaderKnowledgeActions(
     val preview: (Int) -> Unit = {}, val cancel: (Int) -> Unit = {}, val delete: (Int) -> Unit = {},
     val locate: (ChapterKnowledgeEntity, KnowledgeFact) -> Unit = { _, _ -> },
-    val previewCharacters: (Boolean, Boolean) -> Unit = { _, _ -> }, val cancelCharacters: () -> Unit = {}, val deleteCharacters: () -> Unit = {},
+    val previewCharacters: (Boolean, Boolean, List<CharacterTarget>) -> Unit = { _, _, _ -> },
+    val cancelCharacters: () -> Unit = {}, val deleteCharacters: () -> Unit = {},
     val locateCharacter: (BookCharacterGuideEntity, CharacterEvidence) -> Unit = { _, _ -> },
     val saveCharacterCard: (ExtractedCharacterCard) -> Unit = {},
     val saveCharacter: (String?, String, String) -> Unit = { _, _, _ -> },
@@ -100,7 +101,23 @@ internal fun ReaderKnowledgeContentsSheet(
         confirmButton = { TextButton(onClick = viewModel::generateCharacters) { Text(stringResource(R.string.characters_quick_start)) } },
         dismissButton = { TextButton(onClick = viewModel::dismissPreview) { Text(stringResource(R.string.characters_cancel)) } }
     ) }
-    state.pendingCharacters?.takeUnless { it.quick }?.let { plan -> AlertDialog(
+    // 点名扫描有自己的确认文案：不派主 agent，也不复用「重要人物」那套说法。
+    state.pendingCharacters?.takeIf { it.targeted }?.let { plan -> AlertDialog(
+        onDismissRequest = viewModel::dismissPreview,
+        title = { Text(stringResource(R.string.characters_targets_title)) },
+        text = { Text(buildString {
+            append(plan.bookTitle).append('\n')
+            append(stringResource(if (plan.progressBounded) R.string.characters_scope_bounded else R.string.characters_scope_full, plan.chapterCount))
+            append('\n')
+            append(stringResource(R.string.characters_targets_models, plan.modelLabel)).append("\n\n")
+            append(stringResource(R.string.characters_targets_body, plan.targets.joinToString("、") { it.name }.take(160)))
+            append('\n')
+            append(stringResource(R.string.characters_targets_cost, plan.maximumRequests))
+        }) },
+        confirmButton = { TextButton(onClick = viewModel::generateCharacters) { Text(stringResource(R.string.characters_targets_start)) } },
+        dismissButton = { TextButton(onClick = viewModel::dismissPreview) { Text(stringResource(R.string.characters_cancel)) } }
+    ) }
+    state.pendingCharacters?.takeUnless { it.quick || it.targeted }?.let { plan -> AlertDialog(
         onDismissRequest = viewModel::dismissPreview,
         title = { Text(when {
             plan.resuming -> if (plan.progressBounded) "继续提取读过的人物？" else "继续提取全书人物？"
@@ -363,6 +380,7 @@ internal fun BookCharactersPanel(state: KnowledgeUiState, chapters: List<Chapter
     var query by rememberSaveable(state.bookId) { mutableStateOf("") }
     var searching by rememberSaveable { mutableStateOf(false) }
     var options by rememberSaveable { mutableStateOf(false) }
+    var pointing by rememberSaveable { mutableStateOf(false) }
     var information by remember { mutableStateOf(false) }
     var deleting by remember { mutableStateOf(false) }
     val task = state.characterTask
@@ -372,6 +390,7 @@ internal fun BookCharactersPanel(state: KnowledgeUiState, chapters: List<Chapter
         (listOf(person.name, person.identity) + person.aliases).any { it.contains(query.trim(), ignoreCase = true) }
     } }
     val titles = remember(chapters) { chapters.associate { it.chapterIndex to it.title } }
+    var targetsInput by rememberSaveable(state.bookId) { mutableStateOf("") }
     var progressBounded by rememberSaveable(state.bookId, saved?.guide?.progressBounded) { mutableStateOf(saved?.guide?.progressBounded ?: true) }
     var quickMode by rememberSaveable(state.bookId) { mutableStateOf(saved?.guide?.mode != BookCharacterGuide.MODE_FULL || saved == null) }
     Column(Modifier.fillMaxSize()) {
@@ -401,6 +420,8 @@ internal fun BookCharactersPanel(state: KnowledgeUiState, chapters: List<Chapter
                 busy -> characterProgressLabel(task.progress) + " · 可离开此页"
                 state.characters.checkpointParts > 0 -> "已有提取进度，点击「提取」继续"
                 state.characters.outdated -> "正文已变化，可重新提取；手动资料保留"
+                // 点名扫描的结果并进旧资料，scannedChapters 沿用旧值，不能说成「已扫描全书」。
+                saved?.guide?.mode == BookCharacterGuide.MODE_TARGETED -> stringResource(R.string.characters_targets_status, people.size)
                 saved?.guide?.scannedChapters == 0 -> "手动整理"
                 saved != null -> if (saved.guide.progressBounded) "已扫描到第 ${saved.guide.scannedChapters} 章" else "已扫描全书 ${saved.guide.scannedChapters} 章"
                 else -> "可从正文提取，也可手动添加"
@@ -500,12 +521,17 @@ internal fun BookCharactersPanel(state: KnowledgeUiState, chapters: List<Chapter
                 }
             }
             Text(stringResource(if (quickMode) R.string.characters_mode_quick_hint else R.string.characters_mode_full_hint), style = MaterialTheme.typography.bodySmall)
+            // 名单输入有自己的一页：AlertDialog 装文本框会让重组停不下来（见 CharacterScanTargetsDialog）。
+            TextButton(onClick = { options = false; pointing = true }, enabled = !busy) { Text(stringResource(R.string.characters_targets_entry)) }
             TextButton(onClick = { options = false; information = true }) { Icon(Icons.Outlined.Info, "书籍资料说明"); Spacer(Modifier.width(6.dp)); Text("提取说明") }
             if (saved != null || state.characters.checkpointParts > 0) TextButton(onClick = { options = false; deleting = true }, enabled = !busy) { Text("删除人物资料") }
         }
     }, confirmButton = {
-        TextButton(onClick = { options = false; if (busy) actions.cancelCharacters() else actions.previewCharacters(progressBounded, quickMode && state.characters.checkpointParts == 0) },
-            enabled = !state.loading && !state.preparingCharacters) {
+        TextButton(onClick = {
+            options = false
+            if (busy) actions.cancelCharacters()
+            else actions.previewCharacters(progressBounded, quickMode && state.characters.checkpointParts == 0, emptyList())
+        }, enabled = !state.loading && !state.preparingCharacters) {
             Text(when {
                 busy -> "停止提取"
                 state.preparingCharacters -> "准备中…"
@@ -515,6 +541,11 @@ internal fun BookCharactersPanel(state: KnowledgeUiState, chapters: List<Chapter
             })
         }
     }, dismissButton = { TextButton(onClick = { options = false }) { Text("关闭") } })
+    if (pointing) CharacterScanTargetsDialog(input = targetsInput, onInputChange = { targetsInput = it }, enabled = !busy,
+        onDismiss = { pointing = false }, onConfirm = { targets ->
+            pointing = false
+            actions.previewCharacters(progressBounded, false, targets)
+        })
     if (editorVisible) BookCharacterEditorDialog(editing, people, onDismiss = { editorVisible = false }, onSave = { key, name, description ->
         actions.saveCharacter(key, name, description); editorVisible = false
     })

@@ -44,6 +44,33 @@ class ReaderKnowledgeViewModelTest {
         }
     }
 
+    @Test fun previewingCharactersHandsTheTypedTargetsToTheRepositoryUntouched() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val store = ViewModelStore()
+        try {
+            val outlines = mockk<ChapterKnowledgeRepository>()
+            val characters = mockk<BookCharactersRepository>()
+            val runner = mockk<KnowledgeGenerationRunner>()
+            every { outlines.observe(1) } returns MutableSharedFlow()
+            every { characters.observe(1) } returns MutableStateFlow(BookCharactersSnapshot())
+            every { runner.states } returns MutableStateFlow(emptyMap())
+            val targets = listOf(CharacterTarget("黄晓明", listOf("晓明", "绿大暗")))
+            val plan = mockk<BookCharactersPlan>()
+            coEvery { characters.preview(1, false, false, targets) } returns plan
+            val model = ReaderKnowledgeViewModel(outlines, characters, runner, mockk(relaxed = true))
+            store.put("knowledge", model)
+            model.bind(1)
+            runCurrent()
+            model.previewCharacters(false, false, targets)
+            runCurrent()
+            assertEquals(plan, model.state.value.pendingCharacters)
+            assertNull(model.state.value.error)
+        } finally {
+            store.clear()
+            Dispatchers.resetMain()
+        }
+    }
+
     @Test fun savingAnEditedOutlineGoesStraightToTheRepositoryWithoutAModelRequest() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val store = ViewModelStore()
