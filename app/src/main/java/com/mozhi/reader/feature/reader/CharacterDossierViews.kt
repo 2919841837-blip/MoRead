@@ -76,8 +76,9 @@ internal fun CharacterAvatar(name: String, thumbnail: String?, role: CharacterRo
     }
 }
 
+/** 主次徽标文案；人物编辑器的主次档位也用它，两处叫法才不会打架。 */
 @Composable
-private fun roleBadge(role: CharacterRole): String = stringResource(when (role) {
+internal fun characterRoleBadge(role: CharacterRole): String = stringResource(when (role) {
     CharacterRole.PROTAGONIST -> R.string.characters_role_badge_protagonist
     CharacterRole.MAJOR -> R.string.characters_role_badge_major
     CharacterRole.SUPPORTING -> R.string.characters_role_badge_supporting
@@ -100,15 +101,15 @@ internal fun CharacterRosterCard(person: BookCharacter, thumbnail: String?, pale
         modifier = Modifier.fillMaxWidth().testTag("person-${person.name}")) {
         Row(Modifier.padding(start = 14.dp, top = 14.dp, bottom = 14.dp, end = MoReadSpacing.xs),
             horizontalArrangement = Arrangement.spacedBy(MoReadSpacing.m)) {
-            CharacterAvatar(person.name, thumbnail, person.role, 56.dp, palette, onClick = onAvatar,
+            CharacterAvatar(person.name, thumbnail, person.effectiveRole(), 56.dp, palette, onClick = onAvatar,
                 contentDescription = stringResource(R.string.dossier_avatar_cd, person.name))
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(MoReadSpacing.xs)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(person.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold,
                         color = palette.onBackground, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
-                    person.role?.let { role ->
+                    person.effectiveRole()?.let { role ->
                         Spacer(Modifier.width(MoReadSpacing.s))
-                        Text(roleBadge(role), style = MaterialTheme.typography.labelSmall,
+                        Text(characterRoleBadge(role), style = MaterialTheme.typography.labelSmall,
                             color = if (role == CharacterRole.SUPPORTING) palette.muted else palette.accent,
                             modifier = Modifier.border(1.dp, if (role == CharacterRole.SUPPORTING) palette.glassBorder else palette.accent.copy(alpha = .5f),
                                 RoundedCornerShape(6.dp)).padding(horizontal = 6.dp, vertical = 1.dp))
@@ -124,6 +125,7 @@ internal fun CharacterRosterCard(person: BookCharacter, thumbnail: String?, pale
                 }
                 val meta = listOfNotNull(
                     stringResource(R.string.characters_manual).takeIf { person.manualDescription != null },
+                    stringResource(R.string.characters_manual_attributes).takeIf { person.manualAttributes != null },
                     stringResource(R.string.characters_relations_count, summary.relationCount).takeIf { summary.relationCount > 0 }
                 )
                 if (meta.isNotEmpty()) Text(meta.joinToString(" · "), style = MaterialTheme.typography.labelSmall, color = palette.muted)
@@ -215,27 +217,26 @@ internal fun CharacterDossierPage(
             item(key = "hero") {
                 Column(Modifier.fillMaxWidth().padding(top = MoReadSpacing.s, bottom = MoReadSpacing.xs),
                     horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(MoReadSpacing.s)) {
-                    CharacterAvatar(person.name, thumbnails[person.identity], person.role, 96.dp, palette, onClick = onAvatar,
+                    CharacterAvatar(person.name, thumbnails[person.identity], person.effectiveRole(), 96.dp, palette, onClick = onAvatar,
                         contentDescription = stringResource(R.string.dossier_avatar_cd, person.name))
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(person.name, style = MaterialTheme.typography.headlineMedium, fontFamily = FontFamily.Serif,
                             fontWeight = FontWeight.SemiBold, color = palette.onBackground)
-                        person.role?.let { Spacer(Modifier.width(MoReadSpacing.s)); Text(roleBadge(it), style = MaterialTheme.typography.labelMedium, color = palette.accent) }
+                        person.effectiveRole()?.let { Spacer(Modifier.width(MoReadSpacing.s)); Text(characterRoleBadge(it), style = MaterialTheme.typography.labelMedium, color = palette.accent) }
                     }
                     if (person.aliases.isNotEmpty()) Text(stringResource(R.string.dossier_aliases, person.aliases.joinToString("、")),
                         style = MaterialTheme.typography.bodySmall, color = palette.muted)
-                    dossier?.tagline?.takeIf(String::isNotBlank)?.let {
+                    person.tagline().takeIf(String::isNotBlank)?.let {
                         Text(it, style = MaterialTheme.typography.bodyLarge, color = palette.onBackground.copy(alpha = .9f))
                     }
                 }
             }
-            // 完整扫描的旧资料没有档案：性别、年龄、身份取同名属性（同一属性有多个时期的说法时取第一条）。
-            fun attribute(kind: CharacterAttributeKind) = person.attributes.firstOrNull { it.kind == kind }?.value
+            // 手写值优先，其次档案；完整扫描的旧资料没有档案，回落到同名属性（同一属性有多个说法时取第一条）。
+            fun attribute(kind: CharacterAttributeKind) = person.attributeValues(kind).firstOrNull()
             val facts = listOfNotNull(
-                (dossier?.gender?.takeIf(String::isNotBlank) ?: attribute(CharacterAttributeKind.GENDER))?.let { R.string.dossier_gender to it },
-                (dossier?.age?.takeIf(String::isNotBlank) ?: attribute(CharacterAttributeKind.AGE))?.let { R.string.dossier_age to it },
-                (dossier?.identity?.takeIf(String::isNotBlank) ?: attribute(CharacterAttributeKind.IDENTITY))?.let { R.string.dossier_identity to it }
-            )
+                attribute(CharacterAttributeKind.GENDER)?.let { R.string.dossier_gender to it },
+                attribute(CharacterAttributeKind.AGE)?.let { R.string.dossier_age to it },
+                attribute(CharacterAttributeKind.IDENTITY)?.let { R.string.dossier_identity to it })
             if (facts.isNotEmpty()) item(key = "facts") {
                 Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(MoReadSpacing.s)) {
                     facts.forEach { (label, value) ->
@@ -248,13 +249,15 @@ internal fun CharacterDossierPage(
                     }
                 }
             }
-            dossier?.bio?.takeIf(String::isNotBlank)?.let { bio -> item(key = "bio") {
+            person.bio().takeIf(String::isNotBlank)?.let { bio -> item(key = "bio") {
                 DossierSection(stringResource(R.string.dossier_bio), palette) {
                     Text(bio, style = MaterialTheme.typography.bodyLarge.copy(lineHeight = 28.sp), color = palette.onBackground)
                 }
             } }
-            val traits = dossier?.personality.orEmpty()
-            val legacyTraits = if (traits.isEmpty()) person.attributes.filter { it.kind == CharacterAttributeKind.PERSONALITY } else emptyList()
+            val written = person.manualTraits()
+            val traits = written ?: dossier?.personality.orEmpty()
+            // 手写性格不是书里的那句话，没有可跳的原文；只有旧资料的属性条目才带依据。
+            val legacyTraits = if (written == null && traits.isEmpty()) person.attributes.filter { it.kind == CharacterAttributeKind.PERSONALITY } else emptyList()
             if (traits.isNotEmpty() || legacyTraits.isNotEmpty()) item(key = "personality") {
                 DossierSection(stringResource(R.string.dossier_personality), palette) {
                     Column(verticalArrangement = Arrangement.spacedBy(MoReadSpacing.m)) {
@@ -271,11 +274,10 @@ internal fun CharacterDossierPage(
                     }
                 }
             }
-            val appearance = dossier?.appearance?.takeIf(String::isNotBlank)
-                ?: person.attributes.filter { it.kind == CharacterAttributeKind.APPEARANCE }.joinToString("；") { it.value }.takeIf(String::isNotBlank)
+            val appearance = person.attributeValues(CharacterAttributeKind.APPEARANCE).joinToString("；").takeIf(String::isNotBlank)
             if (appearance != null) item(key = "appearance") {
                 DossierSection(stringResource(R.string.dossier_appearance), palette,
-                    onJump = dossier?.appearanceAnchor?.let { anchor -> { onLocate(CharacterSource.Anchor(anchor)) } }) {
+                    onJump = person.appearanceAnchor()?.let { anchor -> { onLocate(CharacterSource.Anchor(anchor)) } }) {
                     Text(appearance, style = MaterialTheme.typography.bodyMedium.copy(lineHeight = 24.sp), color = palette.onBackground)
                 }
             }
@@ -452,7 +454,7 @@ private fun CharacterEgoGraph(person: BookCharacter, links: List<EgoLink>, thumb
                     .width(node * 2), textAlign = androidx.compose.ui.text.style.TextAlign.Center)
         }
         Box(Modifier.align(Alignment.Center)) {
-            CharacterAvatar(person.name, thumbnails[person.identity], person.role, 56.dp, palette)
+            CharacterAvatar(person.name, thumbnails[person.identity], person.effectiveRole(), 56.dp, palette)
         }
     }
 }

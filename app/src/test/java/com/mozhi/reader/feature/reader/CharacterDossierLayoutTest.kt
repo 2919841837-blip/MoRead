@@ -56,6 +56,43 @@ class CharacterDossierLayoutTest {
         assertEquals("林舟", graph.nodes.first().identity)
     }
 
+    @Test fun `a hand written role moves a person between the groups and behind it the AI value stays`() {
+        val promoted = man.copy(manualAttributes = ManualCharacterAttributes(role = CharacterRole.PROTAGONIST))
+        val groups = characterGroups(listOf(promoted, lin, legacy))
+        assertEquals(listOf(CharacterRole.PROTAGONIST, CharacterRole.SUPPORTING), groups.map { it.role })
+        assertEquals(listOf("小满", "林舟"), groups.first().people.map { it.name })
+        assertEquals(listOf("船夫"), groups.last().people.map { it.name })
+        // 关系图的节点顺序与权重也读手写档位：主角排在最前。
+        assertEquals(CharacterRole.MAJOR, promoted.role)
+        assertEquals(CharacterRole.PROTAGONIST, promoted.effectiveRole())
+        assertEquals("小满", relationGraph(listOf(promoted, legacy)).nodes.first().identity)
+    }
+
+    @Test fun `a guide where nobody has a role stays ungrouped until someone writes one`() {
+        val written = legacy.copy(manualAttributes = ManualCharacterAttributes(identity = "摆渡人"))
+        // 只写了身份不算主次：整块照旧平铺，与改动前一致。
+        assertEquals(listOf(null), characterGroups(listOf(written)).map { it.role })
+        assertEquals(listOf("摆渡人"), characterSummary(written).tags)
+        // 一旦有人带主次，没有主次的人就落进「其他人物」。
+        val promoted = man.copy(manualAttributes = ManualCharacterAttributes(role = CharacterRole.PROTAGONIST))
+        assertEquals(listOf(CharacterRole.PROTAGONIST, CharacterRole.SUPPORTING),
+            characterGroups(listOf(promoted, written)).map { it.role })
+        assertEquals(listOf("船夫"), characterGroups(listOf(promoted, written)).last().people.map { it.name })
+    }
+
+    @Test fun `card summary shows what the user wrote and never falls back to the AI value`() {
+        val written = lin.copy(manualAttributes = ManualCharacterAttributes(
+            identity = "摆渡人", tagline = "", personality = listOf(ManualTrait("怕水"))))
+        val summary = characterSummary(written)
+        // 简介被清空就是清空，不拿小传或原文顶上；标签换成手写的身份与性格。
+        assertEquals("", summary.tagline)
+        assertEquals(listOf("摆渡人", "怕水"), summary.tags)
+        // 没接管的字段仍来自档案。
+        assertEquals(2, summary.relationCount)
+        assertEquals(listOf("灯塔守望人", "执着", "嘴硬心软"),
+            characterSummary(lin.copy(manualAttributes = ManualCharacterAttributes(age = "三十"))).tags)
+    }
+
     @Test fun `ego positions are deterministic around the centre starting at the top`() {
         val positions = egoPositions(4)
         assertEquals(positions, egoPositions(4))

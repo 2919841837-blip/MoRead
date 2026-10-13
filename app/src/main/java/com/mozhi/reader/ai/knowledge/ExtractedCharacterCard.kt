@@ -27,23 +27,27 @@ data class ExtractedCharacterCard(val name: String, val description: String, val
 
     companion object {
         fun from(person: BookCharacter): ExtractedCharacterCard {
-            val dossier = person.dossier ?: return legacy(person)
-            val basics = listOf("身份" to dossier.identity, "性别" to dossier.gender, "年龄" to dossier.age)
+            // 档案与手写属性都没有（完整扫描的旧资料）时走旧结构；其余一律按取值规则导出。
+            val dossier = person.dossier
+            if (dossier == null && person.manualAttributes == null) return legacy(person)
+            fun value(kind: CharacterAttributeKind): String = person.attributeValues(kind).firstOrNull().orEmpty()
+            val basics = listOf("身份" to value(CharacterAttributeKind.IDENTITY), "性别" to value(CharacterAttributeKind.GENDER),
+                "年龄" to value(CharacterAttributeKind.AGE))
                 .filter { it.second.isNotBlank() }.joinToString("；") { "${it.first}：${it.second}" }
             val description = listOfNotNull(
-                dossier.tagline.takeIf(String::isNotBlank),
+                person.tagline().takeIf(String::isNotBlank),
                 basics.takeIf(String::isNotBlank),
                 person.aliases.takeIf { it.isNotEmpty() }?.let { "别名：" + it.joinToString("、") },
-                dossier.appearance.takeIf(String::isNotBlank)?.let { "外貌：$it" },
-                dossier.bio.takeIf(String::isNotBlank),
-                dossier.relationships.takeIf { it.isNotEmpty() }?.let { relations ->
+                person.attributeValues(CharacterAttributeKind.APPEARANCE).joinToString("；").takeIf(String::isNotBlank)?.let { "外貌：$it" },
+                person.bio().takeIf(String::isNotBlank),
+                dossier?.relationships.orEmpty().takeIf { it.isNotEmpty() }?.let { relations ->
                     "人物关系：" + relations.joinToString("；") { "${it.target}（${it.relation}）" + it.detail.takeIf(String::isNotBlank)?.let { d -> "：$d" }.orEmpty() }
                 },
-                dossier.experiences.takeIf { it.isNotEmpty() }?.let { events -> "经历：\n" + events.joinToString("\n") { "- ${it.text}" } },
-                dossier.arc.takeIf(String::isNotBlank)?.let { "成长：$it" },
+                dossier?.experiences.orEmpty().takeIf { it.isNotEmpty() }?.let { events -> "经历：\n" + events.joinToString("\n") { "- ${it.text}" } },
+                dossier?.arc?.takeIf(String::isNotBlank)?.let { "成长：$it" },
                 person.manualDescription?.takeIf(String::isNotBlank)
             ).joinToString("\n\n")
-            val personality = dossier.personality.joinToString("、") { trait ->
+            val personality = (person.manualTraits() ?: dossier?.personality.orEmpty()).joinToString("、") { trait ->
                 trait.trait + trait.detail.takeIf(String::isNotBlank)?.let { "（$it）" }.orEmpty()
             }
             return ExtractedCharacterCard(person.name, description, personality)

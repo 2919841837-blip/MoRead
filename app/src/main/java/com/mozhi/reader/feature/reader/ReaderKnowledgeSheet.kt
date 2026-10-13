@@ -50,7 +50,7 @@ internal data class ReaderKnowledgeActions(
     val cancelCharacters: () -> Unit = {}, val deleteCharacters: () -> Unit = {},
     val locateCharacter: (BookCharacterGuideEntity, CharacterEvidence) -> Unit = { _, _ -> },
     val saveCharacterCard: (ExtractedCharacterCard) -> Unit = {},
-    val saveCharacter: (String?, String, String) -> Unit = { _, _, _ -> },
+    val saveCharacter: (String?, String, String, ManualCharacterAttributes?) -> Unit = { _, _, _, _ -> },
     val openLook: (String) -> Unit = {},
     val saveOutline: (Int, String) -> Unit = { _, _ -> },
     val locateAnchor: (BookCharacterGuideEntity, SourceAnchor) -> Unit = { _, _ -> }
@@ -623,8 +623,8 @@ internal fun BookCharactersPanel(state: KnowledgeUiState, chapters: List<Chapter
             pointing = false
             actions.previewCharacters(progressBounded, false, targets)
         })
-    if (editorVisible) BookCharacterEditorDialog(editing, people, onDismiss = { editorVisible = false }, onSave = { key, name, description ->
-        actions.saveCharacter(key, name, description); editorVisible = false
+    if (editorVisible) BookCharacterEditorDialog(editing, people, onDismiss = { editorVisible = false }, onSave = { key, name, description, attributes ->
+        actions.saveCharacter(key, name, description, attributes); editorVisible = false
     })
     card?.let { draft -> ExtractedCharacterCardDialog(draft, onDismiss = { card = null }, onSave = { actions.saveCharacterCard(it); card = null }) }
     if (information) KnowledgeInfoDialog("书中人物", "由 AI 逐章扫描正文，提取人物、身份与关系。\n\n「读到此处」只发送已经读过的内容，最后一章截到当前进度；「全书」包括还没读到的章节，可能涉及后续情节。\n\nAI 资料保留原文依据，可随时核对；手动新增或编辑的资料会标注为「手动整理」，后续提取不会覆盖。\n\n已核对的段落保留缓存，更新只为新内容计费。停止后可继续，更新期间仍能查看已有资料。", { information = false })

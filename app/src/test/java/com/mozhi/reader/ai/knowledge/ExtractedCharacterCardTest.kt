@@ -25,4 +25,33 @@ class ExtractedCharacterCardTest {
         }
         assertEquals("执着（雨夜也点灯）、沉默", card.personality)
     }
+
+    @Test fun handWrittenAttributesAreExportedWithTheirNotes() {
+        val person = BookCharacter("林舟", emptyList(), manualAttributes = ManualCharacterAttributes(
+            identity = "摆渡人", age = "三十", appearance = "瘦高，左手有疤",
+            aliases = listOf("阿舟", "灯奴"), bio = "他守着灯塔。", personality = listOf(ManualTrait("执着", "雨夜也点灯"))))
+        val card = ExtractedCharacterCard.from(person)
+        listOf("身份：摆渡人", "年龄：三十", "别名：阿舟、灯奴", "外貌：瘦高，左手有疤", "他守着灯塔。").forEach {
+            assertTrue(it, card.description.contains(it))
+        }
+        assertEquals("执着（雨夜也点灯）", card.personality)
+    }
+
+    @Test fun aClearedFieldIsExportedAsEmptyInsteadOfTheDossierValue() {
+        val person = BookCharacter("林舟", emptyList(), dossier = CharacterDossier(identity = "灯塔守望人", age = "三十"),
+            manualAttributes = ManualCharacterAttributes(identity = "摆渡人", age = ""))
+        val card = ExtractedCharacterCard.from(person)
+        assertTrue(card.description.contains("身份：摆渡人"))
+        // 接管 ≠ 回落：清空的年龄既不显示模型值，也不显示手写值。
+        assertFalse(card.description.contains("灯塔守望人"))
+        assertFalse(card.description.contains("年龄"))
+    }
+
+    @Test fun anOldGuideWithNeitherDossierNorWrittenAttributesStillExportsItsFacts() {
+        val fact = CharacterEvidence(0, KnowledgeFact("守着灯塔", "林舟在灯塔等候。", 0, 8))
+        val card = ExtractedCharacterCard.from(BookCharacter("林舟", listOf(fact),
+            attributes = listOf(BookCharacterAttribute(CharacterAttributeKind.IDENTITY, "守灯人", fact))))
+        assertTrue(card.description.contains("身份：守灯人"))
+        assertTrue(card.description.contains("第 1 章依据"))
+    }
 }

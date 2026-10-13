@@ -198,8 +198,8 @@ class ReaderKnowledgeVisualTest {
         val many = guide.copy(characters = (0 until 40).map { BookCharacter("人物$it", guide.characters.first().evidence) })
         val live = mutableStateOf(state.copy(characters = BookCharactersSnapshot(VisibleBookCharacters(personEntry, many))))
         var created: BookCharacter? = null
-        val actions = ReaderKnowledgeActions(saveCharacter = { identity, name, description ->
-            val next = BookCharactersCodec.edit(live.value.characters.saved!!.guide, identity, name, description)
+        val actions = ReaderKnowledgeActions(saveCharacter = { identity, name, description, attributes ->
+            val next = BookCharactersCodec.edit(live.value.characters.saved!!.guide, identity, name, description, attributes)
             created = next.characters.first { it.name == name }
             live.value = live.value.copy(characters = BookCharactersSnapshot(VisibleBookCharacters(personEntry, next)))
         })
@@ -211,13 +211,13 @@ class ReaderKnowledgeVisualTest {
         val anchor = scroll("characters-list")
         compose.onNodeWithContentDescription("人物12的人物操作").performClick()
         compose.onNodeWithText("编辑人物").performClick()
-        compose.onNodeWithTag("character-description").performTextReplacement("守望灯塔的人，手动修订")
+        editorField("character-description").performScrollTo().performTextReplacement("守望灯塔的人，手动修订")
         compose.onNodeWithText("保存人物").performClick()
         assertEquals("守望灯塔的人，手动修订", created?.manualDescription)
         assertEquals(anchor, scroll("characters-list"), .001f)
         compose.onNodeWithContentDescription("新增人物").performClick()
-        compose.onNodeWithTag("character-name").performTextInput("渡船人")
-        compose.onNodeWithTag("character-description").performTextInput("在码头接应")
+        editorField("character-name").performScrollTo().performTextInput("渡船人")
+        editorField("character-description").performScrollTo().performTextInput("在码头接应")
         compose.onNodeWithText("保存人物").performClick()
         assertEquals("渡船人", created?.name)
         assertEquals(anchor, scroll("characters-list"), .001f)
@@ -496,6 +496,8 @@ class ReaderKnowledgeVisualTest {
     private fun selectTab(label: String) { compose.onNode(hasText(label) and hasClickAction()).performClick() }
     /** 名单输入用 [com.mozhi.reader.ui.components.MoReadTextField]：testTag 在外层容器上，可输入的节点是它的子节点。 */
     private fun targetsField() = compose.onNode(hasSetTextAction() and hasAnyAncestor(hasTestTag("character-targets")))
+    /** 人物编辑器的字段同样是 MoReadTextField，tag 在外层容器上。 */
+    private fun editorField(tag: String) = compose.onNode(hasSetTextAction() and hasAnyAncestor(hasTestTag(tag)))
     private fun top(tag: String): Float = compose.onNodeWithTag(tag).fetchSemanticsNode().boundsInRoot.top
     private fun scroll(tag: String): Float = compose.onNodeWithTag(tag).fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value()
 

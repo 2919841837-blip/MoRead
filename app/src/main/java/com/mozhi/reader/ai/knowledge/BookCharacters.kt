@@ -10,6 +10,29 @@ data class CharacterEvidence(val chapterIndex: Int, val fact: KnowledgeFact)
 data class BookCharacterAttribute(val kind: CharacterAttributeKind, val value: String, val evidence: CharacterEvidence)
 @Serializable
 data class BookCharacterRelationship(val target: String, val relation: String, val evidence: CharacterEvidence)
+
+/** 用户手写的性格：词 + 可选说明。手写值不是书里那句话，所以没有原文锚点。 */
+@Serializable
+data class ManualTrait(val trait: String, val detail: String = "")
+
+/**
+ * 用户亲手写的基本属性。null 的字段仍由 AI 维护；非 null（含空串 / 空列表）表示用户接管 —— 接管后
+ * 不再回落到 AI 值，否则用户清空的意图会被下一次重扫悄悄填回。
+ *
+ * 手写值**不进** [BookCharacter.attributes] 列表：那里的每一条都带逐字核对过的原文依据，
+ * 插图形象与「跳到原文」都靠它，所以手写值改由读取时覆盖（见 [BookCharacter.attributeValues]）。
+ */
+@Serializable
+data class ManualCharacterAttributes(
+    val identity: String? = null, val gender: String? = null, val age: String? = null,
+    val appearance: String? = null, val tagline: String? = null, val bio: String? = null,
+    val aliases: List<String>? = null, val personality: List<ManualTrait>? = null,
+    /** 主次：null = 仍由 AI 判定。枚举没有「空」态，退回 AI 由编辑器的「跟随 AI」档位表达。 */
+    val role: CharacterRole? = null) {
+    val isEmpty: Boolean get() = identity == null && gender == null && age == null && appearance == null &&
+        tagline == null && bio == null && aliases == null && personality == null && role == null
+}
+
 @Serializable
 data class BookCharacter(val name: String, val evidence: List<CharacterEvidence>,
     /** User prose is distinct from verified AI source facts and survives later extractions. */
@@ -20,9 +43,52 @@ data class BookCharacter(val name: String, val evidence: List<CharacterEvidence>
     val dossier: CharacterDossier? = null,
     val role: CharacterRole? = null,
     /** 称呼在提取范围内出现的次数，用于排序与关系图节点大小。 */
-    val mentions: Int = 0) {
+    val mentions: Int = 0,
+    /** 用户手写的基本属性（身份/性别/年龄/外貌/别名/性格/简介/小传/主次）；重扫不会覆盖。 */
+    val manualAttributes: ManualCharacterAttributes? = null) {
     val identity: String get() = sourceName ?: name
-    val aliases: List<String> get() = attributes.filter { it.kind == CharacterAttributeKind.ALIAS }.map { it.value }.distinct()
+    val aliases: List<String> get() = attributeValues(CharacterAttributeKind.ALIAS)
+
+    /** 某项属性的当前取值：用户接管优先，其次档案，最后旧资料的属性条目。 */
+    fun attributeValues(kind: CharacterAttributeKind): List<String> = ownedValues(kind)
+        ?: dossierValues(kind)?.filter(String::isNotBlank)?.takeIf { it.isNotEmpty() }
+        ?: attributes.filter { it.kind == kind }.map { it.value }.distinct()
+
+    /** 用户接管时的取值；没接管返回 null（空列表表示用户要求留空）。 */
+    private fun ownedValues(kind: CharacterAttributeKind): List<String>? = manualAttributes?.let { manual ->
+        when (kind) {
+            CharacterAttributeKind.ALIAS -> manual.aliases
+            CharacterAttributeKind.IDENTITY -> manual.identity?.let { listOf(it) }
+            CharacterAttributeKind.GENDER -> manual.gender?.let { listOf(it) }
+            CharacterAttributeKind.AGE -> manual.age?.let { listOf(it) }
+            CharacterAttributeKind.APPEARANCE -> manual.appearance?.let { listOf(it) }
+            CharacterAttributeKind.PERSONALITY -> manual.personality?.map { it.trait }
+        }
+    }?.filter(String::isNotBlank)
+
+    /** 档案里的同名取值；别名与性格在档案里没有对应字段（性格的说明走 [manualTraits]）。 */
+    private fun dossierValues(kind: CharacterAttributeKind): List<String>? = dossier?.let { full ->
+        when (kind) {
+            CharacterAttributeKind.IDENTITY -> listOf(full.identity)
+            CharacterAttributeKind.GENDER -> listOf(full.gender)
+            CharacterAttributeKind.AGE -> listOf(full.age)
+            CharacterAttributeKind.APPEARANCE -> listOf(full.appearance)
+            CharacterAttributeKind.PERSONALITY -> full.personality.map { it.trait }
+            CharacterAttributeKind.ALIAS -> null
+        }
+    }
+
+    /** 性格（含说明）：未接管时返回 null，调用方沿用现有的档案 / 旧资料分支。 */
+    fun manualTraits(): List<DossierTrait>? = manualAttributes?.personality?.map { DossierTrait(it.trait, it.detail) }
+
+    fun tagline(): String = manualAttributes?.tagline ?: dossier?.tagline.orEmpty()
+    fun bio(): String = manualAttributes?.bio ?: dossier?.bio.orEmpty()
+
+    /** 外貌被接管时没有可跳的原文：手写值不是书里那句话。 */
+    fun appearanceAnchor(): SourceAnchor? = if (manualAttributes?.appearance != null) null else dossier?.appearanceAnchor
+
+    /** 主次：用户指定优先，其次模型判定。分组、色环、徽标与关系图权重都读它。 */
+    fun effectiveRole(): CharacterRole? = manualAttributes?.role ?: role
 }
 @Serializable
 data class BookCharacterGuide(
@@ -53,19 +119,24 @@ data class BookCharactersSnapshot(val saved: VisibleBookCharacters? = null, val 
 
 internal object BookCharactersCodec {
     const val PROMPT_VERSION = 2
-    fun edit(guide: BookCharacterGuide, originalIdentity: String?, name: String, description: String): BookCharacterGuide {
+    fun edit(guide: BookCharacterGuide, originalIdentity: String?, name: String, description: String,
+        manualAttributes: ManualCharacterAttributes?): BookCharacterGuide {
         val cleanName = name.trim()
         require(cleanName.isNotEmpty() && cleanName.length <= 80) { "请填写 1–80 字的人物姓名" }
         require(description.length <= 24_000) { "人物资料不能超过 24000 字" }
+        // 一项都没接管（全是 null）时不存这层：contentJson 保持干净，读取规则也不必区分「空层」。
+        val layer = manualAttributes?.takeUnless { it.isEmpty }
         val original = originalIdentity?.let { key -> guide.characters.firstOrNull { it.identity == key } ?: error("人物已变化，请重新打开编辑") }
         require(guide.characters.none { it !== original && (it.name.equals(cleanName, true) || it.identity.equals(cleanName, true)) }) { "已有同名人物，请直接编辑该人物" }
-        val person = original?.copy(name = cleanName, manualDescription = description.trim(), sourceName = original.identity)
-            ?: BookCharacter(cleanName, emptyList(), description.trim(), cleanName)
+        val person = original?.copy(name = cleanName, manualDescription = description.trim(), sourceName = original.identity,
+            manualAttributes = layer)
+            ?: BookCharacter(cleanName, emptyList(), description.trim(), cleanName, manualAttributes = layer)
         return guide.copy(characters = if (original == null) guide.characters + person else guide.characters.map { if (it === original) person else it })
     }
 
     fun mergeManual(generated: BookCharacterGuide, previous: BookCharacterGuide?): BookCharacterGuide {
-        val edits = previous?.characters.orEmpty().filter { it.manualDescription != null }
+        // 手动条目 = 写过资料 **或** 接管过任一基本属性：只改过属性的人不能被 AI 结果整条替掉。
+        val edits = previous?.characters.orEmpty().filter { it.manualDescription != null || it.manualAttributes != null }
         val result = generated.characters.mapNotNull { current ->
             edits.firstOrNull { it.identity == current.identity }?.copy(evidence = current.evidence,
                 attributes = current.attributes, relationships = current.relationships,
@@ -191,7 +262,7 @@ internal object BookCharactersCodec {
         entry ?: return null
         val guide = runCatching { AiJson.decodeFromString<BookCharacterGuide>(entry.contentJson) }.getOrNull() ?: return null
         if (entry.sourceRevision != revision || entry.promptVersion !in 1..PROMPT_VERSION) {
-            val manual = guide.characters.filter { it.manualDescription != null && it.name.isNotBlank() }
+            val manual = guide.characters.filter { (it.manualDescription != null || it.manualAttributes != null) && it.name.isNotBlank() }
                 .map { it.copy(evidence = emptyList(), attributes = emptyList(), relationships = emptyList(), dossier = null) }
             return manual.takeIf { it.isNotEmpty() }?.let { VisibleBookCharacters(entry, BookCharacterGuide(it, 0, 0, true)) }
         }

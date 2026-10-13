@@ -64,7 +64,7 @@ class BookCharactersRepositoryTest {
 
     @Test fun laterAiAliasCannotReplaceAnExistingManualRename() {
         val initial = BookCharacterGuide(listOf(BookCharacter("林舟", emptyList())), 1, 100)
-        val edited = BookCharactersCodec.edit(initial, "林舟", "阿舟", "用户整理的资料")
+        val edited = BookCharactersCodec.edit(initial, "林舟", "阿舟", "用户整理的资料", null)
         val generated = initial.copy(characters = listOf(BookCharacter("阿舟", emptyList()), initial.characters.single()))
         val merged = BookCharactersCodec.mergeManual(generated, edited)
         assertEquals(1, merged.characters.size)
@@ -451,6 +451,50 @@ class BookCharactersRepositoryTest {
         assertEquals("手动整理：灯塔守望者。", people.single { it.name == "阿舟" }.manualDescription)
         assertTrue(people.single { it.identity == "小满" }.dossier != null)
         assertEquals(before + 1, client.requests)
+    }
+
+    /** 手改的基本属性存进 contentJson 的手动层：读回来一字不差，重扫也动不了它。 */
+    @Test fun handWrittenAttributesRoundTripAndSurviveEveryLaterScan() = runBlocking {
+        repository.generate(repository.preview(1))
+        repository.saveCharacter(1, "林舟", "林舟", "手动整理：灯塔守望者。",
+            ManualCharacterAttributes(identity = "摆渡人", age = "", aliases = listOf("阿舟")))
+        val saved = repository.observe(1).first().saved!!.guide.characters.first { it.name == "林舟" }
+        assertEquals("摆渡人", saved.attributeValues(CharacterAttributeKind.IDENTITY).single())
+        assertEquals(emptyList<String>(), saved.attributeValues(CharacterAttributeKind.AGE))
+        assertEquals(listOf("阿舟"), saved.aliases)
+        repository.generate(repository.preview(1))
+        val rescanned = repository.observe(1).first().saved!!.guide.characters.first { it.name == "林舟" }
+        assertEquals("摆渡人", rescanned.attributeValues(CharacterAttributeKind.IDENTITY).single())
+        assertEquals(emptyList<String>(), rescanned.attributeValues(CharacterAttributeKind.AGE))
+        assertEquals("手动整理：灯塔守望者。", rescanned.manualDescription)
+        // 没接管的字段照旧由 AI 维护：依据仍是这次扫描刚写下来的。
+        assertTrue(rescanned.evidence.isNotEmpty())
+    }
+
+    /** 快速扫描（名单 + 档案）走 mergeManual：手写的身份与档位留下，AI 基线照旧刷新。 */
+    @Test fun aQuickRescanRefreshesTheAiBaselineAndLeavesTheWrittenFieldsAlone() = runBlocking {
+        useQuickTexts()
+        repository.generateQuick(repository.preview(1, quick = true))
+        repository.saveCharacter(1, "小满", "小满", "",
+            ManualCharacterAttributes(identity = "送信人", role = CharacterRole.PROTAGONIST))
+        repository.generateQuick(repository.preview(1, quick = true))
+        val xiaoman = repository.observe(1).first().saved!!.guide.characters.first { it.name == "小满" }
+        assertEquals("送信人", xiaoman.attributeValues(CharacterAttributeKind.IDENTITY).single())
+        assertEquals(CharacterRole.PROTAGONIST, xiaoman.effectiveRole())
+        // 名单给的主次仍是「主要」：用户哪天切回「跟随 AI」，拿到的就是这一次的判定。
+        assertEquals(CharacterRole.MAJOR, xiaoman.role)
+        assertEquals("信使", xiaoman.dossier!!.tagline)
+    }
+
+    /** 点名扫描走 mergeTargeted（另一条发布路径）：并入新认识的 小满，绝不能碰林舟手上的手写层。 */
+    @Test fun aTargetedScanMergesNewPeopleWithoutTouchingTheWrittenFields() = runBlocking {
+        useQuickTexts()
+        repository.generate(repository.preview(1))
+        repository.saveCharacter(1, "林舟", "林舟", "", ManualCharacterAttributes(identity = "摆渡人"))
+        repository.generateQuick(repository.preview(1, targets = listOf(CharacterTarget("小满"))))
+        val people = repository.observe(1).first().saved!!.guide.characters
+        assertEquals(setOf("林舟", "小满"), people.map { it.identity }.toSet())
+        assertEquals("摆渡人", people.single { it.name == "林舟" }.attributeValues(CharacterAttributeKind.IDENTITY).single())
     }
 
 }

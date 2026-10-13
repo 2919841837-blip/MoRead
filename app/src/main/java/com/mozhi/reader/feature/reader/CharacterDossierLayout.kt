@@ -28,29 +28,37 @@ internal val CharacterSource.chapterIndex: Int get() = when (this) {
 
 internal data class CharacterGroup(val role: CharacterRole?, val people: List<BookCharacter>)
 
-/** 有主次信息时按「主角 / 主要人物 / 其他人物」分组；全无主次（旧存档、手动人物）时不分组，保持原顺序。 */
+/**
+ * 有主次信息时按「主角 / 主要人物 / 其他人物」分组；全无主次（旧存档、手动人物）时不分组，保持原顺序。
+ * 手写主次也算数：一旦有人带主次，没有主次的人就落进「其他人物」。
+ */
 internal fun characterGroups(people: List<BookCharacter>): List<CharacterGroup> {
-    if (people.none { it.role != null }) return listOf(CharacterGroup(null, people))
+    if (people.none { it.effectiveRole() != null }) return listOf(CharacterGroup(null, people))
     val order = listOf(CharacterRole.PROTAGONIST, CharacterRole.MAJOR, CharacterRole.SUPPORTING)
     return order.mapNotNull { role ->
-        people.filter { (it.role ?: CharacterRole.SUPPORTING) == role }.takeIf { it.isNotEmpty() }?.let { CharacterGroup(role, it) }
+        people.filter { (it.effectiveRole() ?: CharacterRole.SUPPORTING) == role }.takeIf { it.isNotEmpty() }?.let { CharacterGroup(role, it) }
     }
 }
 
 internal data class CharacterSummary(val tagline: String, val tags: List<String>, val relationCount: Int)
 
-/** 卡片上的一句话与标签：优先档案；旧资料取第一条事实与身份、性格属性。 */
+/** 卡片上的一句话与标签：手写值优先，其次档案，最后旧资料的身份、性格属性与第一条事实。 */
 internal fun characterSummary(person: BookCharacter): CharacterSummary {
     val dossier = person.dossier
-    if (dossier != null) {
-        val tags = (listOf(dossier.identity) + dossier.personality.map { it.trait }).filter(String::isNotBlank).distinct()
-        return CharacterSummary(dossier.tagline.ifBlank { dossier.bio.take(60) }, tags.take(MAX_CARD_TAGS), dossier.relationships.size)
+    val tags = (person.attributeValues(CharacterAttributeKind.IDENTITY) + person.attributeValues(CharacterAttributeKind.PERSONALITY))
+        .filter(String::isNotBlank).distinct()
+    val manualTagline = person.manualAttributes?.tagline
+    val tagline = when {
+        // 用户接管（含清空成空串）时卡片就显示他的值，不拿小传或原文顶上。
+        manualTagline != null -> manualTagline
+        person.tagline().isNotBlank() -> person.tagline()
+        dossier != null -> dossier.bio.take(60)
+        person.bio().isNotBlank() -> person.bio().take(60)
+        else -> person.manualDescription?.lineSequence()?.firstOrNull { it.isNotBlank() }?.take(60)
+            ?: person.evidence.firstOrNull()?.fact?.text.orEmpty()
     }
-    val tags = person.attributes.filter { it.kind == CharacterAttributeKind.IDENTITY || it.kind == CharacterAttributeKind.PERSONALITY }
-        .map { it.value }.distinct()
-    val tagline = person.manualDescription?.lineSequence()?.firstOrNull { it.isNotBlank() }?.take(60)
-        ?: person.evidence.firstOrNull()?.fact?.text.orEmpty()
-    return CharacterSummary(tagline, tags.take(MAX_CARD_TAGS), person.relationships.map { it.target }.distinct().size)
+    val relations = if (dossier != null) dossier.relationships.size else person.relationships.map { it.target }.distinct().size
+    return CharacterSummary(tagline, tags.take(MAX_CARD_TAGS), relations)
 }
 
 internal data class TimelineEntry(val chapterIndex: Int?, val text: String, val source: CharacterSource?)
@@ -121,13 +129,14 @@ internal data class RelationGraph(val nodes: List<GraphNode>, val edges: List<Gr
 
 /** 全书关系图：只连列表里都有的人；一对人只画一条边，标签取主次更靠前一方的说法。节点大小按出场次数取对数。 */
 internal fun relationGraph(everyone: List<BookCharacter>, limit: Int = MAX_GRAPH_NODES): RelationGraph {
-    val ranked = everyone.withIndex().sortedWith(compareBy({ roleRank(it.value.role) }, { it.index })).map { it.value }.take(limit)
+    val ranked = everyone.withIndex().sortedWith(compareBy({ roleRank(it.value.effectiveRole()) }, { it.index })).map { it.value }.take(limit)
     val identities = ranked.map { it.identity }.toSet()
     val maxMentions = ranked.maxOfOrNull { it.mentions }?.coerceAtLeast(1) ?: 1
     val nodes = ranked.map { person ->
-        val base = when (person.role) { CharacterRole.PROTAGONIST -> 1f; CharacterRole.MAJOR -> .7f; else -> .45f }
+        val role = person.effectiveRole()
+        val base = when (role) { CharacterRole.PROTAGONIST -> 1f; CharacterRole.MAJOR -> .7f; else -> .45f }
         val mention = if (person.mentions <= 0) 0f else (ln(1f + person.mentions) / ln(1f + maxMentions))
-        GraphNode(person.identity, person.name, person.role, (base * .6f + mention * .4f).coerceIn(.3f, 1f))
+        GraphNode(person.identity, person.name, role, (base * .6f + mention * .4f).coerceIn(.3f, 1f))
     }
     val edges = linkedMapOf<Pair<String, String>, GraphEdge>()
     ranked.forEach { person ->

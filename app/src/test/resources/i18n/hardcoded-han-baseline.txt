@@ -68,7 +68,6 @@ feature/reader/AiRichText.kt	1
 feature/reader/AnnotationDiscussionSheet.kt	23
 feature/reader/AutoReadSession.kt	7
 feature/reader/BilingualReadingDialog.kt	22
-feature/reader/BookCharacterEditorDialog.kt	8
 feature/reader/CompanionChatActions.kt	6
 feature/reader/CompanionChatDialogs.kt	18
 feature/reader/CompanionChatHeader.kt	7

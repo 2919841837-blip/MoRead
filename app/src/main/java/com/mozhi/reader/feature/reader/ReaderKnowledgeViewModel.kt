@@ -105,8 +105,9 @@ class ReaderKnowledgeViewModel @Inject constructor(
     fun delete(chapterIndex: Int) = localAction { book -> repository.delete(book, chapterIndex) }
     fun saveOutline(chapterIndex: Int, outline: String) = localAction { book -> repository.saveOutline(book, chapterIndex, outline) }
     fun deleteCharacters() = localAction { book -> characters.delete(book) }
-    fun saveCharacter(originalIdentity: String?, name: String, description: String) = localAction { book ->
-        characters.saveCharacter(book, originalIdentity, name, description)
+    fun saveCharacter(originalIdentity: String?, name: String, description: String,
+        manualAttributes: ManualCharacterAttributes?) = localAction { book ->
+        characters.saveCharacter(book, originalIdentity, name, description, manualAttributes)
     }
     fun saveCharacterCard(card: ExtractedCharacterCard) = localAction {
         personas.save(com.mozhi.reader.core.database.entity.PersonaEntity(
