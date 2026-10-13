@@ -42,7 +42,7 @@ internal fun characterGroups(people: List<BookCharacter>): List<CharacterGroup> 
 
 internal data class CharacterSummary(val tagline: String, val tags: List<String>, val relationCount: Int)
 
-/** 卡片上的一句话与标签：手写值优先，其次档案，最后旧资料的身份、性格属性与第一条事实。 */
+/** 卡片上的一句话与标签：手写值优先，其次档案，最后手写的经历、旧资料的身份与第一条事实。 */
 internal fun characterSummary(person: BookCharacter): CharacterSummary {
     val dossier = person.dossier
     val tags = (person.attributeValues(CharacterAttributeKind.IDENTITY) + person.attributeValues(CharacterAttributeKind.PERSONALITY))
@@ -54,23 +54,27 @@ internal fun characterSummary(person: BookCharacter): CharacterSummary {
         person.tagline().isNotBlank() -> person.tagline()
         dossier != null -> dossier.bio.take(60)
         person.bio().isNotBlank() -> person.bio().take(60)
-        else -> person.manualDescription?.lineSequence()?.firstOrNull { it.isNotBlank() }?.take(60)
+        // 手动新建的人物没有档案也没有依据，手写的第一条经历就是卡片上的一句话。
+        else -> person.experiences().firstOrNull()?.text?.take(60)
             ?: person.evidence.firstOrNull()?.fact?.text.orEmpty()
     }
-    val relations = if (dossier != null) dossier.relationships.size else person.relationships.map { it.target }.distinct().size
+    val relations = person.manualRelations()?.size
+        ?: if (dossier != null) dossier.relationships.size else person.relationships.map { it.target }.distinct().size
     return CharacterSummary(tagline, tags.take(MAX_CARD_TAGS), relations)
 }
 
 internal data class TimelineEntry(val chapterIndex: Int?, val text: String, val source: CharacterSource?)
 
-/** 人物经历：按章节先后；新档案用 experiences，旧资料用逐条事实。 */
+/**
+ * 人物经历：按章节先后。手写接管后一律以手写为准（清空就是空，不回落）；否则新档案用 experiences，
+ * 再不行用旧资料的逐条事实。手写的经历没有原文坐标，所以没有可以跳回去的位置。
+ */
 internal fun characterTimeline(person: BookCharacter): List<TimelineEntry> {
-    val dossier = person.dossier
-    val entries = if (dossier != null && dossier.experiences.isNotEmpty()) {
-        dossier.experiences.map { TimelineEntry(it.chapterIndex ?: it.anchor?.chapterIndex, it.text, it.anchor?.let(CharacterSource::Anchor)) }
-    } else {
-        person.evidence.map { TimelineEntry(it.chapterIndex, it.fact.text, CharacterSource.Evidence(it)) }
-    }
+    val entries = person.manualExperiences()
+        ?.map { TimelineEntry(it.chapterIndex, it.text, null) }
+        ?: person.dossier?.experiences?.takeIf { it.isNotEmpty() }
+            ?.map { TimelineEntry(it.chapterIndex ?: it.anchor?.chapterIndex, it.text, it.anchor?.let(CharacterSource::Anchor)) }
+        ?: person.evidence.map { TimelineEntry(it.chapterIndex, it.fact.text, CharacterSource.Evidence(it)) }
     return entries.withIndex().sortedWith(compareBy({ it.value.chapterIndex ?: Int.MAX_VALUE }, { it.index })).map { it.value }
 }
 
@@ -84,18 +88,23 @@ internal data class EgoLink(val target: String, val identity: String?, val relat
 /**
  * 合并双向关系：A 的档案说「苏晚 · 师姐」、苏晚的档案说「林舟 · 师弟」，在两人各自的档案里都显示为一条。
  * 旧资料（完整扫描）的关系写的是「本人是对方的什么人」，正好对应 [EgoLink.reverse]。
+ *
+ * 手写了一组关系之后旧资料一律不算数：用户删掉的那条不该被它复活。别人档案里提到的他照旧并进来 ——
+ * 那是「对方眼中」的说法，属于别人的资料，不因为本人改了自己的卡片就消失。
  */
 internal fun egoLinks(person: BookCharacter, everyone: List<BookCharacter>): List<EgoLink> {
     val byName = everyone.flatMap { other -> (listOf(other.name, other.identity) + other.aliases).map { it to other } }.toMap()
     val names = (listOf(person.name, person.identity) + person.aliases).toSet()
     val links = linkedMapOf<String, EgoLink>()
-    person.dossier?.relationships.orEmpty().forEach { relation ->
+    val written = person.manualRelations()
+    val own = written ?: person.dossier?.relationships.orEmpty()
+    own.forEach { relation ->
         val other = byName[relation.target]
         val key = other?.identity ?: relation.target
         links.putIfAbsent(key, EgoLink(other?.name ?: relation.target, other?.identity, relation.relation, "",
             relation.detail, relation.anchor?.let(CharacterSource::Anchor)))
     }
-    person.relationships.forEach { legacy ->
+    if (written == null) person.relationships.forEach { legacy ->
         val other = byName[legacy.target]
         val key = other?.identity ?: legacy.target
         val existing = links[key]

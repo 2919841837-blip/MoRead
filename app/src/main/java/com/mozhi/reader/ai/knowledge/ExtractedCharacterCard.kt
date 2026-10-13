@@ -40,12 +40,11 @@ data class ExtractedCharacterCard(val name: String, val description: String, val
                 person.aliases.takeIf { it.isNotEmpty() }?.let { "别名：" + it.joinToString("、") },
                 person.attributeValues(CharacterAttributeKind.APPEARANCE).joinToString("；").takeIf(String::isNotBlank)?.let { "外貌：$it" },
                 person.bio().takeIf(String::isNotBlank),
-                dossier?.relationships.orEmpty().takeIf { it.isNotEmpty() }?.let { relations ->
+                (person.manualRelations() ?: dossier?.relationships.orEmpty()).takeIf { it.isNotEmpty() }?.let { relations ->
                     "人物关系：" + relations.joinToString("；") { "${it.target}（${it.relation}）" + it.detail.takeIf(String::isNotBlank)?.let { d -> "：$d" }.orEmpty() }
                 },
-                dossier?.experiences.orEmpty().takeIf { it.isNotEmpty() }?.let { events -> "经历：\n" + events.joinToString("\n") { "- ${it.text}" } },
-                dossier?.arc?.takeIf(String::isNotBlank)?.let { "成长：$it" },
-                person.manualDescription?.takeIf(String::isNotBlank)
+                person.experiences().takeIf { it.isNotEmpty() }?.let { events -> "经历：\n" + events.joinToString("\n") { "- ${it.text}" } },
+                person.arc().takeIf(String::isNotBlank)?.let { "成长：$it" }
             ).joinToString("\n\n")
             val personality = (person.manualTraits() ?: dossier?.personality.orEmpty()).joinToString("、") { trait ->
                 trait.trait + trait.detail.takeIf(String::isNotBlank)?.let { "（$it）" }.orEmpty()

@@ -19,7 +19,7 @@ class CharacterProfileTest {
         assertEquals(listOf("阿舟"), person.aliases)
         assertEquals("哥哥", person.relationships.single().relation)
         assertEquals(2, person.evidence.size)
-        val renamed = BookCharactersCodec.edit(guide, person.identity, "林先生", "手动备注", null).characters.single()
+        val renamed = BookCharactersCodec.edit(guide, person.identity, "林先生", null).characters.single()
         assertEquals(person.attributes, renamed.attributes)
         assertTrue(ExtractedCharacterCard.from(renamed).description.contains("十八岁"))
     }

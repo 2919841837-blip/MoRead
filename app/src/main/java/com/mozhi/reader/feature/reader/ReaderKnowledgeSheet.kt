@@ -50,7 +50,7 @@ internal data class ReaderKnowledgeActions(
     val cancelCharacters: () -> Unit = {}, val deleteCharacters: () -> Unit = {},
     val locateCharacter: (BookCharacterGuideEntity, CharacterEvidence) -> Unit = { _, _ -> },
     val saveCharacterCard: (ExtractedCharacterCard) -> Unit = {},
-    val saveCharacter: (String?, String, String, ManualCharacterAttributes?) -> Unit = { _, _, _, _ -> },
+    val saveCharacter: (String?, String, ManualCharacterAttributes?) -> Unit = { _, _, _ -> },
     val openLook: (String) -> Unit = {},
     val saveOutline: (Int, String) -> Unit = { _, _ -> },
     val locateAnchor: (BookCharacterGuideEntity, SourceAnchor) -> Unit = { _, _ -> }
@@ -476,10 +476,10 @@ internal fun BookCharactersPanel(state: KnowledgeUiState, chapters: List<Chapter
     val idleText = when {
         state.characters.pendingProfiles > 0 -> stringResource(R.string.characters_pending_resume, state.characters.pendingProfiles)
         state.characters.checkpointParts > 0 -> "已有提取进度，点击「提取」继续"
-        state.characters.outdated -> "正文已变化，可重新提取；手动资料保留"
+        state.characters.outdated -> "正文已变化，可重新提取；手写内容保留"
         // 点名扫描的结果并进旧资料，scannedChapters 沿用旧值，不能说成「已扫描全书」。
         saved?.guide?.mode == BookCharacterGuide.MODE_TARGETED -> stringResource(R.string.characters_targets_status, people.size)
-        saved?.guide?.scannedChapters == 0 -> "手动整理"
+        saved?.guide?.scannedChapters == 0 -> "手动添加"
         saved != null -> if (saved.guide.progressBounded) "已扫描到第 ${saved.guide.scannedChapters} 章" else "已扫描全书 ${saved.guide.scannedChapters} 章"
         else -> "可从正文提取，也可手动添加"
     }
@@ -623,12 +623,12 @@ internal fun BookCharactersPanel(state: KnowledgeUiState, chapters: List<Chapter
             pointing = false
             actions.previewCharacters(progressBounded, false, targets)
         })
-    if (editorVisible) BookCharacterEditorDialog(editing, people, onDismiss = { editorVisible = false }, onSave = { key, name, description, attributes ->
-        actions.saveCharacter(key, name, description, attributes); editorVisible = false
+    if (editorVisible) BookCharacterEditorDialog(editing, people, onDismiss = { editorVisible = false }, onSave = { key, name, attributes ->
+        actions.saveCharacter(key, name, attributes); editorVisible = false
     })
     card?.let { draft -> ExtractedCharacterCardDialog(draft, onDismiss = { card = null }, onSave = { actions.saveCharacterCard(it); card = null }) }
-    if (information) KnowledgeInfoDialog("书中人物", "由 AI 逐章扫描正文，提取人物、身份与关系。\n\n「读到此处」只发送已经读过的内容，最后一章截到当前进度；「全书」包括还没读到的章节，可能涉及后续情节。\n\nAI 资料保留原文依据，可随时核对；手动新增或编辑的资料会标注为「手动整理」，后续提取不会覆盖。\n\n已核对的段落保留缓存，更新只为新内容计费。停止后可继续，更新期间仍能查看已有资料。", { information = false })
-    if (deleting) ConfirmKnowledgeDelete("删除人物资料？", "删除这本书的人物资料（包括手动整理）及未完成的提取进度。", { deleting = false }) {
+    if (information) KnowledgeInfoDialog("书中人物", "由 AI 逐章扫描正文，提取人物、身份与关系。\n\n「读到此处」只发送已经读过的内容，最后一章截到当前进度；「全书」包括还没读到的章节，可能涉及后续情节。\n\nAI 资料保留原文依据，可随时核对；你手写的内容会标注为「手写属性」，后续提取不会覆盖。\n\n已核对的段落保留缓存，更新只为新内容计费。停止后可继续，更新期间仍能查看已有资料。", { information = false })
+    if (deleting) ConfirmKnowledgeDelete("删除人物资料？", "删除这本书的人物资料（包括手写属性）及未完成的提取进度。", { deleting = false }) {
         deleting = false; actions.deleteCharacters()
     }
 }

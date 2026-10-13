@@ -307,17 +307,17 @@ class BookCharactersRepository @Inject constructor(
         finally { generating.remove(bookId) }
     }
 
-    suspend fun saveCharacter(bookId: Long, originalIdentity: String?, name: String, description: String,
+    suspend fun saveCharacter(bookId: Long, originalIdentity: String?, name: String,
         manualAttributes: ManualCharacterAttributes? = null) = withContext(Dispatchers.IO) {
         BookContentMutation.withBook(bookId) {
             library.getBook(bookId)?.takeIf { it.removedAt == 0L } ?: error("书籍已移除")
             val revision = library.bookTextRevision(bookId)
             val previous = dao.getGuide(bookId)
             val guide = BookCharactersCodec.visible(previous, revision)?.guide ?: BookCharacterGuide(emptyList(), 0, 0, true)
-            val edited = BookCharactersCodec.edit(guide, originalIdentity, name, description, manualAttributes)
+            val edited = BookCharactersCodec.edit(guide, originalIdentity, name, manualAttributes)
             val entry = previous?.copy(sourceRevision = revision, promptVersion = BookCharactersCodec.PROMPT_VERSION,
                 contentJson = AiJson.encodeToString(edited), createdAt = System.currentTimeMillis())
-                ?: BookCharacterGuideEntity(bookId, UUID.randomUUID().toString(), revision, "manual", "手动整理",
+                ?: BookCharacterGuideEntity(bookId, UUID.randomUUID().toString(), revision, "manual", "手动添加",
                     BookCharactersCodec.PROMPT_VERSION, AiJson.encodeToString(edited), System.currentTimeMillis())
             dao.saveGuide(entry)
         }

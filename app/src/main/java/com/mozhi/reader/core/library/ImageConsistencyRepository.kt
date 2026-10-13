@@ -97,7 +97,8 @@ class ImageConsistencyRepository @Inject constructor(
         val people = characters.observe(bookId).first().saved?.guide?.characters.orEmpty().mapNotNull { person ->
             val evidence = person.evidence.filter { scope.allowsPosition(it.chapterIndex, it.fact.end) }
             val attributes = person.attributes.filter { scope.allowsPosition(it.evidence.chapterIndex, it.evidence.fact.end) }
-            if (evidence.isEmpty() && attributes.isEmpty() && person.manualDescription == null) null
+            // 用户自己新建的人物即使还没有依据也要留在选角名单里；手写外貌不进形象配方（initialLook 只看 attributes）。
+            if (evidence.isEmpty() && attributes.isEmpty() && !person.userOwned) null
             else person.copy(evidence = evidence, attributes = attributes, relationships = emptyList())
         }
         return ImageBookContext(book, people, looks(bookId), style(bookId), chapter)

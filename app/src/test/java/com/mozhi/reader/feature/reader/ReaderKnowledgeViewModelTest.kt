@@ -107,14 +107,14 @@ class ReaderKnowledgeViewModelTest {
             every { characters.observe(1) } returns MutableStateFlow(BookCharactersSnapshot())
             every { runner.states } returns MutableStateFlow(emptyMap())
             val layer = ManualCharacterAttributes(identity = "摆渡人", age = "", role = CharacterRole.SUPPORTING)
-            coEvery { characters.saveCharacter(1, "林舟", "林舟", "用户整理的资料", layer) } just Runs
+            coEvery { characters.saveCharacter(1, "林舟", "林舟", layer) } just Runs
             val model = ReaderKnowledgeViewModel(outlines, characters, runner, mockk(relaxed = true))
             store.put("knowledge", model)
             model.bind(1)
             runCurrent()
-            model.saveCharacter("林舟", "林舟", "用户整理的资料", layer)
+            model.saveCharacter("林舟", "林舟", layer)
             runCurrent()
-            coVerify { characters.saveCharacter(1, "林舟", "林舟", "用户整理的资料", layer) }
+            coVerify { characters.saveCharacter(1, "林舟", "林舟", layer) }
             assertNull(model.state.value.error)
         } finally {
             store.clear()

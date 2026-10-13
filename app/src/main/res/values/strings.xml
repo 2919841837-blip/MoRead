@@ -390,7 +390,7 @@
     <string name="characters_scope_bounded">读到此处 · 前 %1$d 章</string>
     <string name="characters_scope_full">整本书 · %1$d 章</string>
     <string name="characters_quick_models">模型：%1$s</string>
-    <string name="characters_quick_body">先从本地统计出的候选里整理出人物名单，再为每位人物各写一份档案：小传、性格、经历、关系和台词，每条都标明出自哪段原文。请求数取决于人物多少而不是书的长度，最多约 %1$d 次，按服务商计费。\n\n整理好的人物会立刻保存；中途停止、切到后台或被系统关闭后，可以接着整理，不重复计费。</string>
+    <string name="characters_quick_body">先从本地统计出的候选里整理出人物名单，再为每位人物各写一份档案：小传、性格、经历和关系，每条都标明出自哪段原文。请求数取决于人物多少而不是书的长度，最多约 %1$d 次，按服务商计费。\n\n整理好的人物会立刻保存；中途停止、切到后台或被系统关闭后，可以接着整理，不重复计费。</string>
     <string name="characters_quick_web_bounded">已开启联网（%1$s）：只用来确认书名、译名和人物称呼，不查询剧情；查到的内容单独列为书外资料并折叠。</string>
     <string name="characters_quick_web_full">已开启联网（%1$s）：可补充人物背景；查到的内容单独列为书外资料，不写进人物档案。</string>
     <string name="characters_quick_start">开始整理</string>
@@ -409,7 +409,7 @@
     <string name="characters_targets_action">提取这些人物</string>
     <string name="characters_targets_title">提取点名的人物？</string>
     <string name="characters_targets_models">模型：%1$s</string>
-    <string name="characters_targets_body">只整理你点名的人物：%1$s\n\n结果并入现有的人物资料，已有人物与手动整理都会保留。</string>
+    <string name="characters_targets_body">只整理你点名的人物：%1$s\n\n结果并入现有的人物资料，已有人物与你手写的内容都会保留。</string>
     <string name="characters_targets_cost">全程最多 %1$d 次调用，按服务商计费。</string>
     <string name="characters_targets_start">开始整理</string>
     <string name="characters_targets_status">按名单整理 · %1$d 位人物</string>
@@ -573,7 +573,6 @@
     <string name="characters_role_badge_major">主要</string>
     <string name="characters_role_badge_supporting">配角</string>
     <string name="characters_relations_count">%1$d 位关系人</string>
-    <string name="characters_manual">手动整理</string>
     <string name="characters_person_actions">%1$s的人物操作</string>
     <string name="characters_back">返回人物列表</string>
     <string name="characters_toggle_graph_cd">查看人物关系图</string>
@@ -595,6 +594,9 @@
     <string name="dossier_aliases_label">别名</string>
     <string name="dossier_alias_hint">「、」分隔多个别名，逗号与换行也可以</string>
     <string name="dossier_personality_hint">每行一条：「性格词」或「性格词（一句话说明）」</string>
+    <string name="dossier_experiences_hint">每行一条，可在行首写「第 3 章 · 」标出章节</string>
+    <string name="dossier_arc_hint">一两句即可，看不出变化就留空</string>
+    <string name="dossier_relations_hint">每行一条：「对象（关系）」或「对象（关系）：说明」</string>
     <string name="dossier_attr_manual">手写</string>
     <string name="dossier_attr_restore">恢复 AI 内容</string>
     <string name="dossier_attr_hint">手写的字段由你保管，后续 AI 提取不会覆盖；留空则不再显示。</string>
@@ -604,15 +606,11 @@
     <string name="dossier_editor_new">新增书中人物</string>
     <string name="dossier_editor_edit">编辑书中人物</string>
     <string name="dossier_duplicate_name">已有同名人物，请直接编辑该人物</string>
-    <string name="dossier_manual_field">人物资料 / 身份与关系</string>
     <string name="dossier_save">保存人物</string>
-    <string name="dossier_manual_keep_hint">手动整理的资料会保留，后续 AI 提取不会覆盖。原文依据单独保存，可回到正文核对。</string>
     <string name="characters_manual_attributes">手写属性</string>
     <string name="dossier_timeline">人物经历</string>
     <string name="dossier_arc">成长变化</string>
     <string name="dossier_relations">社会关系</string>
-    <string name="dossier_quotes">经典台词</string>
-    <string name="dossier_manual">手动资料</string>
     <string name="dossier_jump">跳到原文</string>
     <string name="dossier_chapter_unknown">未注明章节</string>
     <string name="dossier_relation_reverse">对方眼中：%1$s</string>

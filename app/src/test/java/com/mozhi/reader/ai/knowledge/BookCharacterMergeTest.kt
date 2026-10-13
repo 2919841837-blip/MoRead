@@ -26,7 +26,9 @@ class BookCharacterMergeTest {
 
     /** 用户手写的一层覆盖：这里只列用得到的几项。 */
     private fun layer(identity: String? = null, age: String? = null, aliases: List<String>? = null,
-        role: CharacterRole? = null) = ManualCharacterAttributes(identity = identity, age = age, aliases = aliases, role = role)
+        role: CharacterRole? = null, events: List<ManualEvent>? = null, arc: String? = null,
+        relations: List<ManualRelation>? = null) = ManualCharacterAttributes(identity = identity, age = age,
+        aliases = aliases, role = role, experiences = events, arc = arc, relationships = relations)
 
     private fun entity(guide: BookCharacterGuide, revision: String = "a".repeat(64)) =
         BookCharacterGuideEntity(1, "gen", revision, "model", "模型", BookCharactersCodec.PROMPT_VERSION,
@@ -205,5 +207,77 @@ class BookCharacterMergeTest {
         assertEquals(listOf("林舟"), people.map { it.name })
         assertEquals("摆渡人", people.single().attributeValues(CharacterAttributeKind.IDENTITY).single())
         assertTrue(people.single().evidence.isEmpty())
+    }
+
+    // —— 手写的经历 / 成长变化 / 社会关系 ——
+
+    private fun written() = layer(events = listOf(ManualEvent("修好了灯", 4)), arc = "放下执念。",
+        relations = listOf(ManualRelation("苏晚", "师姐", "常来看他")))
+
+    @Test fun `the written timeline arc and relations outlive a full rescan`() {
+        val previous = guide(person("林舟", fact("在灯塔等候"), manual = written()))
+        val fresh = guide(BookCharacter("林舟", emptyList(), dossier = CharacterDossier(arc = "从隐居到重新点灯。",
+            experiences = listOf(DossierEvent("收到来信", 1)), relationships = listOf(DossierRelation("小满", "同伴")))))
+        val merged = BookCharactersCodec.mergeManual(fresh, previous).characters.single()
+        assertEquals(listOf("修好了灯"), merged.experiences().map { it.text })
+        assertEquals("放下执念。", merged.arc())
+        assertEquals(listOf("苏晚"), merged.manualRelations()!!.map { it.target })
+        // 没接管的字段照旧由 AI 刷新：档案还在，只是取值被手写层压住。
+        assertEquals("从隐居到重新点灯。", merged.dossier!!.arc)
+    }
+
+    @Test fun `the written timeline arc and relations outlive a targeted scan too`() {
+        val previous = guide(person("林舟", fact("在灯塔等候"), manual = written()))
+        val fresh = guide(BookCharacter("林舟", emptyList(), dossier = CharacterDossier(experiences = listOf(DossierEvent("收到来信", 1)))))
+        val merged = BookCharactersCodec.mergeTargeted(fresh, previous).characters.single()
+        assertEquals(listOf("修好了灯"), merged.experiences().map { it.text })
+        assertEquals("放下执念。", merged.arc())
+        assertEquals("师姐", merged.manualRelations()!!.single().relation)
+    }
+
+    @Test fun `clearing the written timeline keeps it empty through a rescan`() {
+        val previous = guide(person("林舟", fact("在灯塔等候"),
+            manual = layer(events = emptyList(), arc = "", relations = emptyList())))
+        val fresh = guide(BookCharacter("林舟", emptyList(), dossier = CharacterDossier(arc = "变化。",
+            experiences = listOf(DossierEvent("收到来信", 1)), relationships = listOf(DossierRelation("小满", "同伴")))))
+        val merged = BookCharactersCodec.mergeManual(fresh, previous).characters.single()
+        assertTrue(merged.experiences().isEmpty())
+        assertEquals("", merged.arc())
+        assertTrue(merged.manualRelations()!!.isEmpty())
+    }
+
+    @Test fun `a dropped layer hands the written timeline back to the AI`() {
+        val owned = person("林舟", fact("在灯塔等候"), manual = written()).copy(
+            dossier = CharacterDossier(arc = "变化。", experiences = listOf(DossierEvent("收到来信", 1))))
+        val released = owned.copy(manualAttributes = null)
+        assertEquals(listOf("收到来信"), released.experiences().map { it.text })
+        assertEquals("变化。", released.arc())
+        assertNull(released.manualRelations())
+    }
+
+    @Test fun `editing a person records that the user has been through it even without a written field`() {
+        val (renamed, added) = BookCharactersCodec.edit(BookCharacterGuide(listOf(BookCharacter("林舟", listOf(fact("在灯塔等候")))), 1, 100),
+            "林舟", "阿舟", null).let { it.characters.single() to BookCharactersCodec.edit(it, null, "船夫", null).characters.last() }
+        assertTrue(renamed.userOwned)
+        assertTrue(added.userOwned)
+        assertNull(renamed.manualAttributes)
+        // 只改过名字的人也留得住：重扫结果里没有「阿舟」时整条保留。
+        val merged = BookCharactersCodec.mergeManual(guide(person("林舟", fact("灯还亮着"))),
+            guide(renamed.copy(evidence = emptyList())))
+        assertEquals(listOf("阿舟"), merged.characters.map { it.name })
+    }
+
+    @Test fun `taking over the timeline retires the legacy manual notes`() {
+        val person = BookCharacter("林舟", listOf(fact("在灯塔等候")), "怕水。\n在灯塔长住。")
+        val written = BookCharacterGuide(listOf(person), 1, 100)
+        // 没接管经历：遗留载体留着，老文字照旧从这个人的经历里读出来。
+        val untouched = BookCharactersCodec.edit(written, "林舟", "林舟", null).characters.single()
+        assertEquals("怕水。\n在灯塔长住。", untouched.manualDescription)
+        assertEquals(listOf("怕水。", "在灯塔长住。"), untouched.experiences().map { it.text })
+        // 接管经历：文字已经搬进手写层，遗留字段退场。
+        val migrated = BookCharactersCodec.edit(written, "林舟", "林舟",
+            layer(events = listOf(ManualEvent("怕水。")))).characters.single()
+        assertNull(migrated.manualDescription)
+        assertEquals(listOf("怕水。"), migrated.experiences().map { it.text })
     }
 }

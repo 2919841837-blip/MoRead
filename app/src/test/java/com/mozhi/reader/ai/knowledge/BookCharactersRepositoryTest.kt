@@ -64,29 +64,30 @@ class BookCharactersRepositoryTest {
 
     @Test fun laterAiAliasCannotReplaceAnExistingManualRename() {
         val initial = BookCharacterGuide(listOf(BookCharacter("林舟", emptyList())), 1, 100)
-        val edited = BookCharactersCodec.edit(initial, "林舟", "阿舟", "用户整理的资料", null)
+        val edited = BookCharactersCodec.edit(initial, "林舟", "阿舟", null)
         val generated = initial.copy(characters = listOf(BookCharacter("阿舟", emptyList()), initial.characters.single()))
         val merged = BookCharactersCodec.mergeManual(generated, edited)
         assertEquals(1, merged.characters.size)
         assertEquals("林舟", merged.characters.single().identity)
-        assertEquals("用户整理的资料", merged.characters.single().manualDescription)
+        // 只改过名字（一个字都没手写）也不能被后一次扫描整条替掉：userEdited 记着这次经手。
+        assertTrue(merged.characters.single().userEdited)
     }
 
     @Test fun manualCharactersNeedNoModelAndEditsSurviveExtractionAndSourceChanges() = runBlocking {
-        repository.saveCharacter(1, null, "船夫", "手动补充：熟悉河道。")
+        repository.saveCharacter(1, null, "船夫", ManualCharacterAttributes(bio = "熟悉河道。"))
         assertEquals(0, client.requests)
         coVerify(exactly = 0) { factory.forRole(any()) }
         repository.generate(repository.preview(1))
-        repository.saveCharacter(1, "林舟", "阿舟", "手动整理：灯塔守望者。")
+        repository.saveCharacter(1, "林舟", "阿舟", ManualCharacterAttributes(identity = "灯塔守望者"))
         repository.generate(repository.preview(1))
         var people = repository.observe(1).first().saved!!.guide.characters
         assertEquals(3, people.size)
         val edited = people.first { it.name == "阿舟" }
         assertEquals("林舟", edited.identity)
-        assertEquals("手动整理：灯塔守望者。", edited.manualDescription)
+        assertEquals("灯塔守望者", edited.attributeValues(CharacterAttributeKind.IDENTITY).single())
         assertTrue(edited.evidence.isNotEmpty())
-        assertEquals("手动整理：灯塔守望者。", ExtractedCharacterCard.from(edited).description)
-        assertTrue(runCatching { repository.saveCharacter(1, null, "阿舟", "重复") }.isFailure)
+        assertTrue(ExtractedCharacterCard.from(edited).description.contains("身份：灯塔守望者"))
+        assertTrue(runCatching { repository.saveCharacter(1, null, "阿舟", null) }.isFailure)
         revision = "b".repeat(64)
         val snapshot = repository.observe(1).first()
         assertTrue(snapshot.outdated)
@@ -94,28 +95,28 @@ class BookCharactersRepositoryTest {
         assertEquals(setOf("阿舟", "船夫"), people.map { it.name }.toSet())
         assertTrue(people.all { it.evidence.isEmpty() })
         repository.generate(repository.preview(1))
-        assertTrue(repository.observe(1).first().saved!!.guide.characters.any { it.name == "阿舟" && it.manualDescription != null && it.evidence.isNotEmpty() })
+        assertTrue(repository.observe(1).first().saved!!.guide.characters.any { it.name == "阿舟" && it.manualAttributes != null && it.evidence.isNotEmpty() })
     }
 
     @Test fun manualEditDuringGenerationIsMergedAtPublicationAndNeverLosesToTheAiSnapshot() = runBlocking {
         repository.generate(repository.preview(1))
         database.bookCharacterDao().deleteParts(1)
         val paused = pauseAfterFirstPart()
-        repository.saveCharacter(1, "林舟", "林舟", "生成期间的手动修订")
+        repository.saveCharacter(1, "林舟", "林舟", ManualCharacterAttributes(bio = "生成期间的手动修订"))
         paused.cancelAndJoin()
         client.onStream = {}
         repository.generate(repository.preview(1))
-        assertEquals("生成期间的手动修订", repository.observe(1).first().saved!!.guide.characters.first { it.name == "林舟" }.manualDescription)
+        assertEquals("生成期间的手动修订", repository.observe(1).first().saved!!.guide.characters.first { it.name == "林舟" }.manualAttributes?.bio)
     }
 
     @Test fun changingToReadProgressDoesNotKeepUnreadEvidenceOnManuallyEditedPeople() = runBlocking {
         repository.generate(repository.preview(1))
-        repository.saveCharacter(1, "小满", "小满", "用户自己的资料")
+        repository.saveCharacter(1, "小满", "小满", ManualCharacterAttributes(bio = "用户自己的资料"))
         currentBook = book.copy(maxReachedChapterIndex = 0, maxReachedCharOffset = texts[0].length)
         repository.generate(repository.preview(1, progressBounded = true))
         val people = repository.observe(1).first().saved!!.guide.characters
         assertTrue(people.first { it.name == "小满" }.evidence.isEmpty())
-        assertEquals("用户自己的资料", people.first { it.name == "小满" }.manualDescription)
+        assertEquals("用户自己的资料", people.first { it.name == "小满" }.manualAttributes?.bio)
     }
 
     @Test fun explicitWholeBookPreviewIsLocalAndGenerationIncludesTheUnreadLastChapter() = runBlocking {
@@ -443,12 +444,13 @@ class BookCharactersRepositoryTest {
     @Test fun targetedScanKeepsEarlierCharactersAndManualEdits() = runBlocking {
         useQuickTexts()
         repository.generate(repository.preview(1))
-        repository.saveCharacter(1, "林舟", "阿舟", "手动整理：灯塔守望者。")
+        repository.saveCharacter(1, "林舟", "阿舟", ManualCharacterAttributes(bio = "灯塔守望者。"))
         val before = client.requests
         repository.generateQuick(repository.preview(1, targets = listOf(CharacterTarget("小满"))))
         val people = BookCharactersCodec.visible(database.bookCharacterDao().getGuide(1), revision)!!.guide.characters
         assertEquals(setOf("林舟", "小满"), people.map { it.identity }.toSet())
-        assertEquals("手动整理：灯塔守望者。", people.single { it.name == "阿舟" }.manualDescription)
+        // 手写的小传与手动改名一起留住：点名扫描只并入新认识的人。
+        assertEquals("灯塔守望者。", people.single { it.name == "阿舟" }.manualAttributes?.bio)
         assertTrue(people.single { it.identity == "小满" }.dossier != null)
         assertEquals(before + 1, client.requests)
     }
@@ -456,7 +458,7 @@ class BookCharactersRepositoryTest {
     /** 手改的基本属性存进 contentJson 的手动层：读回来一字不差，重扫也动不了它。 */
     @Test fun handWrittenAttributesRoundTripAndSurviveEveryLaterScan() = runBlocking {
         repository.generate(repository.preview(1))
-        repository.saveCharacter(1, "林舟", "林舟", "手动整理：灯塔守望者。",
+        repository.saveCharacter(1, "林舟", "林舟",
             ManualCharacterAttributes(identity = "摆渡人", age = "", aliases = listOf("阿舟")))
         val saved = repository.observe(1).first().saved!!.guide.characters.first { it.name == "林舟" }
         assertEquals("摆渡人", saved.attributeValues(CharacterAttributeKind.IDENTITY).single())
@@ -466,16 +468,35 @@ class BookCharactersRepositoryTest {
         val rescanned = repository.observe(1).first().saved!!.guide.characters.first { it.name == "林舟" }
         assertEquals("摆渡人", rescanned.attributeValues(CharacterAttributeKind.IDENTITY).single())
         assertEquals(emptyList<String>(), rescanned.attributeValues(CharacterAttributeKind.AGE))
-        assertEquals("手动整理：灯塔守望者。", rescanned.manualDescription)
+        // 上一版的「人物资料」字段不再有人写：编辑过的人物身上它必须是空的。
+        assertNull(rescanned.manualDescription)
         // 没接管的字段照旧由 AI 维护：依据仍是这次扫描刚写下来的。
         assertTrue(rescanned.evidence.isNotEmpty())
+    }
+
+    /** 手写的经历 / 成长变化 / 关系同样存进 contentJson，读回来一字不差，重扫也动不了它。 */
+    @Test fun handWrittenTimelineArcAndRelationsRoundTripAndSurviveEveryLaterScan() = runBlocking {
+        repository.generate(repository.preview(1))
+        repository.saveCharacter(1, "林舟", "林舟", ManualCharacterAttributes(
+            experiences = listOf(ManualEvent("修好了灯", 4), ManualEvent("回了老家")),
+            arc = "放下执念。", relationships = listOf(ManualRelation("苏晚", "师姐", "常来看他"))))
+        val saved = repository.observe(1).first().saved!!.guide.characters.first { it.name == "林舟" }
+        assertEquals(listOf("修好了灯", "回了老家"), saved.experiences().map { it.text })
+        assertEquals(4, saved.experiences().first().chapterIndex)
+        assertEquals("放下执念。", saved.arc())
+        assertEquals(listOf("苏晚"), saved.manualRelations()!!.map { it.target })
+        repository.generate(repository.preview(1))
+        val rescanned = repository.observe(1).first().saved!!.guide.characters.first { it.name == "林舟" }
+        assertEquals(listOf("修好了灯", "回了老家"), rescanned.experiences().map { it.text })
+        assertEquals("放下执念。", rescanned.arc())
+        assertEquals("师姐", rescanned.manualRelations()!!.single().relation)
     }
 
     /** 快速扫描（名单 + 档案）走 mergeManual：手写的身份与档位留下，AI 基线照旧刷新。 */
     @Test fun aQuickRescanRefreshesTheAiBaselineAndLeavesTheWrittenFieldsAlone() = runBlocking {
         useQuickTexts()
         repository.generateQuick(repository.preview(1, quick = true))
-        repository.saveCharacter(1, "小满", "小满", "",
+        repository.saveCharacter(1, "小满", "小满",
             ManualCharacterAttributes(identity = "送信人", role = CharacterRole.PROTAGONIST))
         repository.generateQuick(repository.preview(1, quick = true))
         val xiaoman = repository.observe(1).first().saved!!.guide.characters.first { it.name == "小满" }
@@ -490,7 +511,7 @@ class BookCharactersRepositoryTest {
     @Test fun aTargetedScanMergesNewPeopleWithoutTouchingTheWrittenFields() = runBlocking {
         useQuickTexts()
         repository.generate(repository.preview(1))
-        repository.saveCharacter(1, "林舟", "林舟", "", ManualCharacterAttributes(identity = "摆渡人"))
+        repository.saveCharacter(1, "林舟", "林舟", ManualCharacterAttributes(identity = "摆渡人"))
         repository.generateQuick(repository.preview(1, targets = listOf(CharacterTarget("小满"))))
         val people = repository.observe(1).first().saved!!.guide.characters
         assertEquals(setOf("林舟", "小满"), people.map { it.identity }.toSet())

@@ -13,7 +13,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
-import androidx.compose.material.icons.outlined.FormatQuote
 import androidx.compose.material.icons.outlined.MoreHoriz
 import androidx.compose.material.icons.outlined.NorthEast
 import androidx.compose.material3.*
@@ -124,7 +123,6 @@ internal fun CharacterRosterCard(person: BookCharacter, thumbnail: String?, pale
                     summary.tags.forEach { tag -> DossierChip(tag, palette) }
                 }
                 val meta = listOfNotNull(
-                    stringResource(R.string.characters_manual).takeIf { person.manualDescription != null },
                     stringResource(R.string.characters_manual_attributes).takeIf { person.manualAttributes != null },
                     stringResource(R.string.characters_relations_count, summary.relationCount).takeIf { summary.relationCount > 0 }
                 )
@@ -181,8 +179,8 @@ internal fun characterProgressText(detail: KnowledgeProgress): String = when (de
 
 /**
  * 人物档案页：弹层里的二级页，带返回。从上到下是头像与一句话、基本信息、小传、性格、外貌、经历时间线、
- * 成长变化、关系（自我中心图 + 列表）、台词；手动资料与书外资料排在最后。依据不再单列成清单：
- * 性格标签、经历、关系与台词各自就能点回原文。
+ * 成长变化、关系（自我中心图 + 列表），书外资料排在最后。依据不再单列成清单：
+ * 性格标签、经历与关系各自就能点回原文（手写的那几条没有原文坐标，因此不提供跳转）。
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -292,7 +290,7 @@ internal fun CharacterDossierPage(
                     }
                 }
             }
-            dossier?.arc?.takeIf(String::isNotBlank)?.let { arc -> item(key = "arc") {
+            person.arc().takeIf(String::isNotBlank)?.let { arc -> item(key = "arc") {
                 DossierSection(stringResource(R.string.dossier_arc), palette) {
                     Text(arc, style = MaterialTheme.typography.bodyMedium.copy(lineHeight = 24.sp), color = palette.onBackground)
                 }
@@ -305,29 +303,6 @@ internal fun CharacterDossierPage(
                     }
                 }
             }
-            dossier?.quotes?.takeIf { it.isNotEmpty() }?.let { quotes -> item(key = "quotes") {
-                DossierSection(stringResource(R.string.dossier_quotes), palette) {
-                    Column(verticalArrangement = Arrangement.spacedBy(MoReadSpacing.s)) {
-                        quotes.forEach { quote ->
-                            Surface(onClick = { onLocate(CharacterSource.Anchor(quote.anchor)) }, shape = RoundedCornerShape(14.dp),
-                                color = palette.background.copy(alpha = .55f), modifier = Modifier.fillMaxWidth()) {
-                                Row(Modifier.padding(MoReadSpacing.m), horizontalArrangement = Arrangement.spacedBy(MoReadSpacing.s)) {
-                                    Icon(Icons.Outlined.FormatQuote, null, tint = palette.accent, modifier = Modifier.size(18.dp))
-                                    Column(Modifier.weight(1f)) {
-                                        Text(quote.text, style = MaterialTheme.typography.bodyLarge, fontFamily = FontFamily.Serif, color = palette.onBackground)
-                                        Text(chapter(quote.anchor.chapterIndex), style = MaterialTheme.typography.labelSmall, color = palette.muted)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            } }
-            person.manualDescription?.takeIf(String::isNotBlank)?.let { manual -> item(key = "manual") {
-                DossierSection(stringResource(R.string.dossier_manual), palette) {
-                    Text(manual, style = MaterialTheme.typography.bodyMedium.copy(lineHeight = 24.sp), color = palette.onBackground)
-                }
-            } }
             val notes = externalNotes.filter { it.character == person.name || it.character in person.aliases }
             if (notes.isNotEmpty()) item(key = "external") {
                 var open by rememberSaveable(person.identity) { mutableStateOf(!progressBounded) }

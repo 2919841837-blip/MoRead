@@ -4,7 +4,6 @@ import com.mozhi.reader.ai.knowledge.CharacterJsonSalvage.objects
 import com.mozhi.reader.ai.knowledge.CharacterJsonSalvage.passageNumber
 import com.mozhi.reader.ai.knowledge.CharacterJsonSalvage.strings
 import com.mozhi.reader.ai.knowledge.CharacterJsonSalvage.text
-import com.mozhi.reader.core.text.QuoteMatcher
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonObject
 
@@ -26,10 +25,6 @@ data class DossierEvent(val text: String, val chapterIndex: Int? = null, val anc
 @Serializable
 data class DossierRelation(val target: String, val relation: String, val detail: String = "", val anchor: SourceAnchor? = null)
 
-/** 经典台词：唯一逐字核对过的条目，[anchor] 精确到这句话本身。 */
-@Serializable
-data class DossierQuote(val text: String, val anchor: SourceAnchor)
-
 /**
  * 人物档案：给读者看的结构化资料。证据是「出自哪一段」而不是逐字引文——模型只需写段落编号，
  * 位置由本地换算，所以便宜模型也写得出，界面上的文字也不必为了迁就引文而别扭。
@@ -46,14 +41,13 @@ data class CharacterDossier(
     val arc: String = "",
     val personality: List<DossierTrait> = emptyList(),
     val experiences: List<DossierEvent> = emptyList(),
-    val relationships: List<DossierRelation> = emptyList(),
-    val quotes: List<DossierQuote> = emptyList()
+    val relationships: List<DossierRelation> = emptyList()
 ) {
     val isEmpty: Boolean get() = tagline.isEmpty() && bio.isEmpty() && personality.isEmpty() && experiences.isEmpty() &&
-        relationships.isEmpty() && quotes.isEmpty() && identity.isEmpty() && appearance.isEmpty()
+        relationships.isEmpty() && identity.isEmpty() && appearance.isEmpty()
 
     fun anchors(): List<SourceAnchor> = listOfNotNull(appearanceAnchor) + personality.mapNotNull { it.anchor } +
-        experiences.mapNotNull { it.anchor } + relationships.mapNotNull { it.anchor } + quotes.map { it.anchor }
+        experiences.mapNotNull { it.anchor } + relationships.mapNotNull { it.anchor }
 }
 
 /** 一位人物的整理结果，也是断点缓存里存的内容。[evidence]/[attributes] 回填给插图形象、角色卡等旧调用方。 */
@@ -67,7 +61,8 @@ internal data class ProfiledCharacter(
 )
 
 internal object CharacterDossierCodec {
-    const val PROMPT_VERSION = 1
+    /** 2 = 提示词不再要经典台词。版本折进逐人档案的缓存键，旧档案不再命中、由 pruneDossiers 清掉。 */
+    const val PROMPT_VERSION = 2
 
     fun prompt(bookTitle: String, progressBounded: Boolean): String = """
         你是读书助手，为读者整理《$bookTitle》里一位人物的「人物档案」。
@@ -86,10 +81,9 @@ internal object CharacterDossierCodec {
           "personality": [{"trait": "四字以内的性格词", "detail": "一句话，点出体现它的言行", "p": 段落编号}],
           "experiences": [{"p": 段落编号, "event": "他在这一段经历或做了什么，一两句"}],
           "relationships": [{"name": "对方的称呼", "relation": "对方是他的什么人，如师父、妹妹、宿敌", "detail": "一句话", "p": 段落编号}],
-          "arc": "他的成长与变化，一两句；看不出就留空",
-          "quotes": [{"p": 段落编号, "text": "他亲口说过的一句代表性的话，逐字照抄原文"}]
+          "arc": "他的成长与变化，一两句；看不出就留空"
         }
-        personality 2–4 条；experiences 按段落先后 3–8 条；relationships 最多 8 条，只写段落里出现过的人；quotes 最多 3 条。
+        personality 2–4 条；experiences 按段落先后 3–8 条；relationships 最多 8 条，只写段落里出现过的人。
         p 填段落前方括号里的数字。宁可少写几条，也要保证 JSON 完整。
     """.trimIndent()
 
@@ -106,8 +100,8 @@ internal object CharacterDossierCodec {
     }
 
     /**
-     * 宽容解析：缺字段、超长、类型写歪都只影响那一项；人名与关系对象必须真的出现在段落里（防止编出整个人），
-     * 台词必须逐字核对。整份什么都没有时才报错，交给一次修正。
+     * 宽容解析：缺字段、超长、类型写歪都只影响那一项；人名与关系对象必须真的出现在段落里（防止编出整个人）。
+     * 整份什么都没有时才报错，交给一次修正。
      */
     fun parse(raw: String, target: String, aliases: List<String>, passages: List<SourcePassage>): ProfiledCharacter {
         require(passages.isNotEmpty()) { "没有可供整理的原文段落" }
@@ -149,18 +143,6 @@ internal object CharacterDossierCodec {
                 anchored(item.passageNumber("p", "passage"), listOf(other) + allNames)?.anchor)
         }.distinctBy { it.target }.take(MAX_RELATIONS)
 
-        val quotes = person.objects("quotes", "台词", "lines").mapNotNull { item ->
-            val line = item.text("text", "quote", "台词")?.trim()?.trim('“', '”', '"', '「', '」')?.takeIf { it.length in 4..MAX_QUOTE }
-                ?: return@mapNotNull null
-            val preferred = passageAt(item.passageNumber("p", "passage"))
-            (listOfNotNull(preferred) + passages.filter { it !== preferred }).firstNotNullOfOrNull { passage ->
-                QuoteMatcher.find(passage.text, line)?.let { span ->
-                    DossierQuote(passage.text.substring(span.start, span.end),
-                        SourceAnchor(passage.chapterIndex, passage.start + span.start, passage.start + span.end))
-                }
-            }
-        }.distinctBy { it.anchor }.take(MAX_QUOTES)
-
         val dossier = CharacterDossier(
             tagline = person.text("tagline", "简介", "一句话")?.take(MAX_TAGLINE).orEmpty(),
             bio = person.text("bio", "小传", "biography", "summary")?.take(MAX_BIO).orEmpty(),
@@ -172,8 +154,7 @@ internal object CharacterDossierCodec {
             arc = person.text("arc", "成长", "变化")?.take(MAX_ARC).orEmpty(),
             personality = traits.distinctBy { it.first }.take(MAX_TRAITS).map { DossierTrait(it.first, it.second, it.third?.anchor) },
             experiences = events.map { (text, number, anchor) -> DossierEvent(text, passageAt(number)?.chapterIndex, anchor?.anchor) },
-            relationships = relations,
-            quotes = quotes
+            relationships = relations
         )
         require(!dossier.isEmpty) { "没有整理出这个人物的资料" }
 
@@ -240,6 +221,4 @@ internal object CharacterDossierCodec {
     private const val MAX_EVENTS = 10
     private const val MAX_RELATION = 16
     private const val MAX_RELATIONS = 10
-    private const val MAX_QUOTE = 120
-    private const val MAX_QUOTES = 3
 }

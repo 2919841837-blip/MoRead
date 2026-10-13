@@ -158,8 +158,7 @@ class ReaderKnowledgeVisualTest {
             personality = listOf(DossierTrait("执着", "风雨夜也按时点灯", anchor(0)), DossierTrait("嘴硬心软", "嘴上赶小满走，却给她留了热汤", anchor(20))),
             experiences = listOf(DossierEvent("独自守着灯塔，在雨夜等来了小满。", 0, anchor(0)), DossierEvent("和小满约好天亮出发。", 1, anchor(20)),
                 DossierEvent("在海岸小镇找到寄信人的旧居。", 3, anchor(40))),
-            relationships = listOf(DossierRelation("小满", "同伴", "一起踏上寻信之旅", anchor(20)), DossierRelation("林伯", "祖父", "把守灯的规矩传给了他", anchor(0))),
-            quotes = listOf(DossierQuote("灯不能灭。", anchor(0)))))
+            relationships = listOf(DossierRelation("小满", "同伴", "一起踏上寻信之旅", anchor(20)), DossierRelation("林伯", "祖父", "把守灯的规矩传给了他", anchor(0)))))
         val man = BookCharacter("小满", emptyList(), role = CharacterRole.MAJOR, mentions = 120, dossier = CharacterDossier(
             tagline = "送来迟到之信的姑娘", identity = "信使", personality = listOf(DossierTrait("爽朗")),
             relationships = listOf(DossierRelation("林舟", "旅伴"))))
@@ -183,8 +182,6 @@ class ReaderKnowledgeVisualTest {
         compose.onNodeWithTag("dossier-list").performScrollToKey("relations")
         compose.onNodeWithText("对方眼中：旅伴", substring = true).performScrollTo().assertIsDisplayed()
         capture("character-dossier-relations.png")
-        compose.onNodeWithTag("dossier-list").performScrollToKey("quotes")
-        compose.onNodeWithText("灯不能灭。").performScrollTo().assertIsDisplayed()
         compose.onNodeWithTag("dossier-list").performScrollToKey("relations")
         compose.onNodeWithTag("relation-林舟-小满").performScrollTo().performClick()
         compose.onNodeWithTag("dossier-小满").assertIsDisplayed()
@@ -198,8 +195,8 @@ class ReaderKnowledgeVisualTest {
         val many = guide.copy(characters = (0 until 40).map { BookCharacter("人物$it", guide.characters.first().evidence) })
         val live = mutableStateOf(state.copy(characters = BookCharactersSnapshot(VisibleBookCharacters(personEntry, many))))
         var created: BookCharacter? = null
-        val actions = ReaderKnowledgeActions(saveCharacter = { identity, name, description, attributes ->
-            val next = BookCharactersCodec.edit(live.value.characters.saved!!.guide, identity, name, description, attributes)
+        val actions = ReaderKnowledgeActions(saveCharacter = { identity, name, attributes ->
+            val next = BookCharactersCodec.edit(live.value.characters.saved!!.guide, identity, name, attributes)
             created = next.characters.first { it.name == name }
             live.value = live.value.copy(characters = BookCharactersSnapshot(VisibleBookCharacters(personEntry, next)))
         })
@@ -211,13 +208,14 @@ class ReaderKnowledgeVisualTest {
         val anchor = scroll("characters-list")
         compose.onNodeWithContentDescription("人物12的人物操作").performClick()
         compose.onNodeWithText("编辑人物").performClick()
-        editorField("character-description").performScrollTo().performTextReplacement("守望灯塔的人，手动修订")
+        // 经历是「一行一条」的多行框：整段换掉就是接管这一栏。
+        editorField("character-experiences").performScrollTo().performTextReplacement("守望灯塔的人，手动修订")
         compose.onNodeWithText("保存人物").performClick()
-        assertEquals("守望灯塔的人，手动修订", created?.manualDescription)
+        assertEquals(listOf("守望灯塔的人，手动修订"), created?.experiences()?.map { it.text })
         assertEquals(anchor, scroll("characters-list"), .001f)
         compose.onNodeWithContentDescription("新增人物").performClick()
         editorField("character-name").performScrollTo().performTextInput("渡船人")
-        editorField("character-description").performScrollTo().performTextInput("在码头接应")
+        editorField("character-experiences").performScrollTo().performTextInput("在码头接应")
         compose.onNodeWithText("保存人物").performClick()
         assertEquals("渡船人", created?.name)
         assertEquals(anchor, scroll("characters-list"), .001f)

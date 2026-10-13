@@ -93,7 +93,7 @@ private fun QueuePreviewCard(row: IllustrationQueueEntity, state: StudioState, a
         AlertDialog(onDismissRequest = { editing = false }, title = { Text(stringResource(R.string.image_studio_adjust)) }, text = {
             LazyColumn(Modifier.heightIn(max = 480.dp)) {
                 item { MoReadTextField(action, { action = it }, label = stringResource(R.string.image_studio_scene), singleLine = false, minLines = 3) }
-                items(state.people.filter { person -> person.manualDescription != null ||
+                items(state.people.filter { person -> person.userOwned ||
                     person.evidence.any { it.chapterIndex <= row.chapterIndex } || person.attributes.any { it.evidence.chapterIndex <= row.chapterIndex } }, key = { it.identity }) { person -> Row(verticalAlignment = Alignment.CenterVertically) {
                     Checkbox(person.identity in selected, { selected = if (person.identity in selected) selected - person.identity else selected + person.identity })
                     Text(person.name)

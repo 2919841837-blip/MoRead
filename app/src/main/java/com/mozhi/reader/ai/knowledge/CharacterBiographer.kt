@@ -24,9 +24,9 @@ class CharacterBiographer @Inject constructor(private val requests: KnowledgeJso
     internal data class Biography(val tagline: String = "", val bio: String = "", val arc: String = "",
         val personality: List<DossierTrait> = emptyList(), val role: CharacterRole? = null)
 
-    /** 有 [MIN_FACTS] 条以上事实的人物才值得写小传；最多 [MAX_PEOPLE] 位。 */
+    /** 有 [MIN_FACTS] 条以上事实、且用户还没亲手写过任何字段的人物才值得写小传；最多 [MAX_PEOPLE] 位。 */
     internal fun candidates(people: List<BookCharacter>): List<BookCharacter> = people
-        .filter { it.manualDescription == null && it.evidence.size >= MIN_FACTS }
+        .filter { it.manualDescription == null && it.manualAttributes == null && it.evidence.size >= MIN_FACTS }
         .sortedByDescending { it.evidence.size + it.attributes.size }
         .take(MAX_PEOPLE)
 

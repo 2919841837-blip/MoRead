@@ -93,6 +93,39 @@ class CharacterDossierLayoutTest {
             characterSummary(lin.copy(manualAttributes = ManualCharacterAttributes(age = "三十"))).tags)
     }
 
+    @Test fun `a hand written timeline replaces the dossier one and has nothing to jump back to`() {
+        val written = lin.copy(manualAttributes = ManualCharacterAttributes(
+            experiences = listOf(ManualEvent("在码头接应", 3), ManualEvent("未注明的事"))))
+        val entries = characterTimeline(written)
+        assertEquals(listOf("在码头接应", "未注明的事"), entries.map { it.text })
+        // 未注明章节的排最后；手写的经历没有原文坐标，所以「跳到原文」无处可去。
+        assertEquals(listOf(3, null), entries.map { it.chapterIndex })
+        assertTrue(entries.all { it.source == null })
+        // 清空就是清空：不回落档案里的经历。
+        assertTrue(characterTimeline(lin.copy(manualAttributes = ManualCharacterAttributes(experiences = emptyList()))).isEmpty())
+    }
+
+    @Test fun `a hand written relation list retires the legacy one but keeps what other people say`() {
+        val ferryman = legacy.copy(relationships = listOf(BookCharacterRelationship("林舟", "邻居", CharacterEvidence(2, fact))))
+        val written = lin.copy(manualAttributes = ManualCharacterAttributes(relationships = listOf(ManualRelation("小满", "旅伴"))))
+        val links = egoLinks(written, listOf(written, man, ferryman))
+        // 手写的一条在；档案里的路人甲没了；别人的旧资料仍并成「对方眼中」。
+        assertEquals(listOf("小满", "船夫"), links.map { it.target })
+        assertEquals("旅伴", links.first { it.identity == "小满" }.relation)
+        // 小满的档案写「林舟 · 旅伴」，在林舟这一侧合成「对方眼中」。
+        assertEquals("旅伴", links.first { it.identity == "小满" }.reverse)
+        assertEquals("邻居" to "", links.first { it.target == "船夫" }.relation to links.first { it.target == "船夫" }.reverse)
+        // 关系数与摘要也认手写的那一组。
+        assertEquals(1, characterSummary(written).relationCount)
+    }
+
+    @Test fun `a person the user typed in gets their one line from the first written event`() {
+        val typed = BookCharacter("渡船人", emptyList(), manualAttributes = ManualCharacterAttributes(
+            experiences = listOf(ManualEvent("在码头接应"), ManualEvent("送他过了河"))), userEdited = true)
+        assertEquals("在码头接应", characterSummary(typed).tagline)
+        assertEquals(0, characterSummary(typed).relationCount)
+    }
+
     @Test fun `ego positions are deterministic around the centre starting at the top`() {
         val positions = egoPositions(4)
         assertEquals(positions, egoPositions(4))

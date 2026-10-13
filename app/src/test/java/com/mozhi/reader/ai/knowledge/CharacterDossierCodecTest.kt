@@ -38,11 +38,14 @@ class CharacterDossierCodecTest {
         }
     }
 
-    @Test fun `quotes are verified verbatim and fabricated lines are dropped silently`() {
-        val result = parse("""{"name":"林舟","bio":"守灯人。","quotes":[{"p":1,"text":"灯不能灭"},{"p":1,"text":"我会回来的"}]}""")
-        val quote = result.dossier.quotes.single()
-        assertEquals("灯不能灭", quote.text)
-        assertEquals("灯不能灭", chapterOne.substring(quote.anchor.start, quote.anchor.end))
+    @Test fun `a legacy quotes payload is ignored instead of breaking the dossier`() {
+        // 提示词升到 2 之后不再要台词：模型偶尔还带回 quotes 时只当没看见，其余字段照常解析。
+        val result = parse("""{"name":"林舟","bio":"守灯人。","quotes":[{"p":1,"text":"灯不能灭"}]}""")
+        assertEquals("守灯人。", result.dossier.bio)
+    }
+
+    @Test fun `a quotes only payload is still not a dossier`() {
+        assertTrue(runCatching { parse("""{"name":"林舟","quotes":[{"p":1,"text":"灯不能灭"}]}""") }.isFailure)
     }
 
     @Test fun `invented people and out of range passages never break the dossier`() {

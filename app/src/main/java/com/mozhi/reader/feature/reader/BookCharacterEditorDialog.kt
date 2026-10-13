@@ -22,27 +22,28 @@ import com.mozhi.reader.ai.knowledge.ManualCharacterAttributes
 import com.mozhi.reader.ui.components.MoReadPageDialog
 import com.mozhi.reader.ui.components.MoReadTextField
 
-/** 草稿要跨旋转保留：rememberSaveable 只认基本类型，这里把每个字段手工列出来。 */
+/** 草稿要跨旋转保留：rememberSaveable 只认基本类型，这里把每个字段手工列出来（顺序与数据类一致）。 */
 private val CharacterAttributeDraftSaver = listSaver<CharacterAttributeDraft, String>(
     save = { draft -> listOf(draft.identity, draft.gender, draft.age, draft.appearance, draft.tagline,
-        draft.bio, draft.aliases, draft.personality, draft.role?.name.orEmpty()) },
+        draft.bio, draft.aliases, draft.personality, draft.role?.name.orEmpty(),
+        draft.experiences, draft.arc, draft.relations) },
     restore = { values -> CharacterAttributeDraft(values[0], values[1], values[2], values[3], values[4], values[5],
-        values[6], values[7], values[8].takeIf { it.isNotEmpty() }?.let { role -> CharacterRole.valueOf(role) }) })
+        values[6], values[7], values[8].takeIf { it.isNotEmpty() }?.let { role -> CharacterRole.valueOf(role) },
+        values[9], values[10], values[11]) })
 
 /**
- * 新增/编辑一位人物：姓名、基本属性（主次/身份/性别/年龄/外貌/别名/性格/一句话简介/小传）与人物资料。
+ * 新增/编辑一位人物：姓名、基本属性（主次/身份/性别/年龄/外貌/别名/性格）与档案三项长文
+ * （人物经历/成长变化/社会关系），最后是一句话简介与小传。字段名一律沿用档案页的栏目名。
  *
  * 手写过的字段从此由用户接管（[ManualCharacterAttributes]），重扫不会覆盖；「恢复 AI 内容」把文本填回
  * 模型原值，保存时这一项自然交回 AI；留空则表示要求不显示，重扫也不会填回。
+ * 经历一行一条（行首可写「第 3 章」），社会关系一行一条「对象（关系）：说明」。
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun BookCharacterEditorDialog(person: BookCharacter?, people: List<BookCharacter>, onDismiss: () -> Unit,
-    onSave: (String?, String, String, ManualCharacterAttributes?) -> Unit) {
+    onSave: (String?, String, ManualCharacterAttributes?) -> Unit) {
     var name by rememberSaveable(person?.identity) { mutableStateOf(person?.name.orEmpty()) }
-    var description by rememberSaveable(person?.identity) {
-        mutableStateOf(person?.manualDescription ?: person?.evidence?.joinToString("\n") { it.fact.text }.orEmpty())
-    }
     val baseline = remember(person) { CharacterAttributeDraftCodec.baseline(person) }
     val ai = remember(person) { CharacterAttributeDraftCodec.aiBaseline(person) }
     var draft by rememberSaveable(person?.identity, stateSaver = CharacterAttributeDraftSaver) { mutableStateOf(baseline) }
@@ -76,19 +77,29 @@ internal fun BookCharacterEditorDialog(person: BookCharacter?, people: List<Book
                     AttributeField(R.string.dossier_personality, draft.personality, { draft = draft.copy(personality = it) },
                         owned = manual?.personality != null, restore = ai.personality, onRestore = { draft = draft.copy(personality = it) },
                         minLines = 3, supporting = stringResource(R.string.dossier_personality_hint))
+                    AttributeField(R.string.dossier_timeline, draft.experiences, { draft = draft.copy(experiences = it) },
+                        owned = manual?.experiences != null, restore = ai.experiences, onRestore = { draft = draft.copy(experiences = it) },
+                        minLines = 6, supporting = stringResource(R.string.dossier_experiences_hint),
+                        modifier = Modifier.testTag("character-experiences"))
+                    AttributeField(R.string.dossier_arc, draft.arc, { draft = draft.copy(arc = it) },
+                        owned = manual?.arc != null, restore = ai.arc, onRestore = { draft = draft.copy(arc = it) },
+                        minLines = 2, supporting = stringResource(R.string.dossier_arc_hint),
+                        modifier = Modifier.testTag("character-arc"))
+                    AttributeField(R.string.dossier_relations, draft.relations, { draft = draft.copy(relations = it) },
+                        owned = manual?.relationships != null, restore = ai.relations, onRestore = { draft = draft.copy(relations = it) },
+                        minLines = 3, supporting = stringResource(R.string.dossier_relations_hint),
+                        modifier = Modifier.testTag("character-relations"))
                     AttributeField(R.string.dossier_tagline, draft.tagline, { draft = draft.copy(tagline = it) },
                         owned = manual?.tagline != null, restore = ai.tagline, onRestore = { draft = draft.copy(tagline = it) })
                     AttributeField(R.string.dossier_bio, draft.bio, { draft = draft.copy(bio = it) },
                         owned = manual?.bio != null, restore = ai.bio, onRestore = { draft = draft.copy(bio = it) },
                         minLines = 4)
-                    MoReadTextField(description, { description = it.take(24_000) }, label = stringResource(R.string.dossier_manual_field),
-                        minLines = 8, modifier = Modifier.testTag("character-description"))
                     Text(stringResource(R.string.dossier_attr_hint), style = MaterialTheme.typography.bodySmall)
                 }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                     TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) }
                     Button(enabled = name.isNotBlank() && !duplicate, onClick = {
-                        onSave(person?.identity, name.trim(), description.trim(), CharacterAttributeDraftCodec.merge(person, draft))
+                        onSave(person?.identity, name.trim(), CharacterAttributeDraftCodec.merge(person, draft))
                     }) { Text(stringResource(R.string.dossier_save)) }
                 }
             }
@@ -100,9 +111,10 @@ internal fun BookCharacterEditorDialog(person: BookCharacter?, people: List<Book
 @Composable
 private fun AttributeField(label: Int, value: String, onValueChange: (String) -> Unit, owned: Boolean,
     restore: String, onRestore: (String) -> Unit, modifier: Modifier = Modifier, minLines: Int = 1, supporting: String? = null) {
+    // minLines 只管最小高度，行数由单行开关决定：单行字段按回车不该换行，多行字段才铺成方框。
     MoReadTextField(value, onValueChange, label = stringResource(label) +
         if (owned) " · " + stringResource(R.string.dossier_attr_manual) else "",
-        supporting = supporting, minLines = minLines, modifier = modifier,
+        supporting = supporting, singleLine = minLines <= 1, minLines = minLines, modifier = modifier,
         trailing = if (owned) ({ Text(stringResource(R.string.dossier_attr_restore), style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.primary, modifier = Modifier.clickable { onRestore(restore) }.padding(4.dp)) }) else null)
 }
