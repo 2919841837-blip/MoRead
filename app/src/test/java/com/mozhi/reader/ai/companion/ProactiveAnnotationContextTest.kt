@@ -4,10 +4,15 @@ import com.mozhi.reader.ai.knowledge.BookCharacter
 import com.mozhi.reader.ai.knowledge.BookCharacterRelationship
 import com.mozhi.reader.ai.knowledge.ChapterKnowledge
 import com.mozhi.reader.ai.knowledge.ChapterKnowledgeCodec
+import com.mozhi.reader.ai.knowledge.CharacterDossier
 import com.mozhi.reader.ai.knowledge.CharacterEvidence
 import com.mozhi.reader.ai.knowledge.CharacterRole
+import com.mozhi.reader.ai.knowledge.DossierEvent
+import com.mozhi.reader.ai.knowledge.DossierRelation
+import com.mozhi.reader.ai.knowledge.DossierTrait
 import com.mozhi.reader.ai.knowledge.KnowledgeCharacter
 import com.mozhi.reader.ai.knowledge.KnowledgeFact
+import com.mozhi.reader.ai.knowledge.SourceAnchor
 import com.mozhi.reader.core.database.entity.ChapterKnowledgeEntity
 import com.mozhi.reader.core.datastore.ProactiveAnnotationContextSettings
 import com.mozhi.reader.core.retrieval.ReadingScope
@@ -127,12 +132,83 @@ class ProactiveAnnotationContextTest {
             ),
             role = CharacterRole.PROTAGONIST
         )
-        val profile = cardProfile(person, 5)!!
+        val profile = cardProfile(person, 5, true)!!
         assertTrue(profile.contains("主角"))
         assertTrue(profile.contains("在雪岭立誓"))
         assertTrue(profile.contains("沈岚"))
         assertFalse(profile.contains("把玉佩交还"))
         assertFalse(profile.contains("谢玄"))
+    }
+
+    @Test fun cardProfileReadsDossierRelationshipsWithDetail() {
+        val person = BookCharacter("顾衡", emptyList(),
+            dossier = CharacterDossier(relationships = listOf(
+                DossierRelation("谢玄", "警惕", "顾衡曾提醒沈岚警惕谢玄，认为谢玄是枭雄", SourceAnchor(3, 0, 10))
+            )))
+        val profile = cardProfile(person, 5, true)!!
+        assertTrue(profile.contains("谢玄"))
+        assertTrue(profile.contains("枭雄"))
+        // 关系锚点在第 3 章，读到第 3 章时还不可见（前文只取 < 当前章）
+        assertNull(cardProfile(person, 3, true))
+    }
+
+    @Test fun cardProfileRecallsEveryDossierField() {
+        val person = BookCharacter("顾衡", emptyList(),
+            dossier = CharacterDossier(
+                tagline = "背负血海深仇的少年",
+                bio = "本是侯府世子，因家变流落江湖，一心复仇。",
+                identity = "镇北侯世子",
+                gender = "男",
+                age = "十七岁",
+                appearance = "一袭白衣",
+                arc = "从隐忍到决意复仇",
+                personality = listOf(DossierTrait("坚毅", "雪岭立誓足见其心", SourceAnchor(2, 0, 10))),
+                experiences = listOf(DossierEvent("在雪岭立誓", 2, SourceAnchor(2, 0, 10))),
+                relationships = listOf(DossierRelation("沈岚", "师姐", "同门情谊", SourceAnchor(3, 0, 10)))
+            ),
+            role = CharacterRole.PROTAGONIST
+        )
+        val profile = cardProfile(person, 5, true)!!
+        assertTrue(profile.contains("主角"))         // 主次
+        assertTrue(profile.contains("镇北侯世子"))   // 身份
+        assertTrue(profile.contains("男"))           // 性别
+        assertTrue(profile.contains("十七岁"))       // 年龄
+        assertTrue(profile.contains("坚毅"))         // 性格
+        assertTrue(profile.contains("在雪岭立誓"))   // 经历
+        assertTrue(profile.contains("背负血海深仇")) // 简介
+        assertTrue(profile.contains("复仇"))         // 小传
+        assertTrue(profile.contains("决意复仇"))     // 成长
+        assertTrue(profile.contains("沈岚"))         // 关系
+        assertTrue(profile.contains("一袭白衣"))     // 外貌
+    }
+
+    @Test fun fullBookScanHidesUnanchoredSummaryFields() {
+        val person = BookCharacter("顾衡", emptyList(),
+            dossier = CharacterDossier(
+                tagline = "隐藏身份的太子",
+                bio = "其实是前朝遗孤。",
+                arc = "最终登基称帝",
+                personality = listOf(DossierTrait("隐忍", "不露声色"))
+            ),
+            role = CharacterRole.PROTAGONIST
+        )
+        // 全书扫描（bounded=false）：无锚点的简介/小传/成长/性格都不召回，避免剧透；主次保留
+        val profile = cardProfile(person, 5, false)!!
+        assertTrue(profile.contains("主角"))
+        assertFalse(profile.contains("太子"))
+        assertFalse(profile.contains("前朝"))
+        assertFalse(profile.contains("登基"))
+        assertFalse(profile.contains("隐忍"))
+    }
+
+    @Test fun cardIsInjectedWhenItRelatesToAnOnStageCharacter() = runTest {
+        val prepared = PreparedAnnotationContext("r",
+            characterCards = listOf(AnnotationCharacterCard("顾衡", emptyList(), "主角；关系：谢玄（警惕）", listOf("谢玄"))))
+        val body = "谢玄此人城府极深，不可不防。"
+        val result = prepared.forParagraph(body, ProactiveAnnotationParagraph(0, body.length), 8_000)
+        assertTrue(result.background.contains("【角色卡】"))
+        assertTrue(result.background.contains("顾衡"))
+        assertTrue(result.background.contains("警惕"))
     }
 
     @Test fun characterCardAndUserNoteAreInjectedWhenNamed() = runTest {

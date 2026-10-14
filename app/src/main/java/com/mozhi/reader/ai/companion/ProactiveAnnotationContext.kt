@@ -5,6 +5,7 @@ import com.mozhi.reader.ai.agent.loadReadableCorpus
 import com.mozhi.reader.ai.knowledge.BookCharacter
 import com.mozhi.reader.ai.knowledge.BookCharactersCodec
 import com.mozhi.reader.ai.knowledge.ChapterKnowledgeCodec
+import com.mozhi.reader.ai.knowledge.CharacterAttributeKind
 import com.mozhi.reader.ai.knowledge.CharacterRole
 import com.mozhi.reader.ai.knowledge.KnowledgeCharacter
 import com.mozhi.reader.core.database.MoReadDatabase
@@ -58,12 +59,10 @@ class ProactiveAnnotationContextRepository @Inject constructor(
         throw cancelled
     } catch (_: Exception) { false }
 
-    /** 角色卡：按当前章过滤已核对的事实与关系，拼成每位人物的精简档案；没有资料就整块跳过。 */
+    /** 角色卡：按当前章过滤档案的全部字段（事实/关系/性格/经历等），拼成每位人物的档案；没有资料就整块跳过。 */
     private suspend fun recallCharacterCards(bookId: Long, revision: String, currentChapter: Int): List<AnnotationCharacterCard> {
         val guide = BookCharactersCodec.visible(database.bookCharacterDao().getGuide(bookId), revision)?.guide ?: return emptyList()
-        return guide.characters.mapNotNull { person ->
-            cardProfile(person, currentChapter)?.let { AnnotationCharacterCard(person.name, person.aliases, it) }
-        }
+        return guide.characters.mapNotNull { person -> cardFor(person, currentChapter, guide.progressBounded) }
     }
 
     /** 用户笔记：只取前文章节、有想法（非纯高亮）的批注。 */
@@ -104,8 +103,13 @@ internal data class AnnotationCharacter(val name: String, val facts: List<Annota
     val latestChapterIndex: Int get() = facts.maxOfOrNull(AnnotationCharacterFact::chapterIndex) ?: -1
 }
 
-/** 角色卡里一位上场人物的精简档案（名字 + 别称 + 已按章节锚点过滤的一句话档案）。 */
-internal data class AnnotationCharacterCard(val name: String, val aliases: List<String>, val profile: String)
+/** 角色卡里一位上场人物的精简档案（名字 + 别称 + 已按章节锚点过滤的一句话档案 + 关系对象名）。 */
+internal data class AnnotationCharacterCard(
+    val name: String,
+    val aliases: List<String>,
+    val profile: String,
+    val relatesTo: List<String> = emptyList()
+)
 
 /** 用户的一条前文批注笔记（想法 + 章锚）。 */
 internal data class AnnotationNote(val chapterIndex: Int, val text: String)
@@ -119,8 +123,8 @@ private const val MAX_CHARACTERS = 4
 /** 每条段评最多注入几位角色卡人物。 */
 private const val MAX_CARDS = 4
 
-/** 每位角色卡人物最多保留几条前文事实。 */
-private const val CARD_FACTS = 4
+/** 每位角色卡人物最多保留几条前文经历。 */
+private const val CARD_EXPERIENCES = 6
 
 /** 每位角色卡人物最多保留几条关系。 */
 private const val CARD_RELATIONS = 4
@@ -150,22 +154,99 @@ private fun roleLabel(role: CharacterRole): String = when (role) {
     CharacterRole.SUPPORTING -> "配角"
 }
 
-/** 把一位人物压成一句话档案：主次 + 前文事实 + 关系，全部只取 [currentChapter] 之前的章节锚点。 */
-internal fun cardProfile(person: BookCharacter, currentChapter: Int): String? {
-    if (person.name.isBlank()) return null
-    val parts = buildList {
-        person.effectiveRole()?.let { add(roleLabel(it)) }
-        addAll(person.evidence
-            .filter { it.chapterIndex < currentChapter }
-            .map { it.fact.text }.distinct().takeLast(CARD_FACTS))
-        person.relationships
-            .filter { it.evidence.chapterIndex < currentChapter }
-            .map { it.target + "（" + it.relation + "）" }.distinct().take(CARD_RELATIONS)
-            .takeIf { it.isNotEmpty() }?.let { add("关系：" + it.joinToString("、")) }
-    }
-    val profile = parts.joinToString("；")
-    return profile.ifBlank { null }
+/** 一条前文社会关系（[target] 是「对方」）。 */
+private data class CardRelation(val target: String, val label: String, val chapter: Int)
+
+private fun relationLabel(target: String, relation: String, detail: String): String {
+    val detailText = detail.takeIf(String::isNotBlank)?.let { "（" + it + "）" }.orEmpty()
+    return if (relation.isBlank()) target + detailText else target + "：" + relation + detailText
 }
+
+/** 取这个人物的社会关系：手写 > 档案（dossier，带 [detail]）> 老结构（evidence 锚点），只留前文、按最近排序去重。 */
+private fun cardRelations(person: BookCharacter, currentChapter: Int): List<CardRelation> {
+    val manual = person.manualRelations()?.mapNotNull { relation ->
+        relation.target.takeIf(String::isNotBlank)?.let {
+            CardRelation(it, relationLabel(it, relation.relation, relation.detail), Int.MAX_VALUE)
+        }
+    }
+    if (manual != null) return manual.distinctBy { it.target }.take(CARD_RELATIONS)
+    val dossier = person.dossier?.relationships.orEmpty().mapNotNull { relation ->
+        val chapter = relation.anchor?.chapterIndex ?: return@mapNotNull null  // 无章节锚点不召回，防剧透
+        if (chapter >= currentChapter) return@mapNotNull null
+        CardRelation(relation.target, relationLabel(relation.target, relation.relation, relation.detail), chapter)
+    }
+    val evidence = person.relationships.mapNotNull { relation ->
+        if (relation.evidence.chapterIndex >= currentChapter) return@mapNotNull null
+        CardRelation(relation.target, relationLabel(relation.target, relation.relation, ""), relation.evidence.chapterIndex)
+    }
+    return (dossier + evidence).distinctBy { it.target }.sortedByDescending { it.chapter }.take(CARD_RELATIONS)
+}
+
+/** 前文性格：手写（词 + 说明）> 档案（词 + 说明，章锚过滤）> 旧属性性格词（evidence 锚点）。 */
+private fun traitsBefore(person: BookCharacter, currentChapter: Int, bounded: Boolean): List<String> {
+    val manual = person.manualTraits()
+    if (manual != null) return manual.map { trait ->
+        trait.trait + trait.detail.takeIf(String::isNotBlank)?.let { "（" + it + "）" }.orEmpty()
+    }.filter(String::isNotBlank)
+    val dossier = person.dossier?.personality.orEmpty().mapNotNull { trait ->
+        val chapter = trait.anchor?.chapterIndex
+        val keep = if (chapter != null) chapter < currentChapter else bounded
+        if (!keep) return@mapNotNull null
+        trait.trait + trait.detail.takeIf(String::isNotBlank)?.let { "（" + it + "）" }.orEmpty()
+    }.filter(String::isNotBlank)
+    if (dossier.isNotEmpty()) return dossier
+    return person.attributes.filter { it.kind == CharacterAttributeKind.PERSONALITY && it.evidence.chapterIndex < currentChapter }
+        .map { it.value }.distinct()
+}
+
+/** 前文经历：手写 > 上一版「人物资料」> 档案经历 > 逐条事实；AI 来源按章锚过滤，手写始终算数。 */
+private fun experiencesBefore(person: BookCharacter, currentChapter: Int): List<String> {
+    val manual = person.manualExperiences()
+    if (manual != null) return manual.map { it.text }.filter(String::isNotBlank)
+    val legacy = person.manualDescription?.takeIf(String::isNotBlank)
+        ?.lineSequence()?.map(String::trim)?.filter(String::isNotEmpty)?.toList()
+    if (!legacy.isNullOrEmpty()) return legacy
+    val dossier = person.dossier?.experiences.orEmpty().mapNotNull { event ->
+        val chapter = event.chapterIndex ?: event.anchor?.chapterIndex ?: return@mapNotNull null
+        event.text.takeIf { chapter < currentChapter && it.isNotBlank() }
+    }
+    if (dossier.isNotEmpty()) return dossier
+    return person.evidence.filter { it.chapterIndex < currentChapter }.map { it.fact.text }
+}
+
+/** 无章节锚点的标量字段（简介/小传/成长）：手写优先且始终安全；AI 值只在进度受限扫描时召回（全书扫描可能含未读情节）。 */
+private fun summaryField(manual: String?, ai: String, bounded: Boolean): String? =
+    manual?.takeIf(String::isNotBlank) ?: ai.takeIf { bounded }.orEmpty().takeIf(String::isNotBlank)
+
+/** 把一位人物压成多行档案：主次 / 身份 / 性别年龄 / 关系 / 性格 / 经历 / 简介 / 小传 / 成长 / 外貌，全部只取前文或可信来源。 */
+internal fun cardProfile(person: BookCharacter, currentChapter: Int, bounded: Boolean): String? {
+    if (person.name.isBlank()) return null
+    val relations = cardRelations(person, currentChapter)
+    val sections = buildList {
+        person.effectiveRole()?.let { add("主次：" + roleLabel(it)) }
+        person.attributeValues(CharacterAttributeKind.IDENTITY).firstOrNull()?.takeIf(String::isNotBlank)?.let { add("身份：" + it) }
+        val genderAge = listOfNotNull(
+            person.attributeValues(CharacterAttributeKind.GENDER).firstOrNull()?.takeIf(String::isNotBlank),
+            person.attributeValues(CharacterAttributeKind.AGE).firstOrNull()?.takeIf(String::isNotBlank)
+        )
+        if (genderAge.isNotEmpty()) add("性别年龄：" + genderAge.joinToString("，"))
+        if (relations.isNotEmpty()) add("关系：" + relations.joinToString("；") { it.label })
+        val traits = traitsBefore(person, currentChapter, bounded)
+        if (traits.isNotEmpty()) add("性格：" + traits.joinToString("；"))
+        val experiences = experiencesBefore(person, currentChapter).takeLast(CARD_EXPERIENCES)
+        if (experiences.isNotEmpty()) add("经历：" + experiences.joinToString("；"))
+        summaryField(person.manualAttributes?.tagline, person.dossier?.tagline.orEmpty(), bounded)?.let { add("简介：" + it) }
+        summaryField(person.manualAttributes?.bio, person.dossier?.bio.orEmpty(), bounded)?.let { add("小传：" + it) }
+        summaryField(person.manualAttributes?.arc, person.dossier?.arc.orEmpty(), bounded)?.let { add("成长：" + it) }
+        person.attributeValues(CharacterAttributeKind.APPEARANCE).firstOrNull()?.takeIf(String::isNotBlank)?.let { add("外貌：" + it) }
+    }
+    return sections.joinToString("\n").ifBlank { null }
+}
+
+internal fun cardFor(person: BookCharacter, currentChapter: Int, bounded: Boolean): AnnotationCharacterCard? =
+    cardProfile(person, currentChapter, bounded)?.let {
+        AnnotationCharacterCard(person.name, person.aliases, it, cardRelations(person, currentChapter).map { r -> r.target })
+    }
 
 internal data class AnnotationReadingContext(val prefix: String, val target: String, val background: String) {
     val chars: Int get() = prefix.length + target.length + background.length
@@ -215,16 +296,16 @@ internal class PreparedAnnotationContext(
             val cardsText = packAnnotationBackground(cardsOnStage(query).let { onStage ->
                 if (onStage.isEmpty()) emptyList() else
                     listOf("【角色卡】与本文相关人物的档案（辅助资料，以原文为准）：") +
-                        onStage.map { card -> card.name + "：" + card.profile }
-            }, backgroundBudget / 6)
+                        onStage.map { card -> card.name + "\n" + card.profile }
+            }, backgroundBudget / 4)
             val notesText = packAnnotationBackground(notesOnStage(namesOnStage(query)).let { onStage ->
                 if (onStage.isEmpty()) emptyList() else
                     listOf("【读书笔记】你此前的批注（辅助资料）：") +
                         onStage.map { note -> chapterLabel(note.chapterIndex) + "笔记：" + note.text }
-            }, backgroundBudget / 6)
+            }, backgroundBudget / 8)
             val summaries = packAnnotationBackground(selectedOutlines.map {
                 chapterLabel(it.chapterIndex) + "梗概（辅助资料，以原文为准）：\n" + it.text
-            }, backgroundBudget / 3)
+            }, backgroundBudget / 4)
             val snippets = packAnnotationBackground(hits.map {
                 chapterLabel(it.chapterIndex) + "原文：\n" + it.text
             }, (backgroundBudget - summaries.length - charactersText.length - cardsText.length - notesText.length - 6).coerceAtLeast(0))
@@ -243,10 +324,10 @@ internal class PreparedAnnotationContext(
         return characters.filter { it.latestChapterIndex == latest }.take(MAX_CHARACTERS)
     }
 
-    /** 角色卡：只在目标段点名（名字或别称）该人物时注入，最多 [MAX_CARDS] 位。 */
+    /** 角色卡：目标段点名该人物（名字或别称），或点名它的关系对象时注入，最多 [MAX_CARDS] 位。 */
     private fun cardsOnStage(window: String): List<AnnotationCharacterCard> =
         characterCards.filter { card ->
-            (listOf(card.name) + card.aliases).any { it.length >= 2 && window.contains(it) }
+            (listOf(card.name) + card.aliases + card.relatesTo).any { it.length >= 2 && window.contains(it) }
         }.take(MAX_CARDS)
 
     /** 前文上下文里出现过的所有人名（角色卡 + 每章人物），用于给读书笔记做名字匹配。 */
