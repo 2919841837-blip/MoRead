@@ -2,6 +2,7 @@ package com.mozhi.reader.ai.companion
 
 import com.mozhi.reader.ai.knowledge.ChapterKnowledge
 import com.mozhi.reader.ai.knowledge.ChapterKnowledgeCodec
+import com.mozhi.reader.ai.knowledge.KnowledgeCharacter
 import com.mozhi.reader.ai.knowledge.KnowledgeFact
 import com.mozhi.reader.core.database.entity.ChapterKnowledgeEntity
 import com.mozhi.reader.core.datastore.ProactiveAnnotationContextSettings
@@ -70,6 +71,44 @@ class ProactiveAnnotationContextTest {
         assertNull(validatedAnnotationOutline(entry, scope, "r", null))
         assertNull(validatedAnnotationOutline(entry.copy(chapterIndex = 99), scope, "r", promise))
         assertNull(validatedAnnotationOutline(entry, ReadingScope.upto(2, 5), "r", promise))
+    }
+
+    @Test fun namedCharacterFromPriorChapterIsInjectedIntoBackground() = runTest {
+        val prepared = PreparedAnnotationContext("r", characters = listOf(
+            AnnotationCharacter("顾衡", listOf(AnnotationCharacterFact(2, "顾衡在雪岭立誓，要把玉佩还给沈岚。")))
+        ))
+        val result = prepared.forParagraph(target, ProactiveAnnotationParagraph(0, target.length), 8_000)
+        assertTrue(result.background.contains("【前文人物】"))
+        assertTrue(result.background.contains("顾衡"))
+        assertTrue(result.background.contains("雪岭"))
+        assertTrue(result.background.contains("第3章"))
+    }
+
+    @Test fun unnamedParagraphFallsBackToMostRecentChapterCast() = runTest {
+        val prepared = PreparedAnnotationContext("r", characters = listOf(
+            AnnotationCharacter("顾衡", listOf(AnnotationCharacterFact(2, "顾衡立下雪岭之誓。"))),
+            AnnotationCharacter("沈岚", listOf(AnnotationCharacterFact(4, "沈岚在城门张望，久候不至。")))
+        ))
+        val body = "今天天气很好，适合出门走走。"
+        val result = prepared.forParagraph(body, ProactiveAnnotationParagraph(0, body.length), 8_000)
+        assertTrue(result.background.contains("沈岚"))
+        assertFalse(result.background.contains("顾衡"))
+    }
+
+    @Test fun charactersMergeByNameAcrossChaptersAndKeepLatestChapter() {
+        val merged = mergeAnnotationCharacters(listOf(
+            AnnotationChapterKnowledge(AnnotationOutline(2, "梗概"), listOf(
+                KnowledgeCharacter("顾衡", listOf(KnowledgeFact("在雪岭立誓", "q", 0, 1))),
+                KnowledgeCharacter("沈岚", listOf(KnowledgeFact("在城中等候", "q", 0, 1)))
+            )),
+            AnnotationChapterKnowledge(AnnotationOutline(4, "梗概"), listOf(
+                KnowledgeCharacter("顾衡", listOf(KnowledgeFact("把玉佩交还", "q", 0, 1)))
+            ))
+        ))
+        assertEquals(2, merged.size)
+        val guheng = merged.first { it.name == "顾衡" }
+        assertEquals(listOf("在雪岭立誓", "把玉佩交还"), guheng.facts.map { it.text })
+        assertEquals(4, guheng.latestChapterIndex)
     }
 
     private fun entry(chapter: Int, text: String) = ChapterKnowledgeEntity(

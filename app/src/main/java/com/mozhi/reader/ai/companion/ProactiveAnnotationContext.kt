@@ -3,6 +3,7 @@ package com.mozhi.reader.ai.companion
 import com.mozhi.reader.ai.agent.ChapterDocument
 import com.mozhi.reader.ai.agent.loadReadableCorpus
 import com.mozhi.reader.ai.knowledge.ChapterKnowledgeCodec
+import com.mozhi.reader.ai.knowledge.KnowledgeCharacter
 import com.mozhi.reader.core.database.MoReadDatabase
 import com.mozhi.reader.core.database.entity.ChapterKnowledgeEntity
 import com.mozhi.reader.core.datastore.ProactiveAnnotationContextSettings
@@ -37,12 +38,13 @@ class ProactiveAnnotationContextRepository @Inject constructor(
                 titles[index] = chapter.title
                 ChapterDocument(index, chapter.title, library.readChapterTextStrict(bookId, chapter))
             } }, loadChaptersThrough = { emptyList() })
-        val outlines = database.chapterKnowledgeDao().getBefore(bookId, chapterIndex).mapNotNull { entry ->
+        val knowledge = database.chapterKnowledgeDao().getBefore(bookId, chapterIndex).mapNotNull { entry ->
             currentCoroutineContext().ensureActive()
             validatedAnnotationOutline(entry, scope, revision, corpus.bodies[entry.chapterIndex])
         }
         check(isCurrent(bookId, revision)) { "正文已变化，请重新准备段评上下文" }
-        PreparedAnnotationContext(revision, corpus.candidates, outlines, titles, !corpus.complete)
+        PreparedAnnotationContext(revision, corpus.candidates, knowledge.map { it.outline }, titles,
+            !corpus.complete, mergeAnnotationCharacters(knowledge))
     }
 
     internal suspend fun isCurrent(bookId: Long, revision: String): Boolean = try {
@@ -54,14 +56,53 @@ class ProactiveAnnotationContextRepository @Inject constructor(
 
 internal data class AnnotationOutline(val chapterIndex: Int, val text: String)
 
+/** 一章知识里能进段评上下文的部分：梗概 + 已核对的人物。 */
+internal data class AnnotationChapterKnowledge(
+    val outline: AnnotationOutline,
+    val characters: List<KnowledgeCharacter>
+)
+
 /** Never reuse a whole-chapter outline whose source reaches beyond the allowed boundary. */
 internal fun validatedAnnotationOutline(
     entry: ChapterKnowledgeEntity, scope: ReadingScope, revision: String, body: String?
-): AnnotationOutline? {
+): AnnotationChapterKnowledge? {
     val visible = ChapterKnowledgeCodec.visible(entry, scope, revision) ?: return null
     if (body == null || entry.sourceEnd > body.length ||
         ChapterKnowledgeCodec.hash(body.take(entry.sourceEnd)) != entry.sourceHash) return null
-    return AnnotationOutline(entry.chapterIndex, visible.content.readableOutline)
+    return AnnotationChapterKnowledge(
+        AnnotationOutline(entry.chapterIndex, visible.content.readableOutline),
+        visible.content.characters
+    )
+}
+
+/** 一位前文人物的单条事实，带出处章。 */
+internal data class AnnotationCharacterFact(val chapterIndex: Int, val text: String)
+
+/** 前文各章知识合并出的一位人物；[latestChapterIndex] 是它最近一次出场的章。 */
+internal data class AnnotationCharacter(val name: String, val facts: List<AnnotationCharacterFact>) {
+    val latestChapterIndex: Int get() = facts.maxOfOrNull(AnnotationCharacterFact::chapterIndex) ?: -1
+}
+
+/** 每位人物跨章合并后最多保留几条事实。 */
+private const val MAX_FACTS_PER_CHARACTER = 6
+
+/** 每条段评最多注入几位人物。 */
+private const val MAX_CHARACTERS = 4
+
+/** 跨章按名字合并人物：同一人只留一条，事实去重后保留最近 [MAX_FACTS_PER_CHARACTER] 条。 */
+internal fun mergeAnnotationCharacters(knowledge: List<AnnotationChapterKnowledge>): List<AnnotationCharacter> {
+    val byName = linkedMapOf<String, MutableList<AnnotationCharacterFact>>()
+    knowledge.forEach { chapter ->
+        chapter.characters.forEach { person ->
+            val facts = byName.getOrPut(person.name) { mutableListOf() }
+            person.facts.forEach { fact -> facts += AnnotationCharacterFact(chapter.outline.chapterIndex, fact.text) }
+        }
+    }
+    return byName.mapNotNull { (name, facts) ->
+        facts.takeIf { it.isNotEmpty() }?.let {
+            AnnotationCharacter(name, it.distinctBy { it.text }.takeLast(MAX_FACTS_PER_CHARACTER))
+        }
+    }
 }
 
 internal data class AnnotationReadingContext(val prefix: String, val target: String, val background: String) {
@@ -73,7 +114,8 @@ internal class PreparedAnnotationContext(
     private val candidates: List<RetrievalCandidate> = emptyList(),
     private val outlines: List<AnnotationOutline> = emptyList(),
     private val titles: Map<Int, String> = emptyMap(),
-    private val partial: Boolean = false
+    private val partial: Boolean = false,
+    private val characters: List<AnnotationCharacter> = emptyList()
 ) {
     suspend fun forParagraph(body: String, paragraph: ProactiveAnnotationParagraph, budgetChars: Int): AnnotationReadingContext =
         withContext(Dispatchers.Default) {
@@ -97,17 +139,35 @@ internal class PreparedAnnotationContext(
             val selectedOutlines = (relatedOutlines + outlineCandidates.takeLast(1)).distinctBy { it.chapterIndex }
             fun chapterLabel(index: Int): String = "第 "+ (index + 1) + " 章" +
                 titles[index]?.takeIf { it.isNotBlank() }?.let { "「" + it.take(80) + "」" }.orEmpty()
+            val charactersText = packAnnotationBackground(charactersOnStage(query).let { onStage ->
+                if (onStage.isEmpty()) emptyList() else
+                    listOf("【前文人物】与本文相关的人物（辅助资料，以原文为准）：") +
+                        onStage.map { person ->
+                            person.name + "：" + person.facts.joinToString("；") { fact ->
+                                "${fact.text}（第${fact.chapterIndex + 1}章）"
+                            }
+                        }
+            }, backgroundBudget / 4)
             val summaries = packAnnotationBackground(selectedOutlines.map {
                 chapterLabel(it.chapterIndex) + "梗概（辅助资料，以原文为准）：\n" + it.text
             }, backgroundBudget / 3)
             val snippets = packAnnotationBackground(hits.map {
                 chapterLabel(it.chapterIndex) + "原文：\n" + it.text
-            }, (backgroundBudget - summaries.length - 2).coerceAtLeast(0))
+            }, (backgroundBudget - summaries.length - charactersText.length - 4).coerceAtLeast(0))
             val warning = if (partial) "前文检索只覆盖部分正文；未命中不代表书中没有。" else ""
-            val background = packAnnotationBackground(listOf(warning, summaries, snippets), backgroundBudget)
+            val background = packAnnotationBackground(listOf(warning, summaries, charactersText, snippets), backgroundBudget)
             val prefix = ProactiveAnnotationParagraphs.prefix(body, paragraph, budget - target.length - background.length)
             AnnotationReadingContext(prefix, target, background)
         }
+
+    /** 目标段附近点名的人物优先；没人点名就退回最近一章的人物，保持「上一章刚发生什么」的连贯。 */
+    private fun charactersOnStage(window: String): List<AnnotationCharacter> {
+        if (characters.isEmpty()) return emptyList()
+        val onStage = characters.filter { it.name.length >= 2 && window.contains(it.name) }
+        if (onStage.isNotEmpty()) return onStage.take(MAX_CHARACTERS)
+        val latest = characters.maxOf { it.latestChapterIndex }
+        return characters.filter { it.latestChapterIndex == latest }.take(MAX_CHARACTERS)
+    }
 }
 
 /** Clip on a UTF-16 boundary; labels and separators count against the same reading budget. */
