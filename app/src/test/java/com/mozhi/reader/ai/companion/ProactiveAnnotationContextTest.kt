@@ -264,6 +264,32 @@ class ProactiveAnnotationContextTest {
         assertFalse(result.background.contains("【读书笔记】"))
     }
 
+    @Test fun vectorRecallAddsSemanticallyRelevantSnippetWithNoLexicalOverlap() = runTest {
+        val body = "顾衡取出玉佩，想起在雪岭对沈岚许下的承诺，终于决定兑现誓言。".repeat(3)
+        val candidates = listOf(RetrievalCandidate(1, 0, 0, "lorem ipsum dolor sit amet", 0, 26))
+        val vector = VectorRecall(
+            embedQuery = { _ -> floatArrayOf(1f) },
+            search = { _, _ -> listOf(RetrievalCandidate(1, 0, 0, "雪岭上的誓言刻骨铭心。", 0, 11, 0.1)) },
+            topK = 12, recallDepth = 48
+        )
+        val result = PreparedAnnotationContext("r", candidates = candidates, vectorRecall = vector)
+            .forParagraph(body, ProactiveAnnotationParagraph(0, body.length), 8_000)
+        assertTrue(result.background.contains("雪岭上的誓言刻骨铭心"))
+    }
+
+    @Test fun vectorRecallFailureSilentlyFallsBackToBm25() = runTest {
+        val body = "顾衡取出玉佩，想起在雪岭对沈岚许下的承诺。".repeat(3)
+        val candidates = listOf(RetrievalCandidate(1, 0, 0, "顾衡在雪岭立誓。", 0, 9))
+        val vector = VectorRecall(
+            embedQuery = { _ -> throw IllegalStateException("network down") },
+            search = { _, _ -> emptyList() },
+            topK = 12, recallDepth = 48
+        )
+        val result = PreparedAnnotationContext("r", candidates = candidates, vectorRecall = vector)
+            .forParagraph(body, ProactiveAnnotationParagraph(0, body.length), 8_000)
+        assertTrue(result.background.contains("雪岭立誓"))
+    }
+
     private fun entry(chapter: Int, text: String) = ChapterKnowledgeEntity(
         bookId = 1, chapterIndex = chapter, sourceRevision = "r", sourceEnd = text.length,
         sourceHash = ChapterKnowledgeCodec.hash(text), modelKey = "m", modelLabel = "m",

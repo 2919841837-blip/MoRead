@@ -1,7 +1,9 @@
 package com.mozhi.reader.ai.companion
 
 import com.mozhi.reader.ai.agent.ChapterDocument
+import com.mozhi.reader.ai.agent.ReadableCorpus
 import com.mozhi.reader.ai.agent.loadReadableCorpus
+import com.mozhi.reader.ai.client.AiClientFactory
 import com.mozhi.reader.ai.knowledge.BookCharacter
 import com.mozhi.reader.ai.knowledge.BookCharactersCodec
 import com.mozhi.reader.ai.knowledge.ChapterKnowledgeCodec
@@ -10,12 +12,19 @@ import com.mozhi.reader.ai.knowledge.CharacterRole
 import com.mozhi.reader.ai.knowledge.KnowledgeCharacter
 import com.mozhi.reader.core.database.MoReadDatabase
 import com.mozhi.reader.core.database.entity.ChapterKnowledgeEntity
+import com.mozhi.reader.core.database.entity.ModelRole
+import com.mozhi.reader.core.datastore.BookEmbeddingSettingsStore
 import com.mozhi.reader.core.datastore.ProactiveAnnotationContextSettings
 import com.mozhi.reader.core.library.LibraryRepository
 import com.mozhi.reader.core.retrieval.Bm25LexicalRecall
 import com.mozhi.reader.core.retrieval.ReadingScope
 import com.mozhi.reader.core.retrieval.RetrievalCandidate
+import com.mozhi.reader.core.retrieval.RetrievalQuery
 import com.mozhi.reader.core.retrieval.RetrievalSelection
+import com.mozhi.reader.core.retrieval.RrfFusion
+import com.mozhi.reader.core.vector.Embeddings
+import com.mozhi.reader.core.vector.VectorQueries
+import io.objectbox.BoxStore
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.coroutines.cancellation.CancellationException
@@ -24,11 +33,15 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 
-/** Only prior chapters are cached, for the lifetime of one chapter job. No paid embedding calls. */
+/** Only prior chapters are cached, for the lifetime of one chapter job. Vector recall (paid
+ *  embedding) is opt-in per book and silently falls back to BM25 whenever it is unavailable. */
 @Singleton
 class ProactiveAnnotationContextRepository @Inject constructor(
     private val library: LibraryRepository,
-    private val database: MoReadDatabase
+    private val database: MoReadDatabase,
+    private val clientFactory: dagger.Lazy<AiClientFactory>,
+    private val vectorStore: dagger.Lazy<BoxStore>,
+    private val embeddingSettingsStore: BookEmbeddingSettingsStore
 ) {
     internal suspend fun prepare(bookId: Long, chapterIndex: Int): PreparedAnnotationContext = withContext(Dispatchers.IO) {
         val book = library.getBook(bookId)?.takeIf { it.removedAt == 0L } ?: error("书籍正文已移除")
@@ -47,10 +60,56 @@ class ProactiveAnnotationContextRepository @Inject constructor(
             validatedAnnotationOutline(entry, scope, revision, corpus.bodies[entry.chapterIndex])
         }
         check(isCurrent(bookId, revision)) { "正文已变化，请重新准备段评上下文" }
+        val vectorRecall = resolveVectorRecall(bookId, corpus, chapterIndex)
         PreparedAnnotationContext(revision, corpus.candidates, knowledge.map { it.outline }, titles,
             !corpus.complete, mergeAnnotationCharacters(knowledge),
             recallCharacterCards(bookId, revision, chapterIndex),
-            recallUserNotes(bookId, chapterIndex))
+            recallUserNotes(bookId, chapterIndex), vectorRecall)
+    }
+
+    /** 向量召回：本书启用了 AI 索引、前文已有切片、EMBEDDING 模型可用三者齐备才启用；缺任意一环静默退回纯 BM25。 */
+    private suspend fun resolveVectorRecall(bookId: Long, corpus: ReadableCorpus, currentChapter: Int): VectorRecall? {
+        if (currentChapter <= 0) return null
+        val enabled = try {
+            embeddingSettingsStore.isEnabled(bookId)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            return null
+        }
+        if (!enabled) return null
+        val store = try {
+            vectorStore.get()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            return null
+        }
+        val hasIndex = try {
+            VectorQueries.chaptersWithChunks(store, bookId).any { it in 0 until currentChapter }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            return null
+        }
+        if (!hasIndex) return null
+        val embedQuery: suspend (String) -> FloatArray = try {
+            val client = clientFactory.get().forRole(ModelRole.EMBEDDING).client
+            { query: String -> Embeddings.conformToIndex(client.embed(listOf(query)).first()) }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            return null
+        }
+        val search: suspend (FloatArray, Int) -> List<RetrievalCandidate> = { vector, depth ->
+            VectorQueries.searchChunks(store, bookId, vector, depth, 0, currentChapter - 1)
+                .mapNotNull { hit ->
+                    hit.get().takeIf { it.bookId == bookId }
+                        ?.let(corpus::vectorCandidate)
+                        ?.copy(vectorDistance = hit.score)
+                }.distinctBy(RetrievalCandidate::key)
+        }
+        return VectorRecall(embedQuery, search, SNIPPET_TOP_K, SNIPPET_RECALL_DEPTH)
     }
 
     internal suspend fun isCurrent(bookId: Long, revision: String): Boolean = try {
@@ -131,6 +190,13 @@ private const val CARD_RELATIONS = 4
 
 /** 每条段评最多召回几条用户笔记。 */
 private const val MAX_NOTES = 4
+
+/** 每条段评正文片段召回的名额与向量/BM25 的召回深度。 */
+private const val SNIPPET_TOP_K = 12
+private const val SNIPPET_RECALL_DEPTH = 48
+
+/** 向量余弦距离闸：超过该距离的语义片段不算相关（与 RetrievalRequest.maxVectorDistance 一致）。 */
+private const val VECTOR_MAX_DISTANCE = 0.80
 
 /** 跨章按名字合并人物：同一人只留一条，事实去重后保留最近 [MAX_FACTS_PER_CHARACTER] 条。 */
 internal fun mergeAnnotationCharacters(knowledge: List<AnnotationChapterKnowledge>): List<AnnotationCharacter> {
@@ -252,6 +318,40 @@ internal data class AnnotationReadingContext(val prefix: String, val target: Str
     val chars: Int get() = prefix.length + target.length + background.length
 }
 
+/** 前文正文的向量召回通道。一次失败即静默禁用，本段评不再重试，确保 EMBEDDING 出问题时退回纯 BM25。 */
+internal class VectorRecall(
+    private val embedQuery: suspend (String) -> FloatArray,
+    private val search: suspend (FloatArray, Int) -> List<RetrievalCandidate>,
+    private val topK: Int,
+    private val recallDepth: Int
+) {
+    @Volatile private var disabled = false
+
+    suspend fun recall(query: String): List<RetrievalCandidate> {
+        if (disabled) return emptyList()
+        return try {
+            val vector = embedQuery(query)
+            var depth = recallDepth.coerceAtLeast(1)
+            var accepted: List<RetrievalCandidate>
+            while (true) {
+                currentCoroutineContext().ensureActive()
+                val hits = search(vector, depth)
+                accepted = hits
+                if (accepted.size >= topK || hits.size < depth || depth >= MAX_DEPTH) break
+                depth = (depth * 2).coerceAtMost(MAX_DEPTH)
+            }
+            accepted.take(recallDepth)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            disabled = true
+            emptyList()
+        }
+    }
+
+    private companion object { const val MAX_DEPTH = 480 }
+}
+
 internal class PreparedAnnotationContext(
     val revision: String,
     private val candidates: List<RetrievalCandidate> = emptyList(),
@@ -260,7 +360,8 @@ internal class PreparedAnnotationContext(
     private val partial: Boolean = false,
     private val characters: List<AnnotationCharacter> = emptyList(),
     private val characterCards: List<AnnotationCharacterCard> = emptyList(),
-    private val notes: List<AnnotationNote> = emptyList()
+    private val notes: List<AnnotationNote> = emptyList(),
+    private val vectorRecall: VectorRecall? = null
 ) {
     suspend fun forParagraph(body: String, paragraph: ProactiveAnnotationParagraph, budgetChars: Int): AnnotationReadingContext =
         withContext(Dispatchers.Default) {
@@ -270,11 +371,20 @@ internal class PreparedAnnotationContext(
             // Target is repeated for reliable quote grounding. Its two copies both consume budget.
             val backgroundBudget = ((budget - target.length * 2).coerceAtLeast(0) * 0.45).toInt()
             val query = ProactiveAnnotationParagraphs.prefix(body, paragraph, target.length + 400)
-            val ranked = Bm25LexicalRecall.rank(candidates, query, 48) { context.ensureActive() }
-            val best = ranked.firstOrNull()?.lexicalScore ?: 0.0
+            val ranked = Bm25LexicalRecall.rank(candidates, query, SNIPPET_RECALL_DEPTH) { context.ensureActive() }
+            val vectorHits = vectorRecall?.recall(query).orEmpty()
+            val fused = RrfFusion.fuse(
+                vector = vectorHits,
+                lexical = ranked,
+                lexicalWeight = RetrievalQuery.lexicalWeightFor(query)
+            )
+            val bestLexical = ranked.firstOrNull()?.lexicalScore ?: 0.0
             val hits = RetrievalSelection.select(
-                ranked.filter { (it.lexicalScore ?: 0.0) >= best * 0.35 },
-                topK = 12, maxPerChapter = 2, literalKeys = emptySet(), literalReserve = 0
+                fused.filter { candidate ->
+                    (candidate.lexicalScore != null && candidate.lexicalScore >= bestLexical * 0.35) ||
+                        (candidate.vectorDistance != null && candidate.vectorDistance <= VECTOR_MAX_DISTANCE)
+                },
+                topK = SNIPPET_TOP_K, maxPerChapter = 2, literalKeys = emptySet(), literalReserve = 0
             ).selected
             val outlineCandidates = outlines.map { outline ->
                 RetrievalCandidate(0, outline.chapterIndex, 0, outline.text)

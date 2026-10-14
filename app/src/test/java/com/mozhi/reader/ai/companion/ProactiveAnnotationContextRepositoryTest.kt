@@ -1,15 +1,20 @@
 package com.mozhi.reader.ai.companion
 
+import com.mozhi.reader.ai.client.AiClientFactory
 import com.mozhi.reader.core.database.MoReadDatabase
+import com.mozhi.reader.core.database.dao.AnnotationDao
+import com.mozhi.reader.core.database.dao.BookCharacterDao
 import com.mozhi.reader.core.database.dao.ChapterKnowledgeDao
 import com.mozhi.reader.core.database.entity.BookEntity
 import com.mozhi.reader.core.database.entity.BookSourceType
 import com.mozhi.reader.core.database.entity.ChapterEntity
+import com.mozhi.reader.core.datastore.BookEmbeddingSettingsStore
 import com.mozhi.reader.core.library.LibraryRepository
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
+import io.objectbox.BoxStore
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.*
@@ -19,7 +24,17 @@ class ProactiveAnnotationContextRepositoryTest {
     private val library = mockk<LibraryRepository>()
     private val database = mockk<MoReadDatabase>()
     private val dao = mockk<ChapterKnowledgeDao>()
-    private val repository = ProactiveAnnotationContextRepository(library, database)
+    private val bookCharacterDao = mockk<BookCharacterDao>()
+    private val annotationDao = mockk<AnnotationDao>()
+    private val clientFactory = mockk<AiClientFactory>()
+    private val vectorStore = mockk<BoxStore>()
+    private val embeddingSettingsStore = mockk<BookEmbeddingSettingsStore>()
+    private val repository = ProactiveAnnotationContextRepository(
+        library, database,
+        dagger.Lazy { clientFactory },
+        dagger.Lazy { vectorStore },
+        embeddingSettingsStore
+    )
     private val book = BookEntity(id = 1, title = "测试书", author = "", coverPath = null,
         epubPath = "", sourceType = BookSourceType.TXT, importedAt = 0, totalChapters = 100)
     private val evidence = "顾衡在雪岭将玉佩交给沈岚，许诺来年相见。"
@@ -29,6 +44,11 @@ class ProactiveAnnotationContextRepositoryTest {
         coEvery { library.bookTextRevision(1) } returns "r"
         every { database.chapterKnowledgeDao() } returns dao
         coEvery { dao.getBefore(1, any()) } returns emptyList()
+        every { database.bookCharacterDao() } returns bookCharacterDao
+        coEvery { bookCharacterDao.getGuide(any()) } returns null
+        every { database.annotationDao() } returns annotationDao
+        coEvery { annotationDao.getForChapterRangeByUser(any(), any(), any()) } returns emptyList()
+        coEvery { embeddingSettingsStore.isEnabled(any()) } returns false
         coEvery { library.getChapter(1, any()) } answers {
             val index = arg<Int>(1)
             ChapterEntity(bookId = 1, chapterIndex = index, title = "第 $index 章", href = "", charCount = evidence.length)
