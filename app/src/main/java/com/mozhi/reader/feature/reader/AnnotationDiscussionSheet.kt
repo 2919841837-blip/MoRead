@@ -506,6 +506,13 @@ internal fun AnnotationDiscussionSheet(
                     ) {
                         // 召回明细在上、段评内容在下，用 Column 竖向排布避免重叠；展开召回时内容自动下移。
                         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            // TEMP DEBUG：定位聊天批注召回不可见问题，诊断后删除。
+                            Text(
+                                text = "DEBUG persona=${annotation.personaId} recallLen=${annotation.recallJson.length} " +
+                                    "recall=${annotation.recallJson.take(120)}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = palette.muted
+                            )
                             RecallBreakdown(
                                 annotation.recallJson,
                                 aiGenerated = annotation.personaId != null,
