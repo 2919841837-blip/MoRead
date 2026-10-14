@@ -46,7 +46,8 @@ internal suspend fun loadReadableCorpus(
     scope: ReadingScope,
     loadChapter: suspend (Int) -> ChapterDocument?,
     loadChaptersThrough: suspend (Int) -> List<ChapterDocument>,
-    firstChapterIndex: Int = 0
+    firstChapterIndex: Int = 0,
+    buildCandidates: Boolean = true
 ): ReadableCorpus {
     val last = scope.clampLastChapter(totalChapters)
     val diagnostics = mutableListOf<ToolDiagnostic>()
@@ -95,12 +96,14 @@ internal suspend fun loadReadableCorpus(
         ChapterChunker.chunkWithOffsets(document.body).forEachIndexed { chunkIndex, chunk ->
             currentCoroutineContext().ensureActive()
             if (chunk.startCharOffset >= end) return@forEachIndexed
-            val clippedEnd = minOf(end, chunk.endCharOffset)
             if (chunk.endCharOffset <= end) indexedText[index to chunkIndex] = chunk
-            candidates += RetrievalCandidate(
-                bookId, index, chunkIndex, readable.substring(chunk.startCharOffset, clippedEnd),
-                chunk.startCharOffset, clippedEnd
-            )
+            if (buildCandidates) {
+                val clippedEnd = minOf(end, chunk.endCharOffset)
+                candidates += RetrievalCandidate(
+                    bookId, index, chunkIndex, readable.substring(chunk.startCharOffset, clippedEnd),
+                    chunk.startCharOffset, clippedEnd
+                )
+            }
         }
     }
     if (totalChapters <= 0) failureCount++

@@ -58,13 +58,13 @@ class ProactiveAnnotationContextRepository @Inject constructor(
             loadChapter = { index -> library.getChapter(bookId, index)?.let { chapter ->
                 titles[index] = chapter.title
                 ChapterDocument(index, chapter.title, library.readChapterTextStrict(bookId, chapter))
-            } }, loadChaptersThrough = { emptyList() })
+            } }, buildCandidates = false, loadChaptersThrough = { emptyList() })
         val outlines = database.chapterKnowledgeDao().getBefore(bookId, chapterIndex).mapNotNull { entry ->
             currentCoroutineContext().ensureActive()
             validatedAnnotationOutline(entry, scope, revision, corpus.bodies[entry.chapterIndex])
         }
         check(isCurrent(bookId, revision)) { "正文已变化，请重新准备段评上下文" }
-        val vectorRecall = resolveVectorRecall(bookId, corpus, chapterIndex)
+        val vectorRecall = if (outlines.isEmpty()) null else resolveVectorRecall(bookId, corpus, chapterIndex)
         PreparedAnnotationContext(revision, outlines, titles,
             !corpus.complete,
             recallCharacterCards(bookId, revision, chapterIndex),
@@ -204,8 +204,8 @@ private const val OUTLINE_BUDGET_RATIO = 0.6
 private const val CARD_BUDGET_RATIO = 0.3
 private const val CONCLUSION_BUDGET_RATIO = 0.1
 
-/** 向量余弦距离闸：超过该距离的语义片段不算相关（与 RetrievalRequest.maxVectorDistance 一致）。 */
-private const val VECTOR_MAX_DISTANCE = 0.80
+/** 大纲向量腿的余弦距离闸：比通用片段闸更紧——「切片命中 → 反查章大纲」是有损映射，切片语义近不代表该章梗概必然相关。 */
+private const val OUTLINE_VECTOR_MAX_DISTANCE = 0.60
 
 private fun roleLabel(role: CharacterRole): String = when (role) {
     CharacterRole.PROTAGONIST -> "主角"
@@ -432,7 +432,7 @@ internal class PreparedAnnotationContext(
             val selectedOutlines = RetrievalSelection.select(
                 fusedOutlines.filter { candidate ->
                     (candidate.lexicalScore != null && candidate.lexicalScore >= bestOutline * 0.35) ||
-                        (candidate.vectorDistance != null && candidate.vectorDistance <= VECTOR_MAX_DISTANCE)
+                        (candidate.vectorDistance != null && candidate.vectorDistance <= OUTLINE_VECTOR_MAX_DISTANCE)
                 },
                 topK = MAX_OUTLINES, maxPerChapter = 1, literalKeys = emptySet(), literalReserve = 0
             ).selected
@@ -448,24 +448,34 @@ internal class PreparedAnnotationContext(
             val onStageConclusions = rankedConclusions
                 .filter { (it.lexicalScore ?: 0.0) >= bestConclusion * 0.35 }
                 .mapNotNull { conclusions.getOrNull(it.chunkIndex) }
-            val summaries = packAnnotationBackground(selectedOutlines.map {
+            val outlineBlocks = selectedOutlines.map {
                 chapterLabel(it.chapterIndex) + "梗概（辅助资料，以原文为准）：\n" + it.text
-            }, (backgroundBudget * OUTLINE_BUDGET_RATIO).toInt())
-            val cardsText = packAnnotationBackground(
-                if (onStageCards.isEmpty()) emptyList() else
-                    listOf("【角色卡】与本文相关人物的档案（辅助资料，以原文为准）：") +
-                        onStageCards.map { (card, lines) -> card.name + "\n" + lines.joinToString("\n") },
-                (backgroundBudget * CARD_BUDGET_RATIO).toInt()
-            )
-            val conclusionsText = packAnnotationBackground(
-                if (onStageConclusions.isEmpty()) emptyList() else
-                    listOf("【前文结论】你此前写下的段评/讨论结论（辅助资料）：") +
-                        onStageConclusions.map { chapterLabel(it.chapterIndex) + conclusionPrefix(it.source) + it.text },
-                (backgroundBudget * CONCLUSION_BUDGET_RATIO).toInt()
-            )
+            }
+            val cardBlocks = if (onStageCards.isEmpty()) emptyList() else
+                listOf("【角色卡】与本文相关人物的档案（辅助资料，以原文为准）：") +
+                    onStageCards.map { (card, lines) -> card.name + "\n" + lines.joinToString("\n") }
+            val conclusionBlocks = if (onStageConclusions.isEmpty()) emptyList() else
+                listOf("【前文结论】你此前写下的段评/讨论结论（辅助资料）：") +
+                    onStageConclusions.map { chapterLabel(it.chapterIndex) + conclusionPrefix(it.source) + it.text }
+            // 三类各占 backgroundBudget 的固定比例作硬上限；某类没用满的预算按 大纲 → 角色卡 → 结论 回流补给。
+            val outlineCap = (backgroundBudget * OUTLINE_BUDGET_RATIO).toInt()
+            val cardCap = (backgroundBudget * CARD_BUDGET_RATIO).toInt()
+            val conclusionCap = (backgroundBudget * CONCLUSION_BUDGET_RATIO).toInt()
+            var summaries = packAnnotationBackground(outlineBlocks, outlineCap)
+            var cardsText = packAnnotationBackground(cardBlocks, cardCap)
+            var conclusionsText = packAnnotationBackground(conclusionBlocks, conclusionCap)
+            var leftover = (backgroundBudget - summaries.length - cardsText.length - conclusionsText.length).coerceAtLeast(0)
+            summaries = packAnnotationBackground(outlineBlocks, outlineCap + leftover)
+            leftover = (backgroundBudget - summaries.length - cardsText.length - conclusionsText.length).coerceAtLeast(0)
+            cardsText = packAnnotationBackground(cardBlocks, cardCap + leftover)
+            leftover = (backgroundBudget - summaries.length - cardsText.length - conclusionsText.length).coerceAtLeast(0)
+            conclusionsText = packAnnotationBackground(conclusionBlocks, conclusionCap + leftover)
             val warning = if (partial) "前文检索只覆盖部分正文；未命中不代表书中没有。" else ""
             val background = packAnnotationBackground(listOf(warning, summaries, cardsText, conclusionsText), backgroundBudget)
-            val prefix = ProactiveAnnotationParagraphs.prefix(body, paragraph, budget - target.length - background.length)
+            val prefix = ProactiveAnnotationParagraphs.prefix(
+                body, paragraph,
+                minOf(budget - target.length - background.length, ProactiveAnnotationParagraphs.MAX_PREFIX_CHARS)
+            )
             val recall = AnnotationRecall(
                 outlines = selectedOutlines.map { RecallOutline(chapterLabel(it.chapterIndex), it.text) },
                 characterCards = onStageCards.map { (card, lines) -> RecallCard(card.name, lines.joinToString("\n")) },
