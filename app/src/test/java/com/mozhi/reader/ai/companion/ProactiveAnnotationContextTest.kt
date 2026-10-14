@@ -1,7 +1,11 @@
 package com.mozhi.reader.ai.companion
 
+import com.mozhi.reader.ai.knowledge.BookCharacter
+import com.mozhi.reader.ai.knowledge.BookCharacterRelationship
 import com.mozhi.reader.ai.knowledge.ChapterKnowledge
 import com.mozhi.reader.ai.knowledge.ChapterKnowledgeCodec
+import com.mozhi.reader.ai.knowledge.CharacterEvidence
+import com.mozhi.reader.ai.knowledge.CharacterRole
 import com.mozhi.reader.ai.knowledge.KnowledgeCharacter
 import com.mozhi.reader.ai.knowledge.KnowledgeFact
 import com.mozhi.reader.core.database.entity.ChapterKnowledgeEntity
@@ -109,6 +113,47 @@ class ProactiveAnnotationContextTest {
         val guheng = merged.first { it.name == "顾衡" }
         assertEquals(listOf("在雪岭立誓", "把玉佩交还"), guheng.facts.map { it.text })
         assertEquals(4, guheng.latestChapterIndex)
+    }
+
+    @Test fun cardProfileFiltersFactsAndRelationsByChapterAnchor() {
+        val person = BookCharacter("顾衡",
+            evidence = listOf(
+                CharacterEvidence(2, KnowledgeFact("在雪岭立誓", "q", 0, 1)),
+                CharacterEvidence(5, KnowledgeFact("把玉佩交还", "q", 0, 1))
+            ),
+            relationships = listOf(
+                BookCharacterRelationship("沈岚", "师姐", CharacterEvidence(3, KnowledgeFact("师姐", "q", 0, 1))),
+                BookCharacterRelationship("谢玄", "宿敌", CharacterEvidence(7, KnowledgeFact("宿敌", "q", 0, 1)))
+            ),
+            role = CharacterRole.PROTAGONIST
+        )
+        val profile = cardProfile(person, 5)!!
+        assertTrue(profile.contains("主角"))
+        assertTrue(profile.contains("在雪岭立誓"))
+        assertTrue(profile.contains("沈岚"))
+        assertFalse(profile.contains("把玉佩交还"))
+        assertFalse(profile.contains("谢玄"))
+    }
+
+    @Test fun characterCardAndUserNoteAreInjectedWhenNamed() = runTest {
+        val prepared = PreparedAnnotationContext("r",
+            characterCards = listOf(AnnotationCharacterCard("顾衡", listOf("顾公子"), "主角；在雪岭立誓")),
+            notes = listOf(AnnotationNote(2, "顾衡这个承诺很关键，我记下了。")))
+        val result = prepared.forParagraph(target, ProactiveAnnotationParagraph(0, target.length), 8_000)
+        assertTrue(result.background.contains("【角色卡】"))
+        assertTrue(result.background.contains("主角"))
+        assertTrue(result.background.contains("【读书笔记】"))
+        assertTrue(result.background.contains("承诺"))
+    }
+
+    @Test fun cardAndNoteSkippedWhenNoNameOnStage() = runTest {
+        val prepared = PreparedAnnotationContext("r",
+            characterCards = listOf(AnnotationCharacterCard("顾衡", emptyList(), "主角")),
+            notes = listOf(AnnotationNote(2, "顾衡这个人值得留意。")))
+        val body = "今天天气不错。"
+        val result = prepared.forParagraph(body, ProactiveAnnotationParagraph(0, body.length), 8_000)
+        assertFalse(result.background.contains("【角色卡】"))
+        assertFalse(result.background.contains("【读书笔记】"))
     }
 
     private fun entry(chapter: Int, text: String) = ChapterKnowledgeEntity(

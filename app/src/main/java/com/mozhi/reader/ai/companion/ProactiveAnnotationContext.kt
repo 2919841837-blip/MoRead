@@ -2,7 +2,10 @@ package com.mozhi.reader.ai.companion
 
 import com.mozhi.reader.ai.agent.ChapterDocument
 import com.mozhi.reader.ai.agent.loadReadableCorpus
+import com.mozhi.reader.ai.knowledge.BookCharacter
+import com.mozhi.reader.ai.knowledge.BookCharactersCodec
 import com.mozhi.reader.ai.knowledge.ChapterKnowledgeCodec
+import com.mozhi.reader.ai.knowledge.CharacterRole
 import com.mozhi.reader.ai.knowledge.KnowledgeCharacter
 import com.mozhi.reader.core.database.MoReadDatabase
 import com.mozhi.reader.core.database.entity.ChapterKnowledgeEntity
@@ -44,7 +47,9 @@ class ProactiveAnnotationContextRepository @Inject constructor(
         }
         check(isCurrent(bookId, revision)) { "正文已变化，请重新准备段评上下文" }
         PreparedAnnotationContext(revision, corpus.candidates, knowledge.map { it.outline }, titles,
-            !corpus.complete, mergeAnnotationCharacters(knowledge))
+            !corpus.complete, mergeAnnotationCharacters(knowledge),
+            recallCharacterCards(bookId, revision, chapterIndex),
+            recallUserNotes(bookId, chapterIndex))
     }
 
     internal suspend fun isCurrent(bookId: Long, revision: String): Boolean = try {
@@ -52,6 +57,22 @@ class ProactiveAnnotationContextRepository @Inject constructor(
     } catch (cancelled: CancellationException) {
         throw cancelled
     } catch (_: Exception) { false }
+
+    /** 角色卡：按当前章过滤已核对的事实与关系，拼成每位人物的精简档案；没有资料就整块跳过。 */
+    private suspend fun recallCharacterCards(bookId: Long, revision: String, currentChapter: Int): List<AnnotationCharacterCard> {
+        val guide = BookCharactersCodec.visible(database.bookCharacterDao().getGuide(bookId), revision)?.guide ?: return emptyList()
+        return guide.characters.mapNotNull { person ->
+            cardProfile(person, currentChapter)?.let { AnnotationCharacterCard(person.name, person.aliases, it) }
+        }
+    }
+
+    /** 用户笔记：只取前文章节、有想法（非纯高亮）的批注。 */
+    private suspend fun recallUserNotes(bookId: Long, currentChapter: Int): List<AnnotationNote> {
+        if (currentChapter <= 0) return emptyList()
+        return database.annotationDao().getForChapterRangeByUser(bookId, 0, currentChapter - 1)
+            .filter { it.note.isNotBlank() }
+            .map { AnnotationNote(it.chapterIndex, it.note) }
+    }
 }
 
 internal data class AnnotationOutline(val chapterIndex: Int, val text: String)
@@ -83,11 +104,29 @@ internal data class AnnotationCharacter(val name: String, val facts: List<Annota
     val latestChapterIndex: Int get() = facts.maxOfOrNull(AnnotationCharacterFact::chapterIndex) ?: -1
 }
 
+/** 角色卡里一位上场人物的精简档案（名字 + 别称 + 已按章节锚点过滤的一句话档案）。 */
+internal data class AnnotationCharacterCard(val name: String, val aliases: List<String>, val profile: String)
+
+/** 用户的一条前文批注笔记（想法 + 章锚）。 */
+internal data class AnnotationNote(val chapterIndex: Int, val text: String)
+
 /** 每位人物跨章合并后最多保留几条事实。 */
 private const val MAX_FACTS_PER_CHARACTER = 6
 
 /** 每条段评最多注入几位人物。 */
 private const val MAX_CHARACTERS = 4
+
+/** 每条段评最多注入几位角色卡人物。 */
+private const val MAX_CARDS = 4
+
+/** 每位角色卡人物最多保留几条前文事实。 */
+private const val CARD_FACTS = 4
+
+/** 每位角色卡人物最多保留几条关系。 */
+private const val CARD_RELATIONS = 4
+
+/** 每条段评最多召回几条用户笔记。 */
+private const val MAX_NOTES = 4
 
 /** 跨章按名字合并人物：同一人只留一条，事实去重后保留最近 [MAX_FACTS_PER_CHARACTER] 条。 */
 internal fun mergeAnnotationCharacters(knowledge: List<AnnotationChapterKnowledge>): List<AnnotationCharacter> {
@@ -105,6 +144,29 @@ internal fun mergeAnnotationCharacters(knowledge: List<AnnotationChapterKnowledg
     }
 }
 
+private fun roleLabel(role: CharacterRole): String = when (role) {
+    CharacterRole.PROTAGONIST -> "主角"
+    CharacterRole.MAJOR -> "主要人物"
+    CharacterRole.SUPPORTING -> "配角"
+}
+
+/** 把一位人物压成一句话档案：主次 + 前文事实 + 关系，全部只取 [currentChapter] 之前的章节锚点。 */
+internal fun cardProfile(person: BookCharacter, currentChapter: Int): String? {
+    if (person.name.isBlank()) return null
+    val parts = buildList {
+        person.effectiveRole()?.let { add(roleLabel(it)) }
+        addAll(person.evidence
+            .filter { it.chapterIndex < currentChapter }
+            .map { it.fact.text }.distinct().takeLast(CARD_FACTS))
+        person.relationships
+            .filter { it.evidence.chapterIndex < currentChapter }
+            .map { it.target + "（" + it.relation + "）" }.distinct().take(CARD_RELATIONS)
+            .takeIf { it.isNotEmpty() }?.let { add("关系：" + it.joinToString("、")) }
+    }
+    val profile = parts.joinToString("；")
+    return profile.ifBlank { null }
+}
+
 internal data class AnnotationReadingContext(val prefix: String, val target: String, val background: String) {
     val chars: Int get() = prefix.length + target.length + background.length
 }
@@ -115,7 +177,9 @@ internal class PreparedAnnotationContext(
     private val outlines: List<AnnotationOutline> = emptyList(),
     private val titles: Map<Int, String> = emptyMap(),
     private val partial: Boolean = false,
-    private val characters: List<AnnotationCharacter> = emptyList()
+    private val characters: List<AnnotationCharacter> = emptyList(),
+    private val characterCards: List<AnnotationCharacterCard> = emptyList(),
+    private val notes: List<AnnotationNote> = emptyList()
 ) {
     suspend fun forParagraph(body: String, paragraph: ProactiveAnnotationParagraph, budgetChars: Int): AnnotationReadingContext =
         withContext(Dispatchers.Default) {
@@ -148,14 +212,24 @@ internal class PreparedAnnotationContext(
                             }
                         }
             }, backgroundBudget / 4)
+            val cardsText = packAnnotationBackground(cardsOnStage(query).let { onStage ->
+                if (onStage.isEmpty()) emptyList() else
+                    listOf("【角色卡】与本文相关人物的档案（辅助资料，以原文为准）：") +
+                        onStage.map { card -> card.name + "：" + card.profile }
+            }, backgroundBudget / 6)
+            val notesText = packAnnotationBackground(notesOnStage(namesOnStage(query)).let { onStage ->
+                if (onStage.isEmpty()) emptyList() else
+                    listOf("【读书笔记】你此前的批注（辅助资料）：") +
+                        onStage.map { note -> chapterLabel(note.chapterIndex) + "笔记：" + note.text }
+            }, backgroundBudget / 6)
             val summaries = packAnnotationBackground(selectedOutlines.map {
                 chapterLabel(it.chapterIndex) + "梗概（辅助资料，以原文为准）：\n" + it.text
             }, backgroundBudget / 3)
             val snippets = packAnnotationBackground(hits.map {
                 chapterLabel(it.chapterIndex) + "原文：\n" + it.text
-            }, (backgroundBudget - summaries.length - charactersText.length - 4).coerceAtLeast(0))
+            }, (backgroundBudget - summaries.length - charactersText.length - cardsText.length - notesText.length - 6).coerceAtLeast(0))
             val warning = if (partial) "前文检索只覆盖部分正文；未命中不代表书中没有。" else ""
-            val background = packAnnotationBackground(listOf(warning, summaries, charactersText, snippets), backgroundBudget)
+            val background = packAnnotationBackground(listOf(warning, summaries, charactersText, cardsText, notesText, snippets), backgroundBudget)
             val prefix = ProactiveAnnotationParagraphs.prefix(body, paragraph, budget - target.length - background.length)
             AnnotationReadingContext(prefix, target, background)
         }
@@ -168,6 +242,22 @@ internal class PreparedAnnotationContext(
         val latest = characters.maxOf { it.latestChapterIndex }
         return characters.filter { it.latestChapterIndex == latest }.take(MAX_CHARACTERS)
     }
+
+    /** 角色卡：只在目标段点名（名字或别称）该人物时注入，最多 [MAX_CARDS] 位。 */
+    private fun cardsOnStage(window: String): List<AnnotationCharacterCard> =
+        characterCards.filter { card ->
+            (listOf(card.name) + card.aliases).any { it.length >= 2 && window.contains(it) }
+        }.take(MAX_CARDS)
+
+    /** 前文上下文里出现过的所有人名（角色卡 + 每章人物），用于给读书笔记做名字匹配。 */
+    private fun namesOnStage(window: String): List<String> =
+        (characterCards.flatMap { listOf(it.name) + it.aliases } + characters.map { it.name })
+            .filter { it.length >= 2 && window.contains(it) }.distinct()
+
+    /** 用户笔记：只召回提到当前上场人物的前文批注，取最近几条。 */
+    private fun notesOnStage(names: List<String>): List<AnnotationNote> =
+        if (names.isEmpty()) emptyList()
+        else notes.filter { note -> names.any { note.text.contains(it) } }.takeLast(MAX_NOTES)
 }
 
 /** Clip on a UTF-16 boundary; labels and separators count against the same reading budget. */

@@ -60,6 +60,18 @@ interface AnnotationDao {
         toIndex: Int
     ): List<AnnotationEntity>
 
+    /** 用户自己的批注（personaId IS NULL），按章区间取前文笔记用。 */
+    @Query(
+        "SELECT * FROM annotations WHERE bookId = :bookId AND personaId IS NULL " +
+            "AND chapterIndex BETWEEN :fromIndex AND :toIndex " +
+            "ORDER BY chapterIndex ASC, startCharOffset ASC"
+    )
+    suspend fun getForChapterRangeByUser(
+        bookId: Long,
+        fromIndex: Int,
+        toIndex: Int
+    ): List<AnnotationEntity>
+
     @Query("SELECT COUNT(*) AS total, COALESCE(SUM(CASE WHEN chapterIndex = :chapterIndex THEN 1 ELSE 0 END), 0) AS currentChapter " +
         "FROM annotations WHERE bookId = :bookId AND " + com.mozhi.reader.core.retrieval.AnnotationVisibility.SQL_PREDICATE)
     suspend fun getVisibleCounts(bookId: Long, chapterIndex: Int, wholeBook: Boolean, maxChapter: Int,
