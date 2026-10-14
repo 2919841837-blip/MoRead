@@ -329,7 +329,7 @@ class ProactiveAnnotationServiceTest {
     @Test fun previousChapterEvidenceIsSentAlongsideTargetWithoutReadingSuffix() = runTest {
         val evidence = "首段原文的伏笔：顾衡曾许诺重回雪岭"
         coEvery { contextRepository.prepare(any(), any()) } returns PreparedAnnotationContext("revision",
-            listOf(com.mozhi.reader.core.retrieval.RetrievalCandidate(1, 0, 0, evidence, 0, evidence.length)))
+            outlines = listOf(AnnotationOutline(0, evidence)))
         val messages = mutableListOf<List<ChatMessage>>()
         coEvery { client.chat(capture(messages), any()) } returns """{"quote":"$first","note":"呼应前文"}"""
         val result = service.generateForChapter(request.copy(candidateLimit = 1), { permit }, { _, _ -> }, { _, _, _ -> true })

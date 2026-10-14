@@ -26,14 +26,13 @@ class ProactiveAnnotationContextTest {
     private val target = "顾衡取出玉佩，想起在雪岭对沈岚许下的承诺，终于决定兑现誓言。".repeat(3)
 
     @Test fun chapterOneHundredCanRecallChapterThreeInsteadOfOnlyRecentChapters() = runTest {
-        val candidates = (0..98).map { index ->
-            val text = if (index == 2) promise else "当地人忙着耕种庄稼，讨论今日天气。"
-            RetrievalCandidate(1, index, 0, text, 0, text.length)
+        val outlines = (0..98).map { index ->
+            if (index == 2) AnnotationOutline(index, "顾衡在雪岭立誓，要把玉佩交还给沈岚。")
+            else AnnotationOutline(index, "当地人忙着耕种庄稼，讨论今日天气。")
         }
-        val prepared = PreparedAnnotationContext("r", candidates,
-            listOf(AnnotationOutline(2, "顾衡对沈岚立下玉佩与雪岭的承诺。")), mapOf(2 to "雪岭之誓"))
+        val prepared = PreparedAnnotationContext("r", outlines, mapOf(2 to "雪岭之誓"))
         val result = prepared.forParagraph(target, ProactiveAnnotationParagraph(0, target.length), 8_000)
-        assertTrue(result.background.contains(promise))
+        assertTrue(result.background.contains("立誓"))
         assertTrue(result.background.contains("第 3 章"))
         assertTrue(result.background.contains("梗概"))
         assertFalse(result.background.contains("第 99 章"))
@@ -79,7 +78,7 @@ class ProactiveAnnotationContextTest {
         val after = "未来真相不得泄露".repeat(300)
         val body = before + target + after
         val paragraph = ProactiveAnnotationParagraph(before.length, before.length + target.length)
-        val prepared = PreparedAnnotationContext("r", listOf(RetrievalCandidate(1, 2, 0, promise, 0, promise.length)))
+        val prepared = PreparedAnnotationContext("r", outlines = listOf(AnnotationOutline(2, promise)))
         for (budget in listOf(4_000, 8_000, 16_000, 32_000, 64_000)) {
             val result = prepared.forParagraph(body, paragraph, budget)
             assertTrue("budget=$budget actual=" + result.chars, result.chars <= budget)
@@ -255,43 +254,46 @@ class ProactiveAnnotationContextTest {
         assertFalse(recalled.profile.contains("主次"))  // 自身字段收窄掉
     }
 
-    @Test fun vectorRecallAddsSemanticallyRelevantSnippetWithNoLexicalOverlap() = runTest {
+    @Test fun vectorRecallAddsSemanticallyRelevantOutlineWithNoLexicalOverlap() = runTest {
         val body = "顾衡取出玉佩，想起在雪岭对沈岚许下的承诺，终于决定兑现誓言。".repeat(3)
-        val candidates = listOf(RetrievalCandidate(1, 0, 0, "lorem ipsum dolor sit amet", 0, 26))
         val vector = VectorRecall(
             embedQuery = { _ -> floatArrayOf(1f) },
-            search = { _, _ -> listOf(RetrievalCandidate(1, 0, 0, "雪岭上的誓言刻骨铭心。", 0, 11, 0.1)) },
-            topK = 12, recallDepth = 48
+            search = { _, _ -> listOf(RetrievalCandidate(1, 2, 0, "正文切片", 0, 4, 0.1)) },
+            topK = 25, recallDepth = 48
         )
-        val result = PreparedAnnotationContext("r", candidates = candidates, vectorRecall = vector)
-            .forParagraph(body, ProactiveAnnotationParagraph(0, body.length), 8_000)
-        assertTrue(result.background.contains("雪岭上的誓言刻骨铭心"))
+        val result = PreparedAnnotationContext("r",
+            outlines = listOf(AnnotationOutline(2, "他远渡重洋，在异乡学会了造船。")),
+            vectorRecall = vector
+        ).forParagraph(body, ProactiveAnnotationParagraph(0, body.length), 8_000)
+        assertTrue(result.background.contains("造船"))
     }
 
     @Test fun vectorRecallFailureSilentlyFallsBackToBm25() = runTest {
         val body = "顾衡取出玉佩，想起在雪岭对沈岚许下的承诺。".repeat(3)
-        val candidates = listOf(RetrievalCandidate(1, 0, 0, "顾衡在雪岭立誓。", 0, 9))
         val vector = VectorRecall(
             embedQuery = { _ -> throw IllegalStateException("network down") },
             search = { _, _ -> emptyList() },
-            topK = 12, recallDepth = 48
+            topK = 25, recallDepth = 48
         )
-        val result = PreparedAnnotationContext("r", candidates = candidates, vectorRecall = vector)
-            .forParagraph(body, ProactiveAnnotationParagraph(0, body.length), 8_000)
-        assertTrue(result.background.contains("雪岭立誓"))
+        val result = PreparedAnnotationContext("r",
+            outlines = listOf(AnnotationOutline(0, "顾衡在雪岭立誓。")),
+            vectorRecall = vector
+        ).forParagraph(body, ProactiveAnnotationParagraph(0, body.length), 8_000)
+        assertTrue(result.background.contains("立誓"))
     }
 
-    @Test fun recallBreakdownCapturesOutlinesCardsAndSnippetSources() = runTest {
+    @Test fun recallBreakdownCapturesOutlinesAndCards() = runTest {
         val body = "顾衡取出玉佩，想起在雪岭对沈岚许下的承诺，终于决定兑现誓言。".repeat(3)
-        val lexical = RetrievalCandidate(1, 0, 0, "顾衡在雪岭立誓，要把玉佩交还给沈岚。", 0, 20)
         val vector = VectorRecall(
             embedQuery = { _ -> floatArrayOf(1f) },
-            search = { _, _ -> listOf(RetrievalCandidate(1, 1, 0, "雪岭上的誓言刻骨铭心。", 0, 11, 0.1)) },
-            topK = 12, recallDepth = 48
+            search = { _, _ -> listOf(RetrievalCandidate(1, 3, 0, "正文切片", 0, 4, 0.1)) },
+            topK = 25, recallDepth = 48
         )
         val prepared = PreparedAnnotationContext("r",
-            candidates = listOf(lexical),
-            outlines = listOf(AnnotationOutline(2, "顾衡对沈岚立下玉佩与雪岭的承诺。")),
+            outlines = listOf(
+                AnnotationOutline(2, "顾衡对沈岚立下玉佩与雪岭的承诺。"),
+                AnnotationOutline(3, "他远渡重洋，在异乡学会了造船。")
+            ),
             characterCards = listOf(card("顾衡",
                 identity("主次：主角"),
                 content("经历：在雪岭立誓"))),
@@ -299,9 +301,8 @@ class ProactiveAnnotationContextTest {
         )
         val recall = prepared.forParagraph(body, ProactiveAnnotationParagraph(0, body.length), 8_000).recall
         assertTrue(recall.outlines.any { it.text.contains("雪岭") })
+        assertTrue(recall.outlines.any { it.text.contains("造船") })
         assertTrue(recall.characterCards.any { it.name == "顾衡" })
-        assertTrue(recall.snippets.any { it.source == "向量" && it.text.contains("雪岭上的誓言") })
-        assertTrue(recall.snippets.any { it.source == "BM25" && it.text.contains("立誓") })
         // 落库走 encode()→decode() 往返，必须无损，否则详情页会读回空明细。
         assertEquals(recall, AnnotationRecall.decode(recall.encode()))
     }

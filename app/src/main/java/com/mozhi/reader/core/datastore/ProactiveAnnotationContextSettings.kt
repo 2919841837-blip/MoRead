@@ -21,6 +21,6 @@ data class ProactiveAnnotationContextSettings(
 
     companion object {
         const val MIN_CHARS = 4_000
-        const val MAX_CHARS = 64_000
+        const val MAX_CHARS = 128_000
     }
 }

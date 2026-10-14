@@ -20,7 +20,6 @@ import com.mozhi.reader.core.library.RecallCard
 import com.mozhi.reader.core.library.RecallDiscussion
 import com.mozhi.reader.core.library.RecallOutline
 import com.mozhi.reader.core.library.RecallProactiveNote
-import com.mozhi.reader.core.library.RecallSnippet
 import com.mozhi.reader.core.retrieval.Bm25LexicalRecall
 import com.mozhi.reader.core.retrieval.ReadingScope
 import com.mozhi.reader.core.retrieval.RetrievalCandidate
@@ -66,7 +65,7 @@ class ProactiveAnnotationContextRepository @Inject constructor(
         }
         check(isCurrent(bookId, revision)) { "正文已变化，请重新准备段评上下文" }
         val vectorRecall = resolveVectorRecall(bookId, corpus, chapterIndex)
-        PreparedAnnotationContext(revision, corpus.candidates, outlines, titles,
+        PreparedAnnotationContext(revision, outlines, titles,
             !corpus.complete,
             recallCharacterCards(bookId, revision, chapterIndex),
             recallConclusions(bookId, chapterIndex), vectorRecall)
@@ -114,7 +113,7 @@ class ProactiveAnnotationContextRepository @Inject constructor(
                         ?.copy(vectorDistance = hit.score)
                 }.distinctBy(RetrievalCandidate::key)
         }
-        return VectorRecall(embedQuery, search, SNIPPET_TOP_K, SNIPPET_RECALL_DEPTH)
+        return VectorRecall(embedQuery, search, MAX_OUTLINES, OUTLINE_RECALL_DEPTH)
     }
 
     internal suspend fun isCurrent(bookId: Long, revision: String): Boolean = try {
@@ -182,7 +181,7 @@ internal enum class ConclusionSource { PROACTIVE_NOTE, DISCUSSION }
 internal data class AnnotationConclusion(val chapterIndex: Int, val text: String, val source: ConclusionSource)
 
 /** 每条段评最多注入几位角色卡人物。 */
-private const val MAX_CARDS = 4
+private const val MAX_CARDS = 6
 
 /** 每位角色卡人物最多保留几条前文经历。 */
 private const val CARD_EXPERIENCES = 6
@@ -196,9 +195,14 @@ private const val CARD_CONTENT_RELEVANCE_RATIO = 0.35
 /** 每条段评最多召回几条前文结论（段评想法 + 讨论回复合并计数）。 */
 private const val MAX_CONCLUSIONS = 8
 
-/** 每条段评正文片段召回的名额与向量/BM25 的召回深度。 */
-private const val SNIPPET_TOP_K = 12
-private const val SNIPPET_RECALL_DEPTH = 48
+/** 每条段评最多召回几条大纲，以及大纲向量腿的召回深度（正文切片命中反查章）。 */
+private const val MAX_OUTLINES = 25
+private const val OUTLINE_RECALL_DEPTH = 48
+
+/** 三类召回资料占 backgroundBudget 的比例（合计 100%，正文片段已移除）。 */
+private const val OUTLINE_BUDGET_RATIO = 0.6
+private const val CARD_BUDGET_RATIO = 0.3
+private const val CONCLUSION_BUDGET_RATIO = 0.1
 
 /** 向量余弦距离闸：超过该距离的语义片段不算相关（与 RetrievalRequest.maxVectorDistance 一致）。 */
 private const val VECTOR_MAX_DISTANCE = 0.80
@@ -390,7 +394,6 @@ internal class VectorRecall(
 
 internal class PreparedAnnotationContext(
     val revision: String,
-    private val candidates: List<RetrievalCandidate> = emptyList(),
     private val outlines: List<AnnotationOutline> = emptyList(),
     private val titles: Map<Int, String> = emptyMap(),
     private val partial: Boolean = false,
@@ -406,32 +409,33 @@ internal class PreparedAnnotationContext(
             // Target is repeated for reliable quote grounding. Its two copies both consume budget.
             val backgroundBudget = ((budget - target.length * 2).coerceAtLeast(0) * 0.45).toInt()
             val query = ProactiveAnnotationParagraphs.prefix(body, paragraph, target.length + 400)
-            val ranked = Bm25LexicalRecall.rank(candidates, query, SNIPPET_RECALL_DEPTH) { context.ensureActive() }
-            val vectorHits = vectorRecall?.recall(query).orEmpty()
-            val fused = RrfFusion.fuse(
-                vector = vectorHits,
-                lexical = ranked,
-                lexicalWeight = RetrievalQuery.lexicalWeightFor(query)
-            )
-            val bestLexical = ranked.firstOrNull()?.lexicalScore ?: 0.0
-            val hits = RetrievalSelection.select(
-                fused.filter { candidate ->
-                    (candidate.lexicalScore != null && candidate.lexicalScore >= bestLexical * 0.35) ||
-                        (candidate.vectorDistance != null && candidate.vectorDistance <= VECTOR_MAX_DISTANCE)
-                },
-                topK = SNIPPET_TOP_K, maxPerChapter = 2, literalKeys = emptySet(), literalReserve = 0
-            ).selected
+            fun chapterLabel(index: Int): String = "第 "+ (index + 1) + " 章" +
+                titles[index]?.takeIf { it.isNotBlank() }?.let { "「" + it.take(80) + "」" }.orEmpty()
             val outlineCandidates = outlines.map { outline ->
                 RetrievalCandidate(0, outline.chapterIndex, 0, outline.text)
             }
-            val rankedOutlines = Bm25LexicalRecall.rank(outlineCandidates, query, 4) { context.ensureActive() }
-            // 相关性下限：低于最高分 35% 的梗概不召回，避免只撞几个高频字就当相关。
+            val rankedOutlines = Bm25LexicalRecall.rank(outlineCandidates, query, MAX_OUTLINES) { context.ensureActive() }
+            // 向量腿：正文切片向量命中后反查该章大纲；同章多个切片只算一条。
+            val outlineByChapter = outlines.associateBy { it.chapterIndex }
+            val outlineVectorHits = vectorRecall?.recall(query).orEmpty()
+                .mapNotNull { hit -> outlineByChapter[hit.chapterIndex]?.let {
+                    RetrievalCandidate(0, hit.chapterIndex, 0, it.text, vectorDistance = hit.vectorDistance)
+                } }
+                .distinctBy { it.chapterIndex }
+            val fusedOutlines = RrfFusion.fuse(
+                vector = outlineVectorHits,
+                lexical = rankedOutlines,
+                lexicalWeight = RetrievalQuery.lexicalWeightFor(query)
+            )
             val bestOutline = rankedOutlines.firstOrNull()?.lexicalScore ?: 0.0
-            val relatedOutlines = rankedOutlines.filter { (it.lexicalScore ?: 0.0) >= bestOutline * 0.35 }
-            // 召回落空就空着：不兜底注入上一章梗概，避免把无关前文带进提示词污染输出。
-            val selectedOutlines = relatedOutlines
-            fun chapterLabel(index: Int): String = "第 "+ (index + 1) + " 章" +
-                titles[index]?.takeIf { it.isNotBlank() }?.let { "「" + it.take(80) + "」" }.orEmpty()
+            // 相关性闸：向量距离达标，或 BM25 ≥ 本轮最高分 35%；召回落空就空着，不兜底上一章。
+            val selectedOutlines = RetrievalSelection.select(
+                fusedOutlines.filter { candidate ->
+                    (candidate.lexicalScore != null && candidate.lexicalScore >= bestOutline * 0.35) ||
+                        (candidate.vectorDistance != null && candidate.vectorDistance <= VECTOR_MAX_DISTANCE)
+                },
+                topK = MAX_OUTLINES, maxPerChapter = 1, literalKeys = emptySet(), literalReserve = 0
+            ).selected
             val onStageCards = cardsOnStage(query).mapNotNull { card ->
                 narrowedCardLines(card, query) { context.ensureActive() }
                     .takeIf { it.isNotEmpty() }?.let { card to it }
@@ -444,31 +448,27 @@ internal class PreparedAnnotationContext(
             val onStageConclusions = rankedConclusions
                 .filter { (it.lexicalScore ?: 0.0) >= bestConclusion * 0.35 }
                 .mapNotNull { conclusions.getOrNull(it.chunkIndex) }
+            val summaries = packAnnotationBackground(selectedOutlines.map {
+                chapterLabel(it.chapterIndex) + "梗概（辅助资料，以原文为准）：\n" + it.text
+            }, (backgroundBudget * OUTLINE_BUDGET_RATIO).toInt())
             val cardsText = packAnnotationBackground(
                 if (onStageCards.isEmpty()) emptyList() else
                     listOf("【角色卡】与本文相关人物的档案（辅助资料，以原文为准）：") +
                         onStageCards.map { (card, lines) -> card.name + "\n" + lines.joinToString("\n") },
-                backgroundBudget / 4
+                (backgroundBudget * CARD_BUDGET_RATIO).toInt()
             )
             val conclusionsText = packAnnotationBackground(
                 if (onStageConclusions.isEmpty()) emptyList() else
                     listOf("【前文结论】你此前写下的段评/讨论结论（辅助资料）：") +
                         onStageConclusions.map { chapterLabel(it.chapterIndex) + conclusionPrefix(it.source) + it.text },
-                backgroundBudget / 4
+                (backgroundBudget * CONCLUSION_BUDGET_RATIO).toInt()
             )
-            val summaries = packAnnotationBackground(selectedOutlines.map {
-                chapterLabel(it.chapterIndex) + "梗概（辅助资料，以原文为准）：\n" + it.text
-            }, backgroundBudget / 4)
-            val snippets = packAnnotationBackground(hits.map {
-                chapterLabel(it.chapterIndex) + "原文：\n" + it.text
-            }, (backgroundBudget - summaries.length - cardsText.length - conclusionsText.length - 6).coerceAtLeast(0))
             val warning = if (partial) "前文检索只覆盖部分正文；未命中不代表书中没有。" else ""
-            val background = packAnnotationBackground(listOf(warning, summaries, cardsText, conclusionsText, snippets), backgroundBudget)
+            val background = packAnnotationBackground(listOf(warning, summaries, cardsText, conclusionsText), backgroundBudget)
             val prefix = ProactiveAnnotationParagraphs.prefix(body, paragraph, budget - target.length - background.length)
             val recall = AnnotationRecall(
                 outlines = selectedOutlines.map { RecallOutline(chapterLabel(it.chapterIndex), it.text) },
                 characterCards = onStageCards.map { (card, lines) -> RecallCard(card.name, lines.joinToString("\n")) },
-                snippets = hits.map { RecallSnippet(chapterLabel(it.chapterIndex), it.text, snippetSource(it)) },
                 discussions = onStageConclusions.filter { it.source == ConclusionSource.DISCUSSION }
                     .map { RecallDiscussion(chapterLabel(it.chapterIndex), it.text) },
                 proactiveNotes = onStageConclusions.filter { it.source == ConclusionSource.PROACTIVE_NOTE }
@@ -482,13 +482,6 @@ internal class PreparedAnnotationContext(
         characterCards.filter { card ->
             (listOf(card.name) + card.aliases + card.relationTargets).any { it.length >= 2 && window.contains(it) }
         }.take(MAX_CARDS)
-}
-
-/** 片段来源标签：向量 / BM25 / 两者融合，只用于召回明细展示，不参与召回逻辑。 */
-private fun snippetSource(candidate: RetrievalCandidate): String = when {
-    candidate.vectorDistance != null && candidate.lexicalScore != null -> "向量+BM25"
-    candidate.vectorDistance != null -> "向量"
-    else -> "BM25"
 }
 
 /** 前文结论的来源前缀：合并成一个召回块后仍保留「段评/讨论」来路，便于追溯。 */
