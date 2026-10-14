@@ -15,6 +15,7 @@ import com.mozhi.reader.ai.knowledge.KnowledgeFact
 import com.mozhi.reader.ai.knowledge.SourceAnchor
 import com.mozhi.reader.core.database.entity.ChapterKnowledgeEntity
 import com.mozhi.reader.core.datastore.ProactiveAnnotationContextSettings
+import com.mozhi.reader.core.library.AnnotationRecall
 import com.mozhi.reader.core.retrieval.ReadingScope
 import com.mozhi.reader.core.retrieval.RetrievalCandidate
 import kotlinx.coroutines.test.runTest
@@ -311,6 +312,8 @@ class ProactiveAnnotationContextTest {
         assertTrue(recall.notes.any { it.text.contains("承诺") })
         assertTrue(recall.snippets.any { it.source == "向量" && it.text.contains("雪岭上的誓言") })
         assertTrue(recall.snippets.any { it.source == "BM25" && it.text.contains("立誓") })
+        // 落库走 encode()→decode() 往返，必须无损，否则详情页会读回空明细。
+        assertEquals(recall, AnnotationRecall.decode(recall.encode()))
     }
 
     private fun entry(chapter: Int, text: String) = ChapterKnowledgeEntity(

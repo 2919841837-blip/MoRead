@@ -68,6 +68,7 @@ class AnnotationRepository @Inject constructor(
         colorTag: String = "",
         style: AnnotationStyle = AnnotationStyle.HIGHLIGHT,
         mediaJson: String = "{}",
+        recallJson: String = "{}",
         sourceScopeChapterIndex: Int? = null,
         sourceScopeCharOffset: Int? = null,
         textAnchorJson: String = ""
@@ -86,6 +87,7 @@ class AnnotationRepository @Inject constructor(
                 colorTag = colorTag,
                 style = style.wire,
                 mediaJson = mediaJson,
+                recallJson = recallJson,
                 sourceScopeChapterIndex = sourceScopeChapterIndex,
                 sourceScopeCharOffset = sourceScopeCharOffset,
                 textAnchorJson = textAnchorJson,

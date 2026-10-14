@@ -2,6 +2,8 @@ package com.mozhi.reader.ai.agent
 
 import com.mozhi.reader.ai.client.AiClientFactory
 import com.mozhi.reader.ai.client.ToolSpec
+import com.mozhi.reader.ai.companion.ProactiveAnnotationContextRepository
+import com.mozhi.reader.ai.companion.ProactiveAnnotationParagraph
 import com.mozhi.reader.ai.embedding.BookEmbeddingScheduler
 import com.mozhi.reader.ai.media.AiMediaGenerationService
 import com.mozhi.reader.ai.search.WebSearchService
@@ -9,9 +11,12 @@ import com.mozhi.reader.core.database.entity.AnnotationColors
 import com.mozhi.reader.core.database.entity.ModelRole
 import com.mozhi.reader.core.datastore.ReaderSettingsRepository
 import com.mozhi.reader.core.datastore.BookEmbeddingSettingsStore
+import com.mozhi.reader.core.datastore.ProactiveAnnotationContextSettings
+import com.mozhi.reader.core.library.AnnotationRecall
 import com.mozhi.reader.core.library.AnnotationRepository
 import com.mozhi.reader.core.library.LibraryRepository
 import com.mozhi.reader.core.library.NoteRepository
+import com.mozhi.reader.core.library.QuoteLocation
 import com.mozhi.reader.core.retrieval.BookSourceRegistry
 import com.mozhi.reader.core.retrieval.ReadingScopeResolver
 import com.mozhi.reader.core.retrieval.ReadingScope
@@ -20,6 +25,7 @@ import io.objectbox.BoxStore
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.flow.first
+import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonObject
@@ -48,6 +54,7 @@ class ReaderToolset @Inject constructor(
     private val libraryRepository: LibraryRepository,
     private val noteRepository: NoteRepository,
     private val annotationRepository: AnnotationRepository,
+    private val contextRepository: ProactiveAnnotationContextRepository,
     private val mediaService: AiMediaGenerationService,
     private val clientFactory: dagger.Lazy<AiClientFactory>,
     private val vectorStore: dagger.Lazy<BoxStore>,
@@ -85,6 +92,29 @@ class ReaderToolset @Inject constructor(
             }
         }
         val getRevision: suspend () -> String = { libraryRepository.bookTextRevision(bookId) }
+        // 聊天工具加批注也要召回前文资料（大纲 / 角色卡 / 读书笔记 / 正文片段），
+        // 与随读段评共用同一套召回上下文，让详情页的折叠明细对两条路径一致。
+        val recallFor: suspend (QuoteLocation) -> AnnotationRecall = { match ->
+            try {
+                val chapter = loadChapter(match.chapterIndex)
+                if (chapter == null) {
+                    AnnotationRecall()
+                } else {
+                    contextRepository.prepare(bookId, match.chapterIndex)
+                        .forParagraph(
+                            chapter.body,
+                            ProactiveAnnotationParagraph(match.startCharOffset, match.endCharOffset),
+                            ProactiveAnnotationContextSettings().budgetChars
+                        )
+                        .recall
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                // 召回失败不阻断批注落库：召回只是辅助资料，正文核验已通过。
+                AnnotationRecall()
+            }
+        }
         val tools = buildList {
             add(
                 GetReadingProgressTool(
@@ -161,6 +191,7 @@ class ReaderToolset @Inject constructor(
                                 startCharOffset = match.startCharOffset, endCharOffset = match.endCharOffset,
                                 selectedText = quote, note = comment,
                                 colorTag = AnnotationColors.forPersona(personaId), style = style,
+                                recallJson = recallFor(match).encode(),
                                 sourceScopeChapterIndex = scope.maxChapterIndex,
                                 sourceScopeCharOffset = scope.maxCharOffset
                             )

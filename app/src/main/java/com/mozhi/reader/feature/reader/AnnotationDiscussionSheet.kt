@@ -520,7 +520,7 @@ internal fun AnnotationDiscussionSheet(
                             palette = palette,
                             onPlayAudio = onPlayAudio
                         )
-                        RecallBreakdown(annotation.recallJson, palette)
+                        RecallBreakdown(annotation.recallJson, proactive = annotation.proactiveJobId != null, palette)
                     }
                 }
                 val threadReplies = replies.filter { it.annotationId == annotation.id }
@@ -1071,9 +1071,10 @@ private fun AnnotationMediaContent(
  * （recallJson 为空）不渲染。
  */
 @Composable
-private fun RecallBreakdown(recallJson: String, palette: ReaderPalette) {
+private fun RecallBreakdown(recallJson: String, proactive: Boolean, palette: ReaderPalette) {
     val recall = remember(recallJson) { AnnotationRecall.decode(recallJson) }
-    if (recall.isEmpty) return
+    // 非随读段评且没有召回数据时不渲染；随读段评即使召回为空也保留折叠区，好让人看出「确实没有前文可召回」。
+    if (recall.isEmpty && !proactive) return
     var expanded by rememberSaveable(recallJson) { mutableStateOf(false) }
     val total = recall.outlines.size + recall.characterCards.size + recall.notes.size + recall.snippets.size
     Column(
@@ -1092,7 +1093,7 @@ private fun RecallBreakdown(recallJson: String, palette: ReaderPalette) {
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text = "召回明细 · $total 项",
+                text = if (total > 0) "召回明细 · $total 项" else "召回明细",
                 style = MaterialTheme.typography.labelMedium,
                 color = palette.muted,
                 modifier = Modifier.weight(1f)
@@ -1104,6 +1105,13 @@ private fun RecallBreakdown(recallJson: String, palette: ReaderPalette) {
             )
         }
         if (expanded) {
+            if (recall.isEmpty) {
+                Text(
+                    text = "本次未召回前文资料（可能是第一章，或尚未建立前文大纲 / 角色卡 / 笔记）。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = palette.muted
+                )
+            }
             if (recall.outlines.isNotEmpty()) {
                 RecallGroup("大纲", recall.outlines.map { it.label to it.text }, palette)
             }
