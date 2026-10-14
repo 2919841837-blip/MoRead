@@ -659,5 +659,14 @@
     <string name="annotation_style_wavy">Wavy</string>
     <string name="dock_new_library_chat">New library chat</string>
     <string name="discussion_quote_label">PASSAGE</string>
+    <string name="discussion_recall_title_count">Recall · %1$d items</string>
+    <string name="discussion_recall_title">Recall</string>
+    <string name="discussion_recall_collapse">Collapse</string>
+    <string name="discussion_recall_expand">Expand</string>
+    <string name="discussion_recall_empty">No prior material was recalled for this passage (possibly the first chapter, or no outline / character cards / notes have been built yet).</string>
+    <string name="discussion_recall_group_outline">Outline</string>
+    <string name="discussion_recall_group_card">Character cards</string>
+    <string name="discussion_recall_group_note">Notes</string>
+    <string name="discussion_recall_group_snippet">Snippets</string>
     <string name="shelf_tags_clear">Clear</string>
 </resources>

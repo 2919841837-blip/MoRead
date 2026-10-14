@@ -122,6 +122,27 @@ class AnnotationDiscussionContextTest {
         assertTrue(prompt.contains("阅读助手"))
     }
 
+    @Test
+    fun systemPromptInjectsRecallBackgroundBetweenNeighborhoodAndTranscript() {
+        val prompt = buildDiscussionSystemPrompt(
+            persona = persona(name = "观澜", personality = "", isRoleplay = true),
+            book = book(lastReadChapterIndex = 5),
+            chapterTitle = null,
+            chapterNumber = 3,
+            quote = "引文",
+            neighborhood = "附近原文",
+            recallBackground = "【角色卡】顾衡\n【读书笔记】顾衡的承诺",
+            transcript = "用户：？",
+            readingScope = com.mozhi.reader.core.retrieval.ReadingScope.upto(5, 100)
+        )
+        assertTrue(prompt.contains("前文资料"))
+        assertTrue(prompt.contains("【角色卡】顾衡"))
+        assertTrue(prompt.contains("【读书笔记】顾衡的承诺"))
+        // 前文资料排在邻域之后、讨论串之前，保证模型先看资料再读对话。
+        assertTrue(prompt.indexOf("附近原文") < prompt.indexOf("前文资料"))
+        assertTrue(prompt.indexOf("前文资料") < prompt.indexOf("目前的讨论串"))
+    }
+
     private fun annotation(personaId: Long?, note: String) = AnnotationEntity(
         id = 1,
         bookId = 1,

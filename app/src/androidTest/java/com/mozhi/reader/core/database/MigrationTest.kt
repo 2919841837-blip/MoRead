@@ -1308,6 +1308,32 @@ class MigrationTest {
         }
     }
 
+    @Test fun migrate36To37AddsEmptyRecallColumnOnReplies() {
+        helper.createDatabase(DB_NAME, 36).use { db ->
+            db.execSQL("""
+                INSERT INTO books (id, title, author, coverPath, epubPath, sourceType, importedAt, totalChapters)
+                VALUES (1, '旧书', '作者', NULL, '', 'TXT', 1000, 3)
+            """.trimIndent())
+            db.execSQL("""
+                INSERT INTO annotations (
+                    bookId, personaId, chapterIndex, startCharOffset, endCharOffset,
+                    selectedText, note, colorTag, recallJson, createdAt
+                ) VALUES (1, 1, 0, 5, 12, '一段旧段评', '旧想法', 'amber', '{}', 1)
+            """.trimIndent())
+            db.execSQL("""
+                INSERT INTO annotation_replies (annotationId, personaId, replyToId, contentMarkdown, mediaJson, createdAt)
+                VALUES (1, 1, NULL, '旧 AI 回复', '{}', 2)
+            """.trimIndent())
+        }
+        helper.runMigrationsAndValidate(DB_NAME, 37, true, DatabaseMigrations.Migration36To37).use { db ->
+            db.query("SELECT contentMarkdown, recallJson FROM annotation_replies WHERE id = 1").use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals("旧 AI 回复", cursor.getString(0))
+                assertEquals("{}", cursor.getString(1))
+            }
+        }
+    }
+
     private companion object {
         const val DB_NAME = "migration-test.db"
     }

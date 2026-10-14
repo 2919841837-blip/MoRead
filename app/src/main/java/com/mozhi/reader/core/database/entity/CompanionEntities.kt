@@ -230,6 +230,9 @@ data class AnnotationReplyEntity(
     /** 随回复附带的语音/插图清单 JSON（见 AnnotationMedia）；'{}' = 纯文字回复。 */
     @ColumnInfo(defaultValue = "'{}'")
     val mediaJson: String = "{}",
+    /** AI 应答时召回的前文资料明细 JSON（见 AnnotationRecall）；'{}' = 用户发言或旧行。 */
+    @ColumnInfo(defaultValue = "'{}'")
+    val recallJson: String = "{}",
     val createdAt: Long
 )
 

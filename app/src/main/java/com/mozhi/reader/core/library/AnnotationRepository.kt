@@ -137,7 +137,8 @@ class AnnotationRepository @Inject constructor(
         personaId: Long?,
         contentMarkdown: String,
         replyToId: Long? = null,
-        mediaJson: String = "{}"
+        mediaJson: String = "{}",
+        recallJson: String = "{}"
     ): Long {
         require(contentMarkdown.isNotBlank()) { "回复内容为空" }
         return annotationDao.insertReply(
@@ -147,6 +148,7 @@ class AnnotationRepository @Inject constructor(
                 replyToId = replyToId,
                 contentMarkdown = contentMarkdown.trim(),
                 mediaJson = mediaJson,
+                recallJson = recallJson,
                 createdAt = System.currentTimeMillis()
             )
         )

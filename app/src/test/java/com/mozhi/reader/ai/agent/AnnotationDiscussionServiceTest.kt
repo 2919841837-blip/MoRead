@@ -1,6 +1,7 @@
 package com.mozhi.reader.ai.agent
 
 import com.mozhi.reader.ai.client.ChatMessage
+import com.mozhi.reader.ai.companion.ProactiveAnnotationContextRepository
 import com.mozhi.reader.ai.persona.PersonaRepository
 import com.mozhi.reader.core.database.entity.*
 import com.mozhi.reader.core.datastore.*
@@ -19,6 +20,7 @@ class AnnotationDiscussionServiceTest {
     private val toolset = mockk<ReaderToolset>()
     private val library = mockk<LibraryRepository>()
     private val annotations = mockk<AnnotationRepository>()
+    private val context = mockk<ProactiveAnnotationContextRepository>()
     private val personas = mockk<PersonaRepository>()
     private val settings = mockk<ReaderSettingsRepository>()
     private val masks = mockk<UserMaskStore>()
@@ -38,6 +40,7 @@ class AnnotationDiscussionServiceTest {
         coEvery { personas.getPersonas() } returns listOf(persona)
         coEvery { library.getBook(1) } returns book
         coEvery { library.getChapters(1) } returns emptyList()
+        coEvery { library.getChapter(1, any()) } returns null
         coEvery { library.getChapterTitle(1, 2) } returns "旧事"
         coEvery { annotations.getAnnotation(3) } returns annotation
         coEvery { annotations.getReplies(3) } returns emptyList()
@@ -49,7 +52,7 @@ class AnnotationDiscussionServiceTest {
         every { toolset.forBook(bookId = 1, personaId = 7, enabledTools = capture(names),
             readingScope = capture(scope), memoryScope = capture(memory)) } returns emptyList()
         every { loop.runDetached(capture(history), any(), maxRounds = 5) } returns flowOf(AgentEvent.Text("他还记得那份承诺。"))
-        return AnnotationDiscussionService(loop, toolset, library, annotations, personas, settings, masks)
+        return AnnotationDiscussionService(loop, toolset, library, annotations, context, personas, settings, masks)
     }
 
     @Test fun plainQuestionGetsRetrievalToolsAndUsesActualReadBoundary() = runTest {

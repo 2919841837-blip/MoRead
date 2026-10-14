@@ -655,5 +655,14 @@
     <string name="annotation_style_wavy">波浪</string>
     <string name="dock_new_library_chat">新的书库伴读</string>
     <string name="discussion_quote_label">原文</string>
+    <string name="discussion_recall_title_count">召回明细 · %1$d 项</string>
+    <string name="discussion_recall_title">召回明细</string>
+    <string name="discussion_recall_collapse">收起</string>
+    <string name="discussion_recall_expand">展开</string>
+    <string name="discussion_recall_empty">本次未召回前文资料（可能是第一章，或尚未建立前文大纲 / 角色卡 / 笔记）。</string>
+    <string name="discussion_recall_group_outline">大纲</string>
+    <string name="discussion_recall_group_card">角色卡</string>
+    <string name="discussion_recall_group_note">笔记</string>
+    <string name="discussion_recall_group_snippet">片段</string>
     <string name="shelf_tags_clear">清除</string>
 </resources>

@@ -803,6 +803,13 @@ object DatabaseMigrations {
         }
     }
 
+    /** 讨论串 AI 应答也召回：回复层记录 AI 生成这条发言时召回的前文资料明细，供详情页折叠展示。 */
+    val Migration36To37 = object : Migration(36, 37) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("ALTER TABLE `annotation_replies` ADD COLUMN `recallJson` TEXT NOT NULL DEFAULT '{}'")
+        }
+    }
+
     /** 人物档案：逐人落库的断点与缓存，删书级联清理。 */
     val Migration34To35 = object : Migration(34, 35) {
         override fun migrate(db: SupportSQLiteDatabase) {

@@ -2,11 +2,15 @@ package com.mozhi.reader.ai.agent
 
 import com.mozhi.reader.ai.client.ChatMessage
 import com.mozhi.reader.ai.client.ChatRole
+import com.mozhi.reader.ai.companion.AnnotationReadingContext
+import com.mozhi.reader.ai.companion.ProactiveAnnotationContextRepository
+import com.mozhi.reader.ai.companion.ProactiveAnnotationParagraph
 import com.mozhi.reader.ai.persona.PersonaRepository
 import com.mozhi.reader.core.database.entity.AnnotationEntity
 import com.mozhi.reader.core.database.entity.AnnotationReplyEntity
 import com.mozhi.reader.core.database.entity.BookEntity
 import com.mozhi.reader.core.database.entity.PersonaEntity
+import com.mozhi.reader.core.datastore.ProactiveAnnotationContextSettings
 import com.mozhi.reader.core.library.AnnotationRepository
 import com.mozhi.reader.core.library.LibraryRepository
 import com.mozhi.reader.core.retrieval.ReadingScope
@@ -30,6 +34,7 @@ class AnnotationDiscussionService @Inject constructor(
     private val toolset: ReaderToolset,
     private val libraryRepository: LibraryRepository,
     private val annotationRepository: AnnotationRepository,
+    private val contextRepository: ProactiveAnnotationContextRepository,
     private val personaRepository: PersonaRepository,
     private val settingsRepository: com.mozhi.reader.core.datastore.ReaderSettingsRepository,
     private val userMaskStore: com.mozhi.reader.core.datastore.UserMaskStore
@@ -61,6 +66,7 @@ class AnnotationDiscussionService @Inject constructor(
             val replies = annotationRepository.getReplies(annotationId)
             val personaNames = personaRepository.getPersonas().associate { it.id to it.name }
             val neighborhood = loadAnchorNeighborhood(book, annotation, scope)
+            val recallContext = loadRecallContext(bookId, annotation)
             val transcript = buildDiscussionTranscript(annotation, replies, personaNames)
             val system = buildDiscussionSystemPrompt(
                 persona = persona,
@@ -69,6 +75,7 @@ class AnnotationDiscussionService @Inject constructor(
                 chapterNumber = annotation.chapterIndex + 1,
                 quote = annotation.selectedText,
                 neighborhood = neighborhood,
+                recallBackground = recallContext.background,
                 transcript = transcript,
                 readingScope = scope
             )
@@ -123,7 +130,8 @@ class AnnotationDiscussionService @Inject constructor(
             val replyId = annotationRepository.addReply(
                 annotationId = annotationId,
                 personaId = personaId,
-                contentMarkdown = content.take(MAX_REPLY_CHARS)
+                contentMarkdown = content.take(MAX_REPLY_CHARS),
+                recallJson = recallContext.recall.encode()
             )
             emit(Event.Done(replyId))
         } catch (cancelled: CancellationException) {
@@ -151,6 +159,35 @@ class AnnotationDiscussionService @Inject constructor(
             readLimit = readLimit,
             radius = NEIGHBORHOOD_RADIUS
         )
+    }
+
+    /**
+     * 讨论串 AI 应答的召回上下文：与随读段评 / 聊天工具共用同一套召回（大纲 / 角色卡 / 笔记 /
+     * 正文片段），让「用户手动划线、AI 自动回复」这条路径的发言同样以前文资料为依据。
+     * 召回失败不阻断应答，返回空上下文（前文资料只是辅助，正文核验已通过）。
+     */
+    private suspend fun loadRecallContext(bookId: Long, annotation: AnnotationEntity): AnnotationReadingContext {
+        val chapter = libraryRepository.getChapter(bookId, annotation.chapterIndex)
+            ?: return AnnotationReadingContext("", "", "")
+        val body = try {
+            libraryRepository.readChapterTextStrict(bookId, chapter)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            return AnnotationReadingContext("", "", "")
+        }
+        return try {
+            contextRepository.prepare(bookId, annotation.chapterIndex)
+                .forParagraph(
+                    body,
+                    ProactiveAnnotationParagraph(annotation.startCharOffset, annotation.endCharOffset),
+                    ProactiveAnnotationContextSettings().budgetChars
+                )
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            AnnotationReadingContext("", "", "")
+        }
     }
 
     private companion object {
@@ -203,6 +240,7 @@ internal fun buildDiscussionSystemPrompt(
     chapterNumber: Int,
     quote: String,
     neighborhood: String,
+    recallBackground: String = "",
     transcript: String,
     readingScope: ReadingScope
 ): String = buildString {
@@ -222,6 +260,10 @@ internal fun buildDiscussionSystemPrompt(
     append("\n\n被讨论的原文：\n“").append(quote.take(600)).append("”")
     if (neighborhood.isNotBlank()) {
         append("\n\n这段原文的上下文：\n").append(neighborhood)
+    }
+    if (recallBackground.isNotBlank()) {
+        append("\n\n前文资料（与这段原文相关的大纲、角色卡、笔记、正文片段，辅助资料以原文为准）：\n")
+            .append(recallBackground)
     }
     append("\n\n目前的讨论串：\n").append(transcript)
     append("\n\n规则：")

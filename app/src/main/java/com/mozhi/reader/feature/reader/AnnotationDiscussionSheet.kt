@@ -506,13 +506,6 @@ internal fun AnnotationDiscussionSheet(
                     ) {
                         // 召回明细在上、段评内容在下，用 Column 竖向排布避免重叠；展开召回时内容自动下移。
                         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            // TEMP DEBUG：定位聊天批注召回不可见问题，诊断后删除。
-                            Text(
-                                text = "DEBUG persona=${annotation.personaId} recallLen=${annotation.recallJson.length} " +
-                                    "recall=${annotation.recallJson.take(120)}",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = palette.muted
-                            )
                             RecallBreakdown(
                                 annotation.recallJson,
                                 aiGenerated = annotation.personaId != null,
@@ -550,14 +543,22 @@ internal fun AnnotationDiscussionSheet(
                         deleteLabel = "删除",
                         onDelete = { onDeleteReply(reply.id) }
                     ) {
-                        ThreadText(reply.contentMarkdown, palette)
-                        AnnotationMediaContent(
-                            media = AnnotationMedia.decode(reply.mediaJson),
-                            text = reply.contentMarkdown,
-                            illustrations = illustrations,
-                            palette = palette,
-                            onPlayAudio = onPlayAudio
-                        )
+                        // AI 回复同样带召回明细：召回在上、正文在下，与楼主层一致；用户发言（personaId == null）无召回，RecallBreakdown 自动不渲染。
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            RecallBreakdown(
+                                reply.recallJson,
+                                aiGenerated = reply.personaId != null,
+                                palette = palette
+                            )
+                            ThreadText(reply.contentMarkdown, palette)
+                            AnnotationMediaContent(
+                                media = AnnotationMedia.decode(reply.mediaJson),
+                                text = reply.contentMarkdown,
+                                illustrations = illustrations,
+                                palette = palette,
+                                onPlayAudio = onPlayAudio
+                            )
+                        }
                     }
                 }
             }
@@ -1106,13 +1107,13 @@ private fun RecallBreakdown(recallJson: String, aiGenerated: Boolean, palette: R
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text = if (total > 0) "召回明细 · $total 项" else "召回明细",
+                text = if (total > 0) stringResource(R.string.discussion_recall_title_count, total) else stringResource(R.string.discussion_recall_title),
                 style = MaterialTheme.typography.labelMedium,
                 color = palette.muted,
                 modifier = Modifier.weight(1f)
             )
             Text(
-                text = if (expanded) "收起" else "展开",
+                text = stringResource(if (expanded) R.string.discussion_recall_collapse else R.string.discussion_recall_expand),
                 style = MaterialTheme.typography.labelSmall,
                 color = palette.seal
             )
@@ -1120,22 +1121,22 @@ private fun RecallBreakdown(recallJson: String, aiGenerated: Boolean, palette: R
         if (expanded) {
             if (recall.isEmpty) {
                 Text(
-                    text = "本次未召回前文资料（可能是第一章，或尚未建立前文大纲 / 角色卡 / 笔记）。",
+                    text = stringResource(R.string.discussion_recall_empty),
                     style = MaterialTheme.typography.bodySmall,
                     color = palette.muted
                 )
             }
             if (recall.outlines.isNotEmpty()) {
-                RecallGroup("大纲", recall.outlines.map { it.label to it.text }, palette)
+                RecallGroup(stringResource(R.string.discussion_recall_group_outline), recall.outlines.map { it.label to it.text }, palette)
             }
             if (recall.characterCards.isNotEmpty()) {
-                RecallGroup("角色卡", recall.characterCards.map { it.name to it.profile }, palette)
+                RecallGroup(stringResource(R.string.discussion_recall_group_card), recall.characterCards.map { it.name to it.profile }, palette)
             }
             if (recall.notes.isNotEmpty()) {
-                RecallGroup("笔记", recall.notes.map { it.label to it.text }, palette)
+                RecallGroup(stringResource(R.string.discussion_recall_group_note), recall.notes.map { it.label to it.text }, palette)
             }
             if (recall.snippets.isNotEmpty()) {
-                RecallGroup("片段", recall.snippets.map { snippet ->
+                RecallGroup(stringResource(R.string.discussion_recall_group_snippet), recall.snippets.map { snippet ->
                     (snippet.label + snippet.source.takeIf(String::isNotBlank)?.let { " · " + it }.orEmpty()) to snippet.text
                 }, palette)
             }
