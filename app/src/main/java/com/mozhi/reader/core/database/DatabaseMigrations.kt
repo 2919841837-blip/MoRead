@@ -810,6 +810,13 @@ object DatabaseMigrations {
         }
     }
 
+    /** 讨论结论召回：回复层记录 AI 写这条回复时的进度线，召回时按它过滤，防止带出后文。 */
+    val Migration37To38 = object : Migration(37, 38) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("ALTER TABLE `annotation_replies` ADD COLUMN `sourceScopeChapterIndex` INTEGER DEFAULT NULL")
+        }
+    }
+
     /** 人物档案：逐人落库的断点与缓存，删书级联清理。 */
     val Migration34To35 = object : Migration(34, 35) {
         override fun migrate(db: SupportSQLiteDatabase) {

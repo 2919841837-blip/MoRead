@@ -18,6 +18,7 @@ import com.mozhi.reader.core.datastore.ProactiveAnnotationContextSettings
 import com.mozhi.reader.core.library.AnnotationRecall
 import com.mozhi.reader.core.library.LibraryRepository
 import com.mozhi.reader.core.library.RecallCard
+import com.mozhi.reader.core.library.RecallDiscussion
 import com.mozhi.reader.core.library.RecallNote
 import com.mozhi.reader.core.library.RecallOutline
 import com.mozhi.reader.core.library.RecallSnippet
@@ -69,7 +70,8 @@ class ProactiveAnnotationContextRepository @Inject constructor(
         PreparedAnnotationContext(revision, corpus.candidates, knowledge.map { it.outline }, titles,
             !corpus.complete, mergeAnnotationCharacters(knowledge),
             recallCharacterCards(bookId, revision, chapterIndex),
-            recallUserNotes(bookId, chapterIndex), vectorRecall)
+            recallUserNotes(bookId, chapterIndex), recallDiscussions(bookId, chapterIndex),
+            vectorRecall)
     }
 
     /** 向量召回：本书启用了 AI 索引、前文已有切片、EMBEDDING 模型可用三者齐备才启用；缺任意一环静默退回纯 BM25。 */
@@ -136,6 +138,14 @@ class ProactiveAnnotationContextRepository @Inject constructor(
             .filter { it.note.isNotBlank() }
             .map { AnnotationNote(it.chapterIndex, it.note) }
     }
+
+    /** 讨论结论：前文章节里 AI 的讨论回复（结论/伏笔）；章锚与写时进度线已在 SQL 里双重过滤。 */
+    private suspend fun recallDiscussions(bookId: Long, currentChapter: Int): List<AnnotationDiscussion> {
+        if (currentChapter <= 0) return emptyList()
+        return database.annotationDao().getAiDiscussionConclusions(bookId, currentChapter)
+            .filter { it.contentMarkdown.isNotBlank() }
+            .map { AnnotationDiscussion(it.chapterIndex, it.contentMarkdown) }
+    }
 }
 
 internal data class AnnotationOutline(val chapterIndex: Int, val text: String)
@@ -191,6 +201,9 @@ internal data class AnnotationCharacterCard(
 /** 用户的一条前文批注笔记（想法 + 章锚）。 */
 internal data class AnnotationNote(val chapterIndex: Int, val text: String)
 
+/** 一条前文讨论结论（AI 在讨论串里的回复正文 + 章锚）。 */
+internal data class AnnotationDiscussion(val chapterIndex: Int, val text: String)
+
 /** 每位人物跨章合并后最多保留几条事实。 */
 private const val MAX_FACTS_PER_CHARACTER = 6
 
@@ -211,6 +224,9 @@ private const val CARD_CONTENT_RELEVANCE_RATIO = 0.35
 
 /** 每条段评最多召回几条用户笔记。 */
 private const val MAX_NOTES = 4
+
+/** 每条段评最多召回几条讨论结论。 */
+private const val MAX_DISCUSSIONS = 4
 
 /** 每条段评正文片段召回的名额与向量/BM25 的召回深度。 */
 private const val SNIPPET_TOP_K = 12
@@ -429,6 +445,7 @@ internal class PreparedAnnotationContext(
     private val characters: List<AnnotationCharacter> = emptyList(),
     private val characterCards: List<AnnotationCharacterCard> = emptyList(),
     private val notes: List<AnnotationNote> = emptyList(),
+    private val discussions: List<AnnotationDiscussion> = emptyList(),
     private val vectorRecall: VectorRecall? = null
 ) {
     suspend fun forParagraph(body: String, paragraph: ProactiveAnnotationParagraph, budgetChars: Int): AnnotationReadingContext =
@@ -471,6 +488,12 @@ internal class PreparedAnnotationContext(
                     .takeIf { it.isNotEmpty() }?.let { card to it }
             }
             val onStageNotes = notesOnStage(namesOnStage(query))
+            val discussionCandidates = discussions.map { discussion ->
+                RetrievalCandidate(0, discussion.chapterIndex, 0, discussion.text)
+            }
+            val rankedDiscussions = Bm25LexicalRecall.rank(discussionCandidates, query, MAX_DISCUSSIONS) { context.ensureActive() }
+            val bestDiscussion = rankedDiscussions.firstOrNull()?.lexicalScore ?: 0.0
+            val onStageDiscussions = rankedDiscussions.filter { (it.lexicalScore ?: 0.0) >= bestDiscussion * 0.35 }
             val charactersText = packAnnotationBackground(
                 if (onStageCharacters.isEmpty()) emptyList() else
                     listOf("【前文人物】与本文相关的人物（辅助资料，以原文为准）：") +
@@ -493,20 +516,27 @@ internal class PreparedAnnotationContext(
                         onStageNotes.map { note -> chapterLabel(note.chapterIndex) + "笔记：" + note.text },
                 backgroundBudget / 8
             )
+            val discussionsText = packAnnotationBackground(
+                if (onStageDiscussions.isEmpty()) emptyList() else
+                    listOf("【讨论结论】你此前在讨论里的结论（辅助资料）：") +
+                        onStageDiscussions.map { chapterLabel(it.chapterIndex) + "讨论：" + it.text },
+                backgroundBudget / 8
+            )
             val summaries = packAnnotationBackground(selectedOutlines.map {
                 chapterLabel(it.chapterIndex) + "梗概（辅助资料，以原文为准）：\n" + it.text
             }, backgroundBudget / 4)
             val snippets = packAnnotationBackground(hits.map {
                 chapterLabel(it.chapterIndex) + "原文：\n" + it.text
-            }, (backgroundBudget - summaries.length - charactersText.length - cardsText.length - notesText.length - 6).coerceAtLeast(0))
+            }, (backgroundBudget - summaries.length - charactersText.length - cardsText.length - notesText.length - discussionsText.length - 6).coerceAtLeast(0))
             val warning = if (partial) "前文检索只覆盖部分正文；未命中不代表书中没有。" else ""
-            val background = packAnnotationBackground(listOf(warning, summaries, charactersText, cardsText, notesText, snippets), backgroundBudget)
+            val background = packAnnotationBackground(listOf(warning, summaries, charactersText, cardsText, notesText, discussionsText, snippets), backgroundBudget)
             val prefix = ProactiveAnnotationParagraphs.prefix(body, paragraph, budget - target.length - background.length)
             val recall = AnnotationRecall(
                 outlines = selectedOutlines.map { RecallOutline(chapterLabel(it.chapterIndex), it.text) },
                 characterCards = onStageCards.map { (card, lines) -> RecallCard(card.name, lines.joinToString("\n")) },
                 notes = onStageNotes.map { RecallNote(chapterLabel(it.chapterIndex), it.text) },
-                snippets = hits.map { RecallSnippet(chapterLabel(it.chapterIndex), it.text, snippetSource(it)) }
+                snippets = hits.map { RecallSnippet(chapterLabel(it.chapterIndex), it.text, snippetSource(it)) },
+                discussions = onStageDiscussions.map { RecallDiscussion(chapterLabel(it.chapterIndex), it.text) }
             )
             AnnotationReadingContext(prefix, target, background, recall)
         }

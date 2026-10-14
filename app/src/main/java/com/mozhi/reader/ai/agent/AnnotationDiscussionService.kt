@@ -131,7 +131,8 @@ class AnnotationDiscussionService @Inject constructor(
                 annotationId = annotationId,
                 personaId = personaId,
                 contentMarkdown = content.take(MAX_REPLY_CHARS),
-                recallJson = recallContext.recall.encode()
+                recallJson = recallContext.recall.encode(),
+                sourceScopeChapterIndex = scope.maxChapterIndex
             )
             emit(Event.Done(replyId))
         } catch (cancelled: CancellationException) {

@@ -1334,6 +1334,31 @@ class MigrationTest {
         }
     }
 
+    @Test fun migrate37To38AddsSourceScopeColumnOnReplies() {
+        helper.createDatabase(DB_NAME, 37).use { db ->
+            db.execSQL("""
+                INSERT INTO books (id, title, author, coverPath, epubPath, sourceType, importedAt, totalChapters)
+                VALUES (1, '旧书', '作者', NULL, '', 'TXT', 1000, 3)
+            """.trimIndent())
+            db.execSQL("""
+                INSERT INTO annotations (
+                    bookId, personaId, chapterIndex, startCharOffset, endCharOffset,
+                    selectedText, note, colorTag, recallJson, createdAt
+                ) VALUES (1, 1, 0, 5, 12, '一段旧段评', '旧想法', 'amber', '{}', 1)
+            """.trimIndent())
+            db.execSQL("""
+                INSERT INTO annotation_replies (annotationId, personaId, replyToId, contentMarkdown, mediaJson, recallJson, createdAt)
+                VALUES (1, 1, NULL, '旧 AI 回复', '{}', '{}', 2)
+            """.trimIndent())
+        }
+        helper.runMigrationsAndValidate(DB_NAME, 38, true, DatabaseMigrations.Migration37To38).use { db ->
+            db.query("SELECT sourceScopeChapterIndex FROM annotation_replies WHERE id = 1").use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertTrue(cursor.isNull(0))
+            }
+        }
+    }
+
     private companion object {
         const val DB_NAME = "migration-test.db"
     }

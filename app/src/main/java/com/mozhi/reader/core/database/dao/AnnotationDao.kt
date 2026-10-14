@@ -14,6 +14,12 @@ data class AnnotationReplyCount(
 
 data class AnnotationVisibleCounts(val total: Int, val currentChapter: Int)
 
+/** 讨论结论召回用的投影：一条 AI 回复的正文 + 它所属批注的章锚。 */
+data class AnnotationReplyWithChapter(
+    val contentMarkdown: String,
+    val chapterIndex: Int
+)
+
 @Dao
 interface AnnotationDao {
     @Query("SELECT * FROM annotations ORDER BY createdAt DESC, id DESC")
@@ -121,4 +127,15 @@ interface AnnotationDao {
             "(SELECT id FROM annotations WHERE bookId = :bookId)"
     )
     fun observeRepliedAnnotationIds(bookId: Long): Flow<List<Long>>
+
+    /** 讨论结论召回：前文章节里 AI 的讨论回复；[sourceScopeChapterIndex] 为空的历史行回退到父批注章锚。 */
+    @Query(
+        "SELECT r.contentMarkdown, a.chapterIndex FROM annotation_replies r " +
+            "JOIN annotations a ON r.annotationId = a.id " +
+            "WHERE a.bookId = :bookId AND r.personaId IS NOT NULL " +
+            "AND a.chapterIndex < :currentChapter " +
+            "AND (r.sourceScopeChapterIndex IS NULL OR r.sourceScopeChapterIndex < :currentChapter) " +
+            "ORDER BY a.chapterIndex ASC, r.createdAt ASC"
+    )
+    suspend fun getAiDiscussionConclusions(bookId: Long, currentChapter: Int): List<AnnotationReplyWithChapter>
 }

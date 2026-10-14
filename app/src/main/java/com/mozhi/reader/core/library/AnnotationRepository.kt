@@ -1,6 +1,7 @@
 package com.mozhi.reader.core.library
 
 import com.mozhi.reader.core.database.dao.AnnotationDao
+import com.mozhi.reader.core.database.dao.AnnotationReplyWithChapter
 import com.mozhi.reader.core.database.entity.AnnotationColors
 import com.mozhi.reader.core.database.entity.AnnotationEntity
 import com.mozhi.reader.core.database.entity.AnnotationReplyEntity
@@ -132,13 +133,18 @@ class AnnotationRepository @Inject constructor(
     suspend fun getReplies(annotationId: Long): List<AnnotationReplyEntity> =
         annotationDao.getReplies(annotationId)
 
+    /** 前文章节里 AI 的讨论回复（结论/伏笔），供段评/讨论召回；已按写时进度线与父批注章锚双重防剧透过滤。 */
+    suspend fun getAiDiscussionConclusions(bookId: Long, currentChapter: Int): List<AnnotationReplyWithChapter> =
+        annotationDao.getAiDiscussionConclusions(bookId, currentChapter)
+
     suspend fun addReply(
         annotationId: Long,
         personaId: Long?,
         contentMarkdown: String,
         replyToId: Long? = null,
         mediaJson: String = "{}",
-        recallJson: String = "{}"
+        recallJson: String = "{}",
+        sourceScopeChapterIndex: Int? = null
     ): Long {
         require(contentMarkdown.isNotBlank()) { "回复内容为空" }
         return annotationDao.insertReply(
@@ -149,6 +155,7 @@ class AnnotationRepository @Inject constructor(
                 contentMarkdown = contentMarkdown.trim(),
                 mediaJson = mediaJson,
                 recallJson = recallJson,
+                sourceScopeChapterIndex = sourceScopeChapterIndex,
                 createdAt = System.currentTimeMillis()
             )
         )

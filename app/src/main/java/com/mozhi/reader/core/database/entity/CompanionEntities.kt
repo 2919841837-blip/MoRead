@@ -233,6 +233,8 @@ data class AnnotationReplyEntity(
     /** AI 应答时召回的前文资料明细 JSON（见 AnnotationRecall）；'{}' = 用户发言或旧行。 */
     @ColumnInfo(defaultValue = "'{}'")
     val recallJson: String = "{}",
+    /** AI 写这条回复时能看到的进度线（Visibility boundary）；null = 历史行，召回时回退到父批注所在章。 */
+    val sourceScopeChapterIndex: Int? = null,
     val createdAt: Long
 )
 
