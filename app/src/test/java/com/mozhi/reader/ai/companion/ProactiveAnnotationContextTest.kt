@@ -306,39 +306,25 @@ class ProactiveAnnotationContextTest {
         assertEquals(recall, AnnotationRecall.decode(recall.encode()))
     }
 
-    @Test fun discussionConclusionsAreRecalledByBm25AndIrrelevantOnesDropped() = runTest {
+    @Test fun conclusionsRecallMergesNotesAndDiscussionsAndDropsIrrelevant() = runTest {
         val body = "顾衡取出玉佩，想起在雪岭对沈岚许下的承诺，终于决定兑现誓言。".repeat(3)
         val prepared = PreparedAnnotationContext("r",
-            discussions = listOf(
-                AnnotationDiscussion(1, "顾衡对沈岚许下的玉佩承诺，和雪岭的伏笔呼应。"),
-                AnnotationDiscussion(0, "集市上的陶罐都很便宜。")
+            conclusions = listOf(
+                AnnotationConclusion(1, "顾衡在雪岭对沈岚许下的玉佩承诺，伏笔呼应。", ConclusionSource.PROACTIVE_NOTE),
+                AnnotationConclusion(1, "顾衡在雪岭对沈岚许下的玉佩承诺，和伏笔呼应。", ConclusionSource.DISCUSSION),
+                AnnotationConclusion(0, "集市上的陶罐都很便宜。", ConclusionSource.DISCUSSION)
             )
         )
         val result = prepared.forParagraph(body, ProactiveAnnotationParagraph(0, body.length), 8_000)
-        assertTrue(result.background.contains("讨论结论"))
+        assertTrue(result.background.contains("前文结论"))
         assertTrue(result.background.contains("伏笔"))
         assertFalse(result.background.contains("陶罐"))
+        // 段评与讨论结论合并成一个块，但来源前缀保留，详情明细仍按来源分栏
+        assertTrue(result.background.contains("段评："))
+        assertTrue(result.background.contains("讨论："))
+        assertTrue(result.recall.proactiveNotes.any { it.text.contains("伏笔") })
         assertTrue(result.recall.discussions.any { it.text.contains("伏笔") })
         assertFalse(result.recall.discussions.any { it.text.contains("陶罐") })
-        // 新字段同样走落库往返，必须无损。
-        assertEquals(result.recall, AnnotationRecall.decode(result.recall.encode()))
-    }
-
-    @Test fun proactiveNotesAreRecalledByBm25AndIrrelevantOnesDropped() = runTest {
-        val body = "顾衡取出玉佩，想起在雪岭对沈岚许下的承诺，终于决定兑现誓言。".repeat(3)
-        val prepared = PreparedAnnotationContext("r",
-            proactiveNotes = listOf(
-                AnnotationProactiveNote(1, "玉佩和雪岭的伏笔会在后文收束，沈岚是关键。"),
-                AnnotationProactiveNote(0, "集市上的陶罐都很便宜。")
-            )
-        )
-        val result = prepared.forParagraph(body, ProactiveAnnotationParagraph(0, body.length), 8_000)
-        assertTrue(result.background.contains("段评"))
-        assertTrue(result.background.contains("伏笔"))
-        assertFalse(result.background.contains("陶罐"))
-        assertTrue(result.recall.proactiveNotes.any { it.text.contains("伏笔") })
-        assertFalse(result.recall.proactiveNotes.any { it.text.contains("陶罐") })
-        // 新字段同样走落库往返，必须无损。
         assertEquals(result.recall, AnnotationRecall.decode(result.recall.encode()))
     }
 
