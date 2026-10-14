@@ -100,13 +100,19 @@ class ReaderToolset @Inject constructor(
                 if (chapter == null) {
                     AnnotationRecall()
                 } else {
-                    contextRepository.prepare(bookId, match.chapterIndex)
+                    val recall = contextRepository.prepare(bookId, match.chapterIndex)
                         .forParagraph(
                             chapter.body,
                             ProactiveAnnotationParagraph(match.startCharOffset, match.endCharOffset),
                             ProactiveAnnotationContextSettings().budgetChars
                         )
                         .recall
+                    runCatching {
+                        android.util.Log.d("ReaderToolset",
+                            "annotation recall ch=${match.chapterIndex}: outlines=${recall.outlines.size} " +
+                                "cards=${recall.characterCards.size} notes=${recall.notes.size} snippets=${recall.snippets.size}")
+                    }
+                    recall
                 }
             } catch (cancelled: CancellationException) {
                 throw cancelled
