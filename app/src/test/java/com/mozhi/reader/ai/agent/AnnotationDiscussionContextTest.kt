@@ -158,6 +158,7 @@ class AnnotationDiscussionContextTest {
         )
         assertTrue(prompt.contains("只围绕这段原文"))
         assertTrue(prompt.contains("与这段原文无关就忽略"))
+        assertTrue(prompt.contains("直接呼应、补全或延续"))
     }
 
     private fun annotation(personaId: Long?, note: String) = AnnotationEntity(

@@ -44,6 +44,7 @@ class ProactiveAnnotationServiceTest {
         val system = proactiveAnnotationMessages(persona, "目标段落正文").first().content.orEmpty()
         assertTrue(system.contains("note 只围绕这段原文写"))
         assertTrue(system.contains("与这段原文无关就忽略"))
+        assertTrue(system.contains("直接呼应、补全或延续"))
     }
 
     private val factory = mockk<AiClientFactory>()
