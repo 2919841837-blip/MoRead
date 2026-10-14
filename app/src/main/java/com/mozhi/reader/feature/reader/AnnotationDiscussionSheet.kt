@@ -504,23 +504,30 @@ internal fun AnnotationDiscussionSheet(
                         deleteLabel = "删除批注",
                         onDelete = { onDeleteAnnotation(annotation.id) }
                     ) {
-                        if (annotation.note.isNotBlank()) {
-                            ThreadText(annotation.note, palette)
-                        } else {
-                            Text(
-                                "划了这段原文，还没写想法",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = palette.muted
+                        // 召回明细在上、段评内容在下，用 Column 竖向排布避免重叠；展开召回时内容自动下移。
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            RecallBreakdown(
+                                annotation.recallJson,
+                                proactive = annotation.proactiveJobId != null,
+                                palette = palette
+                            )
+                            if (annotation.note.isNotBlank()) {
+                                ThreadText(annotation.note, palette)
+                            } else {
+                                Text(
+                                    "划了这段原文，还没写想法",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = palette.muted
+                                )
+                            }
+                            AnnotationMediaContent(
+                                media = AnnotationMedia.decode(annotation.mediaJson),
+                                text = annotation.note,
+                                illustrations = illustrations,
+                                palette = palette,
+                                onPlayAudio = onPlayAudio
                             )
                         }
-                        AnnotationMediaContent(
-                            media = AnnotationMedia.decode(annotation.mediaJson),
-                            text = annotation.note,
-                            illustrations = illustrations,
-                            palette = palette,
-                            onPlayAudio = onPlayAudio
-                        )
-                        RecallBreakdown(annotation.recallJson, proactive = annotation.proactiveJobId != null, palette)
                     }
                 }
                 val threadReplies = replies.filter { it.annotationId == annotation.id }
@@ -1079,8 +1086,7 @@ private fun RecallBreakdown(recallJson: String, proactive: Boolean, palette: Rea
     val total = recall.outlines.size + recall.characterCards.size + recall.notes.size + recall.snippets.size
     Column(
         modifier = Modifier
-            .fillMaxWidth()
-            .padding(top = 8.dp),
+            .fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         Row(
