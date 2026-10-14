@@ -36,7 +36,7 @@ data class AnnotationRecall(
 @Serializable
 data class RecallOutline(val label: String = "", val text: String = "")
 
-/** 召回的一位角色卡；[name] 是人物名，[profile] 是已按章节锚点过滤后的档案正文。 */
+/** 召回的一位角色卡；[name] 是人物名，[profile] 是已按章节锚点过滤、并收窄到当前段涉及字段后的档案正文。 */
 @Serializable
 data class RecallCard(val name: String = "", val profile: String = "")
 

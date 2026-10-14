@@ -240,17 +240,23 @@ class ProactiveAnnotationContextTest {
 
     @Test fun cardIsInjectedWhenItRelatesToAnOnStageCharacter() = runTest {
         val prepared = PreparedAnnotationContext("r",
-            characterCards = listOf(AnnotationCharacterCard("顾衡", emptyList(), "主角；关系：谢玄（警惕）", listOf("谢玄"))))
+            characterCards = listOf(card("顾衡",
+                identity("主次：主角"),
+                relation("关系：谢玄（警惕）", "谢玄"))))
         val body = "谢玄此人城府极深，不可不防。"
         val result = prepared.forParagraph(body, ProactiveAnnotationParagraph(0, body.length), 8_000)
         assertTrue(result.background.contains("【角色卡】"))
         assertTrue(result.background.contains("顾衡"))
         assertTrue(result.background.contains("警惕"))
+        // 本人不在场：只注入与上场人物的关系，不注入其自身字段
+        assertFalse(result.background.contains("主次"))
     }
 
     @Test fun characterCardAndUserNoteAreInjectedWhenNamed() = runTest {
         val prepared = PreparedAnnotationContext("r",
-            characterCards = listOf(AnnotationCharacterCard("顾衡", listOf("顾公子"), "主角；在雪岭立誓")),
+            characterCards = listOf(card("顾衡",
+                identity("主次：主角"),
+                content("经历：在雪岭立誓"), aliases = listOf("顾公子"))),
             notes = listOf(AnnotationNote(2, "顾衡这个承诺很关键，我记下了。")))
         val result = prepared.forParagraph(target, ProactiveAnnotationParagraph(0, target.length), 8_000)
         assertTrue(result.background.contains("【角色卡】"))
@@ -261,12 +267,38 @@ class ProactiveAnnotationContextTest {
 
     @Test fun cardAndNoteSkippedWhenNoNameOnStage() = runTest {
         val prepared = PreparedAnnotationContext("r",
-            characterCards = listOf(AnnotationCharacterCard("顾衡", emptyList(), "主角")),
+            characterCards = listOf(card("顾衡", identity("主次：主角"))),
             notes = listOf(AnnotationNote(2, "顾衡这个人值得留意。")))
         val body = "今天天气不错。"
         val result = prepared.forParagraph(body, ProactiveAnnotationParagraph(0, body.length), 8_000)
         assertFalse(result.background.contains("【角色卡】"))
         assertFalse(result.background.contains("【读书笔记】"))
+    }
+
+    @Test fun cardContentFieldsAreGatedByRelevanceAgainstTheParagraph() = runTest {
+        val prepared = PreparedAnnotationContext("r",
+            characterCards = listOf(card("顾衡",
+                identity("主次：主角"),
+                content("经历：在雪岭立誓"),
+                content("外貌：一袭白衣"))))
+        val body = "顾衡取出玉佩，想起在雪岭对沈岚许下的承诺，终于决定兑现誓言。".repeat(3)
+        val result = prepared.forParagraph(body, ProactiveAnnotationParagraph(0, body.length), 8_000)
+        assertTrue(result.background.contains("主角"))
+        assertTrue(result.background.contains("在雪岭立誓"))   // 经历相关，保留
+        assertFalse(result.background.contains("一袭白衣"))    // 外貌无关，闸掉
+    }
+
+    @Test fun recallShowsNarrowedCardProfileNotWholeDossier() = runTest {
+        val prepared = PreparedAnnotationContext("r",
+            characterCards = listOf(card("顾衡",
+                identity("主次：主角"),
+                relation("关系：谢玄（警惕）", "谢玄"))))
+        val body = "谢玄此人城府极深，不可不防。"
+        val recall = prepared.forParagraph(body, ProactiveAnnotationParagraph(0, body.length), 8_000).recall
+        val recalled = recall.characterCards.single()
+        assertEquals("顾衡", recalled.name)
+        assertTrue(recalled.profile.contains("警惕"))   // 关系保留
+        assertFalse(recalled.profile.contains("主次"))  // 自身字段收窄掉
     }
 
     @Test fun vectorRecallAddsSemanticallyRelevantSnippetWithNoLexicalOverlap() = runTest {
@@ -306,7 +338,9 @@ class ProactiveAnnotationContextTest {
         val prepared = PreparedAnnotationContext("r",
             candidates = listOf(lexical),
             outlines = listOf(AnnotationOutline(2, "顾衡对沈岚立下玉佩与雪岭的承诺。")),
-            characterCards = listOf(AnnotationCharacterCard("顾衡", emptyList(), "主角；在雪岭立誓")),
+            characterCards = listOf(card("顾衡",
+                identity("主次：主角"),
+                content("经历：在雪岭立誓"))),
             notes = listOf(AnnotationNote(2, "顾衡这个承诺很关键，我记下了。")),
             vectorRecall = vector
         )
@@ -319,6 +353,14 @@ class ProactiveAnnotationContextTest {
         // 落库走 encode()→decode() 往返，必须无损，否则详情页会读回空明细。
         assertEquals(recall, AnnotationRecall.decode(recall.encode()))
     }
+
+    private fun card(name: String, vararg fields: CardField, aliases: List<String> = emptyList()) =
+        AnnotationCharacterCard(name, aliases, fields.toList())
+
+    private fun identity(line: String) = CardField(CardFieldKind.IDENTITY, line, line.substringAfter("："))
+    private fun trait(line: String) = CardField(CardFieldKind.TRAIT, line, line.substringAfter("："))
+    private fun content(line: String) = CardField(CardFieldKind.CONTENT, line, line.substringAfter("："))
+    private fun relation(line: String, target: String) = CardField(CardFieldKind.RELATION, line, line.substringAfter("："), target)
 
     private fun entry(chapter: Int, text: String) = ChapterKnowledgeEntity(
         bookId = 1, chapterIndex = chapter, sourceRevision = "r", sourceEnd = text.length,

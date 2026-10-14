@@ -167,13 +167,26 @@ internal data class AnnotationCharacter(val name: String, val facts: List<Annota
     val latestChapterIndex: Int get() = facts.maxOfOrNull(AnnotationCharacterFact::chapterIndex) ?: -1
 }
 
-/** 角色卡里一位上场人物的精简档案（名字 + 别称 + 已按章节锚点过滤的一句话档案 + 关系对象名）。 */
+/** 角色卡一段字段的收窄策略：[IDENTITY]/[TRAIT] 本人出场即注入，[RELATION] 逐条按目标名，[CONTENT] 走相关性闸。 */
+internal enum class CardFieldKind { IDENTITY, RELATION, TRAIT, CONTENT }
+
+/** 角色卡里一条可独立注入/收窄的字段；[line] 是完整行（含标签），[target] 仅关系字段有值。 */
+internal data class CardField(
+    val kind: CardFieldKind,
+    val line: String,
+    val text: String,
+    val target: String? = null
+)
+
+/** 角色卡里一位上场人物的结构化档案：字段逐条保留，注入时按当前段收窄（本人出场注入自身字段，关系只留目标在场的）。 */
 internal data class AnnotationCharacterCard(
     val name: String,
     val aliases: List<String>,
-    val profile: String,
-    val relatesTo: List<String> = emptyList()
-)
+    val fields: List<CardField>
+) {
+    /** 关系对象名（仅用于名字召回匹配）。 */
+    val relationTargets: List<String> get() = fields.mapNotNull { it.target }
+}
 
 /** 用户的一条前文批注笔记（想法 + 章锚）。 */
 internal data class AnnotationNote(val chapterIndex: Int, val text: String)
@@ -192,6 +205,9 @@ private const val CARD_EXPERIENCES = 6
 
 /** 每位角色卡人物最多保留几条关系。 */
 private const val CARD_RELATIONS = 4
+
+/** 角色卡内容字段（经历/简介/小传/成长/外貌）的相关性下限：BM25 不到本轮最高分这个比例就不注入。 */
+private const val CARD_CONTENT_RELEVANCE_RATIO = 0.35
 
 /** 每条段评最多召回几条用户笔记。 */
 private const val MAX_NOTES = 4
@@ -289,35 +305,76 @@ private fun experiencesBefore(person: BookCharacter, currentChapter: Int): List<
 private fun summaryField(manual: String?, ai: String, bounded: Boolean): String? =
     manual?.takeIf(String::isNotBlank) ?: ai.takeIf { bounded }.orEmpty().takeIf(String::isNotBlank)
 
-/** 把一位人物压成多行档案：主次 / 身份 / 性别年龄 / 关系 / 性格 / 经历 / 简介 / 小传 / 成长 / 外貌，全部只取前文或可信来源。 */
-internal fun cardProfile(person: BookCharacter, currentChapter: Int, bounded: Boolean): String? {
+/** 把一位人物压成结构化角色卡字段：主次/身份/性别年龄/性格为自身字段，关系逐条，经历/简介/小传/成长/外貌为内容字段，全部只取前文或可信来源。 */
+private fun cardFields(person: BookCharacter, currentChapter: Int, bounded: Boolean): List<CardField>? {
     if (person.name.isBlank()) return null
-    val relations = cardRelations(person, currentChapter)
-    val sections = buildList {
-        person.effectiveRole()?.let { add("主次：" + roleLabel(it)) }
-        person.attributeValues(CharacterAttributeKind.IDENTITY).firstOrNull()?.takeIf(String::isNotBlank)?.let { add("身份：" + it) }
+    val fields = buildList {
+        person.effectiveRole()?.let { add(CardField(CardFieldKind.IDENTITY, "主次：" + roleLabel(it), roleLabel(it))) }
+        person.attributeValues(CharacterAttributeKind.IDENTITY).firstOrNull()?.takeIf(String::isNotBlank)
+            ?.let { add(CardField(CardFieldKind.IDENTITY, "身份：" + it, it)) }
         val genderAge = listOfNotNull(
             person.attributeValues(CharacterAttributeKind.GENDER).firstOrNull()?.takeIf(String::isNotBlank),
             person.attributeValues(CharacterAttributeKind.AGE).firstOrNull()?.takeIf(String::isNotBlank)
         )
-        if (genderAge.isNotEmpty()) add("性别年龄：" + genderAge.joinToString("，"))
-        if (relations.isNotEmpty()) add("关系：" + relations.joinToString("；") { it.label })
+        if (genderAge.isNotEmpty()) {
+            val text = genderAge.joinToString("，")
+            add(CardField(CardFieldKind.IDENTITY, "性别年龄：" + text, text))
+        }
+        cardRelations(person, currentChapter).forEach { relation ->
+            add(CardField(CardFieldKind.RELATION, "关系：" + relation.label, relation.label, relation.target))
+        }
         val traits = traitsBefore(person, currentChapter, bounded)
-        if (traits.isNotEmpty()) add("性格：" + traits.joinToString("；"))
+        if (traits.isNotEmpty()) {
+            val text = traits.joinToString("；")
+            add(CardField(CardFieldKind.TRAIT, "性格：" + text, text))
+        }
         val experiences = experiencesBefore(person, currentChapter).takeLast(CARD_EXPERIENCES)
-        if (experiences.isNotEmpty()) add("经历：" + experiences.joinToString("；"))
-        summaryField(person.manualAttributes?.tagline, person.dossier?.tagline.orEmpty(), bounded)?.let { add("简介：" + it) }
-        summaryField(person.manualAttributes?.bio, person.dossier?.bio.orEmpty(), bounded)?.let { add("小传：" + it) }
-        summaryField(person.manualAttributes?.arc, person.dossier?.arc.orEmpty(), bounded)?.let { add("成长：" + it) }
-        person.attributeValues(CharacterAttributeKind.APPEARANCE).firstOrNull()?.takeIf(String::isNotBlank)?.let { add("外貌：" + it) }
+        if (experiences.isNotEmpty()) {
+            val text = experiences.joinToString("；")
+            add(CardField(CardFieldKind.CONTENT, "经历：" + text, text))
+        }
+        summaryField(person.manualAttributes?.tagline, person.dossier?.tagline.orEmpty(), bounded)
+            ?.let { add(CardField(CardFieldKind.CONTENT, "简介：" + it, it)) }
+        summaryField(person.manualAttributes?.bio, person.dossier?.bio.orEmpty(), bounded)
+            ?.let { add(CardField(CardFieldKind.CONTENT, "小传：" + it, it)) }
+        summaryField(person.manualAttributes?.arc, person.dossier?.arc.orEmpty(), bounded)
+            ?.let { add(CardField(CardFieldKind.CONTENT, "成长：" + it, it)) }
+        person.attributeValues(CharacterAttributeKind.APPEARANCE).firstOrNull()?.takeIf(String::isNotBlank)
+            ?.let { add(CardField(CardFieldKind.CONTENT, "外貌：" + it, it)) }
     }
-    return sections.joinToString("\n").ifBlank { null }
+    return fields.ifEmpty { null }
 }
 
+/** 完整档案（全部字段逐行）；仅用于既有测试断言字段提取是否齐全，注入路径走 [narrowedCardLines] 收窄。 */
+internal fun cardProfile(person: BookCharacter, currentChapter: Int, bounded: Boolean): String? =
+    cardFields(person, currentChapter, bounded)?.joinToString("\n") { it.line }?.ifBlank { null }
+
 internal fun cardFor(person: BookCharacter, currentChapter: Int, bounded: Boolean): AnnotationCharacterCard? =
-    cardProfile(person, currentChapter, bounded)?.let {
-        AnnotationCharacterCard(person.name, person.aliases, it, cardRelations(person, currentChapter).map { r -> r.target })
-    }
+    cardFields(person, currentChapter, bounded)?.let { AnnotationCharacterCard(person.name, person.aliases, it) }
+
+/** 角色卡内容字段的相关性闸：对当前段做 BM25 打分，只保留不低于最高分 [CARD_CONTENT_RELEVANCE_RATIO] 的字段。 */
+private fun contentFieldsOnStage(fields: List<CardField>, window: String, checkActive: () -> Unit): List<CardField> {
+    if (fields.isEmpty()) return emptyList()
+    val candidates = fields.mapIndexed { index, field -> RetrievalCandidate(0, 0, index, field.text) }
+    val ranked = Bm25LexicalRecall.rank(candidates, window, fields.size, checkActive)
+    val best = ranked.firstOrNull()?.lexicalScore ?: 0.0
+    if (best <= 0.0) return emptyList()
+    val scores = ranked.associateBy { it.chunkIndex }
+    return fields.filterIndexed { index, _ -> (scores[index]?.lexicalScore ?: 0.0) >= best * CARD_CONTENT_RELEVANCE_RATIO }
+}
+
+/** 收窄一位角色卡到当前段：本人出场注入自身字段 + 相关内容字段，关系只留目标在场的。返回选中的字段行（无名字头）。 */
+internal fun narrowedCardLines(card: AnnotationCharacterCard, window: String, checkActive: () -> Unit): List<String> {
+    val selfOnStage = (listOf(card.name) + card.aliases).any { it.length >= 2 && window.contains(it) }
+    val selfLines = if (selfOnStage) {
+        val fixed = card.fields.filter { it.kind == CardFieldKind.IDENTITY || it.kind == CardFieldKind.TRAIT }.map { it.line }
+        fixed + contentFieldsOnStage(card.fields.filter { it.kind == CardFieldKind.CONTENT }, window, checkActive).map { it.line }
+    } else emptyList()
+    val relationLines = card.fields.filter { it.kind == CardFieldKind.RELATION }
+        .filter { field -> field.target?.let { it.length >= 2 && window.contains(it) } == true }
+        .map { it.line }
+    return selfLines + relationLines
+}
 
 internal data class AnnotationReadingContext(
     val prefix: String,
@@ -409,7 +466,10 @@ internal class PreparedAnnotationContext(
             fun chapterLabel(index: Int): String = "第 "+ (index + 1) + " 章" +
                 titles[index]?.takeIf { it.isNotBlank() }?.let { "「" + it.take(80) + "」" }.orEmpty()
             val onStageCharacters = charactersOnStage(query)
-            val onStageCards = cardsOnStage(query)
+            val onStageCards = cardsOnStage(query).mapNotNull { card ->
+                narrowedCardLines(card, query) { context.ensureActive() }
+                    .takeIf { it.isNotEmpty() }?.let { card to it }
+            }
             val onStageNotes = notesOnStage(namesOnStage(query))
             val charactersText = packAnnotationBackground(
                 if (onStageCharacters.isEmpty()) emptyList() else
@@ -424,7 +484,7 @@ internal class PreparedAnnotationContext(
             val cardsText = packAnnotationBackground(
                 if (onStageCards.isEmpty()) emptyList() else
                     listOf("【角色卡】与本文相关人物的档案（辅助资料，以原文为准）：") +
-                        onStageCards.map { card -> card.name + "\n" + card.profile },
+                        onStageCards.map { (card, lines) -> card.name + "\n" + lines.joinToString("\n") },
                 backgroundBudget / 4
             )
             val notesText = packAnnotationBackground(
@@ -444,7 +504,7 @@ internal class PreparedAnnotationContext(
             val prefix = ProactiveAnnotationParagraphs.prefix(body, paragraph, budget - target.length - background.length)
             val recall = AnnotationRecall(
                 outlines = selectedOutlines.map { RecallOutline(chapterLabel(it.chapterIndex), it.text) },
-                characterCards = onStageCards.map { RecallCard(it.name, it.profile) },
+                characterCards = onStageCards.map { (card, lines) -> RecallCard(card.name, lines.joinToString("\n")) },
                 notes = onStageNotes.map { RecallNote(chapterLabel(it.chapterIndex), it.text) },
                 snippets = hits.map { RecallSnippet(chapterLabel(it.chapterIndex), it.text, snippetSource(it)) }
             )
@@ -460,7 +520,7 @@ internal class PreparedAnnotationContext(
     /** 角色卡：目标段点名该人物（名字或别称），或点名它的关系对象时注入，最多 [MAX_CARDS] 位。 */
     private fun cardsOnStage(window: String): List<AnnotationCharacterCard> =
         characterCards.filter { card ->
-            (listOf(card.name) + card.aliases + card.relatesTo).any { it.length >= 2 && window.contains(it) }
+            (listOf(card.name) + card.aliases + card.relationTargets).any { it.length >= 2 && window.contains(it) }
         }.take(MAX_CARDS)
 
     /** 前文上下文里出现过的所有人名（角色卡 + 每章人物），用于给读书笔记做名字匹配。 */
