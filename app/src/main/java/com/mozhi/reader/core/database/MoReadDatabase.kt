@@ -99,6 +99,6 @@ abstract class MoReadDatabase : RoomDatabase() {
     abstract fun bookCharacterDao(): com.mozhi.reader.core.database.dao.BookCharacterDao
 
     companion object {
-        const val VERSION = 35
+        const val VERSION = 36
     }
 }

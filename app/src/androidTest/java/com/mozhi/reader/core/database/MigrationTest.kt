@@ -1286,6 +1286,28 @@ class MigrationTest {
         }
     }
 
+    @Test fun migrate35To36AddsEmptyRecallColumn() {
+        helper.createDatabase(DB_NAME, 35).use { db ->
+            db.execSQL("""
+                INSERT INTO books (id, title, author, coverPath, epubPath, sourceType, importedAt, totalChapters)
+                VALUES (1, '旧书', '作者', NULL, '', 'TXT', 1000, 3)
+            """.trimIndent())
+            db.execSQL("""
+                INSERT INTO annotations (
+                    bookId, personaId, chapterIndex, startCharOffset, endCharOffset,
+                    selectedText, note, colorTag, createdAt
+                ) VALUES (1, 1, 0, 5, 12, '一段旧段评', '旧想法', 'amber', 1)
+            """.trimIndent())
+        }
+        helper.runMigrationsAndValidate(DB_NAME, 36, true, DatabaseMigrations.Migration35To36).use { db ->
+            db.query("SELECT note, recallJson FROM annotations WHERE id = 1").use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals("旧想法", cursor.getString(0))
+                assertEquals("{}", cursor.getString(1))
+            }
+        }
+    }
+
     private companion object {
         const val DB_NAME = "migration-test.db"
     }

@@ -159,6 +159,9 @@ data class AnnotationEntity(
     val sourceScopeCharOffset: Int? = null,
     @ColumnInfo(defaultValue = "''")
     val textAnchorJson: String = "",
+    /** 随读段评召回的前文资料明细 JSON（见 AnnotationRecall）；'{}' = 无召回明细或旧行。 */
+    @ColumnInfo(defaultValue = "'{}'")
+    val recallJson: String = "{}",
     val createdAt: Long,
     /** Explicit proactive origin; manual/user-requested AI annotations keep null. */
     val proactiveJobId: Long? = null

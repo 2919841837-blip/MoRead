@@ -242,6 +242,7 @@ class ProactiveAnnotationService @Inject constructor(
                     colorTag = AnnotationColors.forPersona(request.persona.id),
                     style = AnnotationStyle.fromWire(draft.style).wire,
                     mediaJson = AnnotationMedia(audioPath, null).encode(),
+                    recallJson = context.recall.encode(),
                     sourceScopeChapterIndex = request.chapterIndex, sourceScopeCharOffset = paragraph.end,
                     createdAt = System.currentTimeMillis()
                 )

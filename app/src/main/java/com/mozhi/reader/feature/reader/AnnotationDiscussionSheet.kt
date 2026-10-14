@@ -79,6 +79,7 @@ import com.mozhi.reader.core.database.entity.AnnotationStyle
 import com.mozhi.reader.core.database.entity.IllustrationEntity
 import com.mozhi.reader.core.database.entity.PersonaEntity
 import com.mozhi.reader.core.library.AnnotationMedia
+import com.mozhi.reader.core.library.AnnotationRecall
 import com.mozhi.reader.feature.reader.render.AnnotationInk
 import com.mozhi.reader.ui.components.PersonaAvatarImage
 import com.mozhi.reader.ui.components.NoteStyleColorPalette
@@ -519,6 +520,7 @@ internal fun AnnotationDiscussionSheet(
                             palette = palette,
                             onPlayAudio = onPlayAudio
                         )
+                        RecallBreakdown(annotation.recallJson, palette)
                     }
                 }
                 val threadReplies = replies.filter { it.annotationId == annotation.id }
@@ -1059,6 +1061,92 @@ private fun AnnotationMediaContent(
                     .padding(top = 6.dp)
                     .clip(RoundedCornerShape(12.dp))
             )
+        }
+    }
+}
+
+/**
+ * 段评召回明细折叠区：默认收起一行「召回明细 · N 项」，展开后按大纲 / 角色卡 / 笔记 / 片段
+ * 分组列出这条段评生成时实际召回的前文资料。只展示，不参与任何召回逻辑；旧行或非随读段评
+ * （recallJson 为空）不渲染。
+ */
+@Composable
+private fun RecallBreakdown(recallJson: String, palette: ReaderPalette) {
+    val recall = remember(recallJson) { AnnotationRecall.decode(recallJson) }
+    if (recall.isEmpty) return
+    var expanded by rememberSaveable(recallJson) { mutableStateOf(false) }
+    val total = recall.outlines.size + recall.characterCards.size + recall.notes.size + recall.snippets.size
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(10.dp))
+                .background(palette.onBackground.copy(alpha = if (palette.isDark) 0.06f else 0.04f))
+                .clickable { expanded = !expanded }
+                .padding(horizontal = 10.dp, vertical = 7.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "召回明细 · $total 项",
+                style = MaterialTheme.typography.labelMedium,
+                color = palette.muted,
+                modifier = Modifier.weight(1f)
+            )
+            Text(
+                text = if (expanded) "收起" else "展开",
+                style = MaterialTheme.typography.labelSmall,
+                color = palette.seal
+            )
+        }
+        if (expanded) {
+            if (recall.outlines.isNotEmpty()) {
+                RecallGroup("大纲", recall.outlines.map { it.label to it.text }, palette)
+            }
+            if (recall.characterCards.isNotEmpty()) {
+                RecallGroup("角色卡", recall.characterCards.map { it.name to it.profile }, palette)
+            }
+            if (recall.notes.isNotEmpty()) {
+                RecallGroup("笔记", recall.notes.map { it.label to it.text }, palette)
+            }
+            if (recall.snippets.isNotEmpty()) {
+                RecallGroup("片段", recall.snippets.map { snippet ->
+                    (snippet.label + snippet.source.takeIf(String::isNotBlank)?.let { " · " + it }.orEmpty()) to snippet.text
+                }, palette)
+            }
+        }
+    }
+}
+
+/** 一组召回条目：小标 + 若干「章锚 / 正文」两行，正文比普通讨论略淡一档。 */
+@Composable
+private fun RecallGroup(title: String, items: List<Pair<String, String>>, palette: ReaderPalette) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.labelSmall,
+            color = palette.seal,
+            fontWeight = FontWeight.SemiBold
+        )
+        items.forEach { (label, text) ->
+            Column {
+                if (label.isNotBlank()) {
+                    Text(
+                        text = label,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = palette.muted
+                    )
+                }
+                Text(
+                    text = text,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = palette.onBackground.copy(alpha = 0.82f)
+                )
+            }
         }
     }
 }

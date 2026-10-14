@@ -796,6 +796,13 @@ object DatabaseMigrations {
         }
     }
 
+    /** 段评召回明细：随读段评把召回的大纲/角色卡/笔记/片段快照进批注，供详情页折叠展示。 */
+    val Migration35To36 = object : Migration(35, 36) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("ALTER TABLE `annotations` ADD COLUMN `recallJson` TEXT NOT NULL DEFAULT '{}'")
+        }
+    }
+
     /** 人物档案：逐人落库的断点与缓存，删书级联清理。 */
     val Migration34To35 = object : Migration(34, 35) {
         override fun migrate(db: SupportSQLiteDatabase) {

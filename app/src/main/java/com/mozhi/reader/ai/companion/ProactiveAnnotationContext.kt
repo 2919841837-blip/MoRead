@@ -15,7 +15,12 @@ import com.mozhi.reader.core.database.entity.ChapterKnowledgeEntity
 import com.mozhi.reader.core.database.entity.ModelRole
 import com.mozhi.reader.core.datastore.BookEmbeddingSettingsStore
 import com.mozhi.reader.core.datastore.ProactiveAnnotationContextSettings
+import com.mozhi.reader.core.library.AnnotationRecall
 import com.mozhi.reader.core.library.LibraryRepository
+import com.mozhi.reader.core.library.RecallCard
+import com.mozhi.reader.core.library.RecallNote
+import com.mozhi.reader.core.library.RecallOutline
+import com.mozhi.reader.core.library.RecallSnippet
 import com.mozhi.reader.core.retrieval.Bm25LexicalRecall
 import com.mozhi.reader.core.retrieval.ReadingScope
 import com.mozhi.reader.core.retrieval.RetrievalCandidate
@@ -314,7 +319,13 @@ internal fun cardFor(person: BookCharacter, currentChapter: Int, bounded: Boolea
         AnnotationCharacterCard(person.name, person.aliases, it, cardRelations(person, currentChapter).map { r -> r.target })
     }
 
-internal data class AnnotationReadingContext(val prefix: String, val target: String, val background: String) {
+internal data class AnnotationReadingContext(
+    val prefix: String,
+    val target: String,
+    val background: String,
+    /** 这条段评实际召回的前文资料明细；随批注落库，供详情页折叠展示。 */
+    val recall: AnnotationRecall = AnnotationRecall()
+) {
     val chars: Int get() = prefix.length + target.length + background.length
 }
 
@@ -397,25 +408,31 @@ internal class PreparedAnnotationContext(
             val selectedOutlines = relatedOutlines.ifEmpty { outlineCandidates.takeLast(1) }
             fun chapterLabel(index: Int): String = "第 "+ (index + 1) + " 章" +
                 titles[index]?.takeIf { it.isNotBlank() }?.let { "「" + it.take(80) + "」" }.orEmpty()
-            val charactersText = packAnnotationBackground(charactersOnStage(query).let { onStage ->
-                if (onStage.isEmpty()) emptyList() else
+            val onStageCharacters = charactersOnStage(query)
+            val onStageCards = cardsOnStage(query)
+            val onStageNotes = notesOnStage(namesOnStage(query))
+            val charactersText = packAnnotationBackground(
+                if (onStageCharacters.isEmpty()) emptyList() else
                     listOf("【前文人物】与本文相关的人物（辅助资料，以原文为准）：") +
-                        onStage.map { person ->
+                        onStageCharacters.map { person ->
                             person.name + "：" + person.facts.joinToString("；") { fact ->
                                 "${fact.text}（第${fact.chapterIndex + 1}章）"
                             }
-                        }
-            }, backgroundBudget / 4)
-            val cardsText = packAnnotationBackground(cardsOnStage(query).let { onStage ->
-                if (onStage.isEmpty()) emptyList() else
+                        },
+                backgroundBudget / 4
+            )
+            val cardsText = packAnnotationBackground(
+                if (onStageCards.isEmpty()) emptyList() else
                     listOf("【角色卡】与本文相关人物的档案（辅助资料，以原文为准）：") +
-                        onStage.map { card -> card.name + "\n" + card.profile }
-            }, backgroundBudget / 4)
-            val notesText = packAnnotationBackground(notesOnStage(namesOnStage(query)).let { onStage ->
-                if (onStage.isEmpty()) emptyList() else
+                        onStageCards.map { card -> card.name + "\n" + card.profile },
+                backgroundBudget / 4
+            )
+            val notesText = packAnnotationBackground(
+                if (onStageNotes.isEmpty()) emptyList() else
                     listOf("【读书笔记】你此前的批注（辅助资料）：") +
-                        onStage.map { note -> chapterLabel(note.chapterIndex) + "笔记：" + note.text }
-            }, backgroundBudget / 8)
+                        onStageNotes.map { note -> chapterLabel(note.chapterIndex) + "笔记：" + note.text },
+                backgroundBudget / 8
+            )
             val summaries = packAnnotationBackground(selectedOutlines.map {
                 chapterLabel(it.chapterIndex) + "梗概（辅助资料，以原文为准）：\n" + it.text
             }, backgroundBudget / 4)
@@ -425,7 +442,13 @@ internal class PreparedAnnotationContext(
             val warning = if (partial) "前文检索只覆盖部分正文；未命中不代表书中没有。" else ""
             val background = packAnnotationBackground(listOf(warning, summaries, charactersText, cardsText, notesText, snippets), backgroundBudget)
             val prefix = ProactiveAnnotationParagraphs.prefix(body, paragraph, budget - target.length - background.length)
-            AnnotationReadingContext(prefix, target, background)
+            val recall = AnnotationRecall(
+                outlines = selectedOutlines.map { RecallOutline(chapterLabel(it.chapterIndex), it.text) },
+                characterCards = onStageCards.map { RecallCard(it.name, it.profile) },
+                notes = onStageNotes.map { RecallNote(chapterLabel(it.chapterIndex), it.text) },
+                snippets = hits.map { RecallSnippet(chapterLabel(it.chapterIndex), it.text, snippetSource(it)) }
+            )
+            AnnotationReadingContext(prefix, target, background, recall)
         }
 
     /** 目标段附近点名的人物优先；没人点名就退回最近一章的人物，保持「上一章刚发生什么」的连贯。 */
@@ -452,6 +475,13 @@ internal class PreparedAnnotationContext(
     private fun notesOnStage(names: List<String>): List<AnnotationNote> =
         if (names.isEmpty()) emptyList()
         else notes.filter { note -> names.any { note.text.contains(it) } }.takeLast(MAX_NOTES)
+}
+
+/** 片段来源标签：向量 / BM25 / 两者融合，只用于召回明细展示，不参与召回逻辑。 */
+private fun snippetSource(candidate: RetrievalCandidate): String = when {
+    candidate.vectorDistance != null && candidate.lexicalScore != null -> "向量+BM25"
+    candidate.vectorDistance != null -> "向量"
+    else -> "BM25"
 }
 
 /** Clip on a UTF-16 boundary; labels and separators count against the same reading budget. */

@@ -290,6 +290,29 @@ class ProactiveAnnotationContextTest {
         assertTrue(result.background.contains("雪岭立誓"))
     }
 
+    @Test fun recallBreakdownCapturesOutlinesCardsNotesAndSnippetSources() = runTest {
+        val body = "顾衡取出玉佩，想起在雪岭对沈岚许下的承诺，终于决定兑现誓言。".repeat(3)
+        val lexical = RetrievalCandidate(1, 0, 0, "顾衡在雪岭立誓，要把玉佩交还给沈岚。", 0, 20)
+        val vector = VectorRecall(
+            embedQuery = { _ -> floatArrayOf(1f) },
+            search = { _, _ -> listOf(RetrievalCandidate(1, 1, 0, "雪岭上的誓言刻骨铭心。", 0, 11, 0.1)) },
+            topK = 12, recallDepth = 48
+        )
+        val prepared = PreparedAnnotationContext("r",
+            candidates = listOf(lexical),
+            outlines = listOf(AnnotationOutline(2, "顾衡对沈岚立下玉佩与雪岭的承诺。")),
+            characterCards = listOf(AnnotationCharacterCard("顾衡", emptyList(), "主角；在雪岭立誓")),
+            notes = listOf(AnnotationNote(2, "顾衡这个承诺很关键，我记下了。")),
+            vectorRecall = vector
+        )
+        val recall = prepared.forParagraph(body, ProactiveAnnotationParagraph(0, body.length), 8_000).recall
+        assertTrue(recall.outlines.any { it.text.contains("雪岭") })
+        assertTrue(recall.characterCards.any { it.name == "顾衡" })
+        assertTrue(recall.notes.any { it.text.contains("承诺") })
+        assertTrue(recall.snippets.any { it.source == "向量" && it.text.contains("雪岭上的誓言") })
+        assertTrue(recall.snippets.any { it.source == "BM25" && it.text.contains("立誓") })
+    }
+
     private fun entry(chapter: Int, text: String) = ChapterKnowledgeEntity(
         bookId = 1, chapterIndex = chapter, sourceRevision = "r", sourceEnd = text.length,
         sourceHash = ChapterKnowledgeCodec.hash(text), modelKey = "m", modelLabel = "m",
