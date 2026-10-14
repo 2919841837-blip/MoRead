@@ -40,6 +40,38 @@ class ProactiveAnnotationContextTest {
         assertEquals(target, result.target)
     }
 
+    @Test fun outlineRecallDropsIrrelevantOutlinesBelowFloor() = runTest {
+        val prepared = PreparedAnnotationContext("r", outlines = listOf(
+            AnnotationOutline(0, "顾衡路过集市，买了几样东西。"),          // 弱相关，非上一章
+            AnnotationOutline(1, "顾衡在雪岭立誓，要把玉佩交还给沈岚。")  // 强相关
+        ))
+        val body = "顾衡取出玉佩，想起在雪岭对沈岚许下的承诺，终于决定兑现誓言。".repeat(3)
+        val result = prepared.forParagraph(body, ProactiveAnnotationParagraph(0, body.length), 8_000)
+        assertTrue(result.background.contains("立誓"))
+        assertFalse(result.background.contains("路过"))
+    }
+
+    @Test fun previousChapterOutlineNotForcedWhenOthersMatch() = runTest {
+        val prepared = PreparedAnnotationContext("r", outlines = listOf(
+            AnnotationOutline(0, "顾衡在雪岭立誓，要把玉佩交还给沈岚。"),  // 相关，非上一章
+            AnnotationOutline(1, "顾衡路过集市。")                         // 上一章，弱相关
+        ))
+        val body = "顾衡取出玉佩，想起在雪岭对沈岚许下的承诺，终于决定兑现誓言。".repeat(3)
+        val result = prepared.forParagraph(body, ProactiveAnnotationParagraph(0, body.length), 8_000)
+        assertTrue(result.background.contains("立誓"))
+        assertFalse(result.background.contains("路过"))
+    }
+
+    @Test fun previousChapterOutlineFallsBackWhenNothingRelevant() = runTest {
+        val prepared = PreparedAnnotationContext("r", outlines = listOf(
+            AnnotationOutline(0, "市场里人来人往，热闹非凡。")  // 唯一一章，与目标无关
+        ))
+        val body = "顾衡取出玉佩，想起在雪岭对沈岚许下的承诺，终于决定兑现誓言。".repeat(3)
+        val result = prepared.forParagraph(body, ProactiveAnnotationParagraph(0, body.length), 8_000)
+        // 召回落空时兜底补上一章
+        assertTrue(result.background.contains("市场"))
+    }
+
     @Test fun everyBudgetKeepsTargetAndClipsCurrentChapterAtTargetEnd() = runTest {
         val before = "很早的本章正文😀".repeat(8_000)
         val after = "未来真相不得泄露".repeat(300)

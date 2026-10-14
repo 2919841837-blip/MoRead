@@ -279,9 +279,12 @@ internal class PreparedAnnotationContext(
             val outlineCandidates = outlines.map { outline ->
                 RetrievalCandidate(0, outline.chapterIndex, 0, outline.text)
             }
-            val relatedOutlines = Bm25LexicalRecall.rank(outlineCandidates, query, 4) { context.ensureActive() }
-            // Include immediate continuity when available, without replacing relevant distant chapters.
-            val selectedOutlines = (relatedOutlines + outlineCandidates.takeLast(1)).distinctBy { it.chapterIndex }
+            val rankedOutlines = Bm25LexicalRecall.rank(outlineCandidates, query, 4) { context.ensureActive() }
+            // 相关性下限：低于最高分 35% 的梗概不召回，避免只撞几个高频字就当相关。
+            val bestOutline = rankedOutlines.firstOrNull()?.lexicalScore ?: 0.0
+            val relatedOutlines = rankedOutlines.filter { (it.lexicalScore ?: 0.0) >= bestOutline * 0.35 }
+            // 上一章不再无条件追加：只在「一条相关的都没召回」时兜底补它，保持顺序阅读的连贯。
+            val selectedOutlines = relatedOutlines.ifEmpty { outlineCandidates.takeLast(1) }
             fun chapterLabel(index: Int): String = "第 "+ (index + 1) + " 章" +
                 titles[index]?.takeIf { it.isNotBlank() }?.let { "「" + it.take(80) + "」" }.orEmpty()
             val charactersText = packAnnotationBackground(charactersOnStage(query).let { onStage ->
