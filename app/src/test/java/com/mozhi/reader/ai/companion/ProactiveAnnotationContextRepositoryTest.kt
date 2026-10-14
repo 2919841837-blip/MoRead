@@ -48,6 +48,8 @@ class ProactiveAnnotationContextRepositoryTest {
         coEvery { bookCharacterDao.getGuide(any()) } returns null
         every { database.annotationDao() } returns annotationDao
         coEvery { annotationDao.getForChapterRangeByUser(any(), any(), any()) } returns emptyList()
+        coEvery { annotationDao.getAiDiscussionConclusions(any(), any()) } returns emptyList()
+        coEvery { annotationDao.getAiAnnotations(any(), any()) } returns emptyList()
         coEvery { embeddingSettingsStore.isEnabled(any()) } returns false
         coEvery { library.getChapter(1, any()) } answers {
             val index = arg<Int>(1)

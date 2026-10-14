@@ -110,7 +110,7 @@ class ReaderToolset @Inject constructor(
                     runCatching {
                         android.util.Log.d("ReaderToolset",
                             "annotation recall ch=${match.chapterIndex}: outlines=${recall.outlines.size} " +
-                                "cards=${recall.characterCards.size} notes=${recall.notes.size} snippets=${recall.snippets.size} discussions=${recall.discussions.size}")
+                                "cards=${recall.characterCards.size} notes=${recall.notes.size} snippets=${recall.snippets.size} discussions=${recall.discussions.size} proactiveNotes=${recall.proactiveNotes.size}")
                     }
                     recall
                 }

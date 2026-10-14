@@ -44,7 +44,7 @@ class AnnotationDiscussionServiceTest {
         coEvery { library.getChapterTitle(1, 2) } returns "旧事"
         coEvery { annotations.getAnnotation(3) } returns annotation
         coEvery { annotations.getReplies(3) } returns emptyList()
-        coEvery { annotations.addReply(3, 7, any(), any(), any()) } returns 11
+        coEvery { annotations.addReply(3, 7, any(), any(), any(), any(), any()) } returns 11
         every { settings.companionSpoilerProtectionEnabled } returns flowOf(protect)
         every { settings.companionMemorySettings } returns flowOf(CompanionMemorySettings(
             longTermEnabled = globalMemory, crossBookChatSearchEnabled = false))
@@ -64,7 +64,7 @@ class AnnotationDiscussionServiceTest {
         assertEquals(MemoryScope(true, false, 42), memory.captured)
         assertTrue(history.captured.first().content.orEmpty().contains("最远读到第 99 章"))
         assertTrue(history.captured.first().content.orEmpty().contains("章未读部分及之后"))
-        coVerify(exactly = 1) { annotations.addReply(3, 7, "他还记得那份承诺。", any(), any()) }
+        coVerify(exactly = 1) { annotations.addReply(3, 7, "他还记得那份承诺。", any(), any(), any(), any()) }
     }
 
     @Test fun globalMemoryOffKeepsBookToolsButDisablesRecall() = runTest {
@@ -80,11 +80,14 @@ class AnnotationDiscussionServiceTest {
         assertFalse(memory.captured.longTermEnabled)
     }
 
-    @Test fun spoilerOptOutIsConsistentInPromptAndToolScope() = runTest {
+    @Test fun discussionReplyIsSpoilerSafeRegardlessOfChatToggle() = runTest {
+        // 私聊（伴聊）的防剧透开关与段评讨论串无关：即使关闭，讨论串回复也恒到用户已读进度。
         prepare(protect = false).respond(1, 3, 7).toList()
-        assertTrue(scope.captured.isWholeBook)
-        assertTrue(history.captured.first().content.orEmpty().contains("已关闭防剧透限制"))
-        assertFalse(history.captured.first().content.orEmpty().contains("绝不涉及第"))
+        assertEquals(ReadingScope.upto(98, 350), scope.captured)
+        assertFalse(scope.captured.isWholeBook)
+        assertTrue(history.captured.first().content.orEmpty().contains("最远读到第 99 章"))
+        assertTrue(history.captured.first().content.orEmpty().contains("绝不涉及第"))
+        assertFalse(history.captured.first().content.orEmpty().contains("已关闭防剧透限制"))
     }
 
     @Test fun readerCanDiscussAnAlreadyGeneratedAnnotationBeforeItsSourceIsRead() = runTest {
@@ -97,6 +100,6 @@ class AnnotationDiscussionServiceTest {
         assertTrue(events.last() is AnnotationDiscussionService.Event.Done)
         assertTrue(history.captured.first().content.orEmpty().contains("这句话呼应了前文。"))
         assertEquals(ReadingScope.upto(98, 350), scope.captured)
-        coVerify(exactly = 1) { annotations.addReply(3, 7, any(), any(), any()) }
+        coVerify(exactly = 1) { annotations.addReply(3, 7, any(), any(), any(), any(), any()) }
     }
 }

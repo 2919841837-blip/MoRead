@@ -1,6 +1,7 @@
 package com.mozhi.reader.core.library
 
 import com.mozhi.reader.core.database.dao.AnnotationDao
+import com.mozhi.reader.core.database.dao.AiAnnotationWithChapter
 import com.mozhi.reader.core.database.dao.AnnotationReplyWithChapter
 import com.mozhi.reader.core.database.entity.AnnotationColors
 import com.mozhi.reader.core.database.entity.AnnotationEntity
@@ -136,6 +137,10 @@ class AnnotationRepository @Inject constructor(
     /** 前文章节里 AI 的讨论回复（结论/伏笔），供段评/讨论召回；已按写时进度线与父批注章锚双重防剧透过滤。 */
     suspend fun getAiDiscussionConclusions(bookId: Long, currentChapter: Int): List<AnnotationReplyWithChapter> =
         annotationDao.getAiDiscussionConclusions(bookId, currentChapter)
+
+    /** 前文章节里 AI 段评的想法（结论/伏笔），供段评/讨论召回；已按写时进度线与章锚双重防剧透过滤。 */
+    suspend fun getAiAnnotations(bookId: Long, currentChapter: Int): List<AiAnnotationWithChapter> =
+        annotationDao.getAiAnnotations(bookId, currentChapter)
 
     suspend fun addReply(
         annotationId: Long,

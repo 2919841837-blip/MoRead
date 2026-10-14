@@ -663,6 +663,7 @@
     <string name="discussion_recall_group_outline">大纲</string>
     <string name="discussion_recall_group_card">角色卡</string>
     <string name="discussion_recall_group_note">笔记</string>
+    <string name="discussion_recall_group_proactive_note">段评</string>
     <string name="discussion_recall_group_snippet">片段</string>
     <string name="discussion_recall_group_discussion">讨论结论</string>
     <string name="shelf_tags_clear">清除</string>

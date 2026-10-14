@@ -20,6 +20,12 @@ data class AnnotationReplyWithChapter(
     val chapterIndex: Int
 )
 
+/** 段评召回用的投影：一条 AI 段评的想法正文 + 章锚。 */
+data class AiAnnotationWithChapter(
+    val note: String,
+    val chapterIndex: Int
+)
+
 @Dao
 interface AnnotationDao {
     @Query("SELECT * FROM annotations ORDER BY createdAt DESC, id DESC")
@@ -138,4 +144,14 @@ interface AnnotationDao {
             "ORDER BY a.chapterIndex ASC, r.createdAt ASC"
     )
     suspend fun getAiDiscussionConclusions(bookId: Long, currentChapter: Int): List<AnnotationReplyWithChapter>
+
+    /** 段评召回：前文章节里 AI 段评的想法（结论/伏笔）；[sourceScopeChapterIndex] 为空的历史行回退到自身章锚。 */
+    @Query(
+        "SELECT a.note, a.chapterIndex FROM annotations a " +
+            "WHERE a.bookId = :bookId AND a.personaId IS NOT NULL " +
+            "AND a.chapterIndex < :currentChapter " +
+            "AND (a.sourceScopeChapterIndex IS NULL OR a.sourceScopeChapterIndex < :currentChapter) " +
+            "ORDER BY a.chapterIndex ASC, a.id ASC"
+    )
+    suspend fun getAiAnnotations(bookId: Long, currentChapter: Int): List<AiAnnotationWithChapter>
 }

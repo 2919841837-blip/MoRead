@@ -372,6 +372,24 @@ class ProactiveAnnotationContextTest {
         assertEquals(result.recall, AnnotationRecall.decode(result.recall.encode()))
     }
 
+    @Test fun proactiveNotesAreRecalledByBm25AndIrrelevantOnesDropped() = runTest {
+        val body = "顾衡取出玉佩，想起在雪岭对沈岚许下的承诺，终于决定兑现誓言。".repeat(3)
+        val prepared = PreparedAnnotationContext("r",
+            proactiveNotes = listOf(
+                AnnotationProactiveNote(1, "玉佩和雪岭的伏笔会在后文收束，沈岚是关键。"),
+                AnnotationProactiveNote(0, "集市上的陶罐都很便宜。")
+            )
+        )
+        val result = prepared.forParagraph(body, ProactiveAnnotationParagraph(0, body.length), 8_000)
+        assertTrue(result.background.contains("段评"))
+        assertTrue(result.background.contains("伏笔"))
+        assertFalse(result.background.contains("陶罐"))
+        assertTrue(result.recall.proactiveNotes.any { it.text.contains("伏笔") })
+        assertFalse(result.recall.proactiveNotes.any { it.text.contains("陶罐") })
+        // 新字段同样走落库往返，必须无损。
+        assertEquals(result.recall, AnnotationRecall.decode(result.recall.encode()))
+    }
+
     private fun card(name: String, vararg fields: CardField, aliases: List<String> = emptyList()) =
         AnnotationCharacterCard(name, aliases, fields.toList())
 

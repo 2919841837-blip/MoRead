@@ -58,8 +58,8 @@ class AnnotationDiscussionService @Inject constructor(
                 ?: run { emit(Event.Failed("这条批注已被删除")); return@flow }
             val book = libraryRepository.getBook(bookId)
                 ?: run { emit(Event.Failed("书籍不存在")); return@flow }
-            val scope = com.mozhi.reader.core.retrieval.ReadingScopeResolver.resolve(
-                settingsRepository.companionSpoilerProtectionEnabled.first(), book)
+            // 段评讨论串默认防剧透：恒到用户已读进度，与私聊（伴聊）的防剧透开关解耦。
+            val scope = ReadingScope.uptoProgress(book)
             if (annotation.bookId != bookId) {
                 emit(Event.Failed("这条批注不属于当前书籍")); return@flow
             }

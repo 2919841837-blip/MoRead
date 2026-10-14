@@ -16,11 +16,12 @@ data class AnnotationRecall(
     val characterCards: List<RecallCard> = emptyList(),
     val notes: List<RecallNote> = emptyList(),
     val snippets: List<RecallSnippet> = emptyList(),
-    val discussions: List<RecallDiscussion> = emptyList()
+    val discussions: List<RecallDiscussion> = emptyList(),
+    val proactiveNotes: List<RecallProactiveNote> = emptyList()
 ) {
     val isEmpty: Boolean
         get() = outlines.isEmpty() && characterCards.isEmpty() && notes.isEmpty() && snippets.isEmpty() &&
-            discussions.isEmpty()
+            discussions.isEmpty() && proactiveNotes.isEmpty()
 
     fun encode(): String = if (isEmpty) "{}" else codec.encodeToString(serializer(), this)
 
@@ -56,3 +57,7 @@ data class RecallSnippet(val label: String = "", val text: String = "", val sour
 /** 召回的一条讨论结论（AI 在前文讨论串里的回复）；[label] 是章锚，[text] 是回复正文。 */
 @Serializable
 data class RecallDiscussion(val label: String = "", val text: String = "")
+
+/** 召回的一条前文段评（AI 段评的想法正文）；[label] 是章锚，[text] 是想法正文。 */
+@Serializable
+data class RecallProactiveNote(val label: String = "", val text: String = "")

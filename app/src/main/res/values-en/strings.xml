@@ -667,6 +667,7 @@
     <string name="discussion_recall_group_outline">Outline</string>
     <string name="discussion_recall_group_card">Character cards</string>
     <string name="discussion_recall_group_note">Notes</string>
+    <string name="discussion_recall_group_proactive_note">Paragraph notes</string>
     <string name="discussion_recall_group_snippet">Snippets</string>
     <string name="discussion_recall_group_discussion">Discussions</string>
     <string name="shelf_tags_clear">Clear</string>
