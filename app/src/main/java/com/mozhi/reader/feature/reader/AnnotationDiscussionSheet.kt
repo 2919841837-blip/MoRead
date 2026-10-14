@@ -508,7 +508,7 @@ internal fun AnnotationDiscussionSheet(
                         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             RecallBreakdown(
                                 annotation.recallJson,
-                                proactive = annotation.proactiveJobId != null,
+                                aiGenerated = annotation.personaId != null,
                                 palette = palette
                             )
                             if (annotation.note.isNotBlank()) {
@@ -1074,14 +1074,14 @@ private fun AnnotationMediaContent(
 
 /**
  * 段评召回明细折叠区：默认收起一行「召回明细 · N 项」，展开后按大纲 / 角色卡 / 笔记 / 片段
- * 分组列出这条段评生成时实际召回的前文资料。只展示，不参与任何召回逻辑；旧行或非随读段评
- * （recallJson 为空）不渲染。
+ * 分组列出这条段评生成时实际召回的前文资料。只展示，不参与任何召回逻辑；旧行或手动划线
+ * （recallJson 为空且无 persona）不渲染，AI 段评（随读 / 聊天工具）即使召回为空也展示空态。
  */
 @Composable
-private fun RecallBreakdown(recallJson: String, proactive: Boolean, palette: ReaderPalette) {
+private fun RecallBreakdown(recallJson: String, aiGenerated: Boolean, palette: ReaderPalette) {
     val recall = remember(recallJson) { AnnotationRecall.decode(recallJson) }
-    // 非随读段评且没有召回数据时不渲染；随读段评即使召回为空也保留折叠区，好让人看出「确实没有前文可召回」。
-    if (recall.isEmpty && !proactive) return
+    // 手动划线不召回也不渲染；AI 生成的段评（随读 / 聊天工具）即使召回为空也保留折叠区，好让人看出「确实没有前文可召回」。
+    if (recall.isEmpty && !aiGenerated) return
     var expanded by rememberSaveable(recallJson) { mutableStateOf(false) }
     val total = recall.outlines.size + recall.characterCards.size + recall.notes.size + recall.snippets.size
     Column(

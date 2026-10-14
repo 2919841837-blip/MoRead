@@ -110,8 +110,9 @@ class ReaderToolset @Inject constructor(
                 }
             } catch (cancelled: CancellationException) {
                 throw cancelled
-            } catch (_: Exception) {
+            } catch (error: Exception) {
                 // 召回失败不阻断批注落库：召回只是辅助资料，正文核验已通过。
+                runCatching { android.util.Log.w("ReaderToolset", "annotation recall failed: ${error.javaClass.simpleName}", error) }
                 AnnotationRecall()
             }
         }
