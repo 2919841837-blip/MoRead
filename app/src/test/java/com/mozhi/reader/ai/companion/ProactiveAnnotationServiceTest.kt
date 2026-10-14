@@ -39,6 +39,13 @@ class ProactiveAnnotationServiceTest {
         assertTrue(system.contains("即使人物与你或用户同名"))
         assertTrue(system.contains("绝不推测后文"))
     }
+
+    @Test fun writingRulesTellModelToStayOnTheTargetParagraph() {
+        val system = proactiveAnnotationMessages(persona, "目标段落正文").first().content.orEmpty()
+        assertTrue(system.contains("note 只围绕这段原文写"))
+        assertTrue(system.contains("与这段原文无关就忽略"))
+    }
+
     private val factory = mockk<AiClientFactory>()
     private val client = mockk<ChatApiClient>()
     private val media = mockk<AiMediaGenerationService>()

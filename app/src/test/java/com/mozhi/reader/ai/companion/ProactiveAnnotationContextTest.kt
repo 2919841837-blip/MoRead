@@ -63,14 +63,16 @@ class ProactiveAnnotationContextTest {
         assertFalse(result.background.contains("路过"))
     }
 
-    @Test fun previousChapterOutlineFallsBackWhenNothingRelevant() = runTest {
+    @Test fun noOutlineInjectedWhenNothingRelevant() = runTest {
         val prepared = PreparedAnnotationContext("r", outlines = listOf(
             AnnotationOutline(0, "市场里人来人往，热闹非凡。")  // 唯一一章，与目标无关
         ))
         val body = "顾衡取出玉佩，想起在雪岭对沈岚许下的承诺，终于决定兑现誓言。".repeat(3)
         val result = prepared.forParagraph(body, ProactiveAnnotationParagraph(0, body.length), 8_000)
-        // 召回落空时兜底补上一章
-        assertTrue(result.background.contains("市场"))
+        // 召回落空时不再兜底补上一章，前文资料块留空。
+        assertFalse(result.background.contains("市场"))
+        assertFalse(result.background.contains("梗概"))
+        assertTrue(result.recall.outlines.isEmpty())
     }
 
     @Test fun everyBudgetKeepsTargetAndClipsCurrentChapterAtTargetEnd() = runTest {
@@ -126,14 +128,16 @@ class ProactiveAnnotationContextTest {
         assertTrue(result.background.contains("第3章"))
     }
 
-    @Test fun unnamedParagraphFallsBackToMostRecentChapterCast() = runTest {
+    @Test fun unnamedParagraphInjectsNoPriorCharacters() = runTest {
         val prepared = PreparedAnnotationContext("r", characters = listOf(
             AnnotationCharacter("顾衡", listOf(AnnotationCharacterFact(2, "顾衡立下雪岭之誓。"))),
             AnnotationCharacter("沈岚", listOf(AnnotationCharacterFact(4, "沈岚在城门张望，久候不至。")))
         ))
         val body = "今天天气很好，适合出门走走。"
         val result = prepared.forParagraph(body, ProactiveAnnotationParagraph(0, body.length), 8_000)
-        assertTrue(result.background.contains("沈岚"))
+        // 目标段没点名任何人名时，不再退最近一章人物，前文人物块留空。
+        assertFalse(result.background.contains("【前文人物】"))
+        assertFalse(result.background.contains("沈岚"))
         assertFalse(result.background.contains("顾衡"))
     }
 

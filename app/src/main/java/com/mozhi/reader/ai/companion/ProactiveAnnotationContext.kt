@@ -404,8 +404,8 @@ internal class PreparedAnnotationContext(
             // 相关性下限：低于最高分 35% 的梗概不召回，避免只撞几个高频字就当相关。
             val bestOutline = rankedOutlines.firstOrNull()?.lexicalScore ?: 0.0
             val relatedOutlines = rankedOutlines.filter { (it.lexicalScore ?: 0.0) >= bestOutline * 0.35 }
-            // 上一章不再无条件追加：只在「一条相关的都没召回」时兜底补它，保持顺序阅读的连贯。
-            val selectedOutlines = relatedOutlines.ifEmpty { outlineCandidates.takeLast(1) }
+            // 召回落空就空着：不兜底注入上一章梗概，避免把无关前文带进提示词污染输出。
+            val selectedOutlines = relatedOutlines
             fun chapterLabel(index: Int): String = "第 "+ (index + 1) + " 章" +
                 titles[index]?.takeIf { it.isNotBlank() }?.let { "「" + it.take(80) + "」" }.orEmpty()
             val onStageCharacters = charactersOnStage(query)
@@ -451,13 +451,10 @@ internal class PreparedAnnotationContext(
             AnnotationReadingContext(prefix, target, background, recall)
         }
 
-    /** 目标段附近点名的人物优先；没人点名就退回最近一章的人物，保持「上一章刚发生什么」的连贯。 */
+    /** 只注入目标段附近点名的人物；没人点名就空着，不退最近一章的人物（避免无关前文污染）。 */
     private fun charactersOnStage(window: String): List<AnnotationCharacter> {
         if (characters.isEmpty()) return emptyList()
-        val onStage = characters.filter { it.name.length >= 2 && window.contains(it.name) }
-        if (onStage.isNotEmpty()) return onStage.take(MAX_CHARACTERS)
-        val latest = characters.maxOf { it.latestChapterIndex }
-        return characters.filter { it.latestChapterIndex == latest }.take(MAX_CHARACTERS)
+        return characters.filter { it.name.length >= 2 && window.contains(it.name) }.take(MAX_CHARACTERS)
     }
 
     /** 角色卡：目标段点名该人物（名字或别称），或点名它的关系对象时注入，最多 [MAX_CARDS] 位。 */

@@ -267,6 +267,7 @@ internal fun buildDiscussionSystemPrompt(
     }
     append("\n\n目前的讨论串：\n").append(transcript)
     append("\n\n规则：")
+    append("\n- 只围绕这段原文和它的上下文发言；上面的前文资料仅作参考，与这段原文无关就忽略，不要扯开去谈无关的前文人物、承诺或剧情")
     append("\n- 这是段落旁的讨论区，回复要短小、口语化、直接说观点，一般不超过 150 字")
     append("\n- 不用 Markdown 标题和列表，像聊天一样自然")
     if (!readingScope.isWholeBook) {

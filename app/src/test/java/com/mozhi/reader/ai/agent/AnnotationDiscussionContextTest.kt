@@ -143,6 +143,23 @@ class AnnotationDiscussionContextTest {
         assertTrue(prompt.indexOf("前文资料") < prompt.indexOf("目前的讨论串"))
     }
 
+    @Test
+    fun systemPromptTellsModelToIgnoreIrrelevantRecall() {
+        val prompt = buildDiscussionSystemPrompt(
+            persona = persona(name = "观澜", personality = "", isRoleplay = true),
+            book = book(lastReadChapterIndex = 5),
+            chapterTitle = null,
+            chapterNumber = 3,
+            quote = "引文",
+            neighborhood = "附近原文",
+            recallBackground = "【角色卡】顾衡",
+            transcript = "用户：？",
+            readingScope = com.mozhi.reader.core.retrieval.ReadingScope.upto(5, 100)
+        )
+        assertTrue(prompt.contains("只围绕这段原文"))
+        assertTrue(prompt.contains("与这段原文无关就忽略"))
+    }
+
     private fun annotation(personaId: Long?, note: String) = AnnotationEntity(
         id = 1,
         bookId = 1,
