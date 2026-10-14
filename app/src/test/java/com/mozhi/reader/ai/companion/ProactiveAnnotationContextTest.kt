@@ -10,7 +10,6 @@ import com.mozhi.reader.ai.knowledge.CharacterRole
 import com.mozhi.reader.ai.knowledge.DossierEvent
 import com.mozhi.reader.ai.knowledge.DossierRelation
 import com.mozhi.reader.ai.knowledge.DossierTrait
-import com.mozhi.reader.ai.knowledge.KnowledgeCharacter
 import com.mozhi.reader.ai.knowledge.KnowledgeFact
 import com.mozhi.reader.ai.knowledge.SourceAnchor
 import com.mozhi.reader.core.database.entity.ChapterKnowledgeEntity
@@ -117,46 +116,6 @@ class ProactiveAnnotationContextTest {
         assertNull(validatedAnnotationOutline(entry, ReadingScope.upto(2, 5), "r", promise))
     }
 
-    @Test fun namedCharacterFromPriorChapterIsInjectedIntoBackground() = runTest {
-        val prepared = PreparedAnnotationContext("r", characters = listOf(
-            AnnotationCharacter("顾衡", listOf(AnnotationCharacterFact(2, "顾衡在雪岭立誓，要把玉佩还给沈岚。")))
-        ))
-        val result = prepared.forParagraph(target, ProactiveAnnotationParagraph(0, target.length), 8_000)
-        assertTrue(result.background.contains("【前文人物】"))
-        assertTrue(result.background.contains("顾衡"))
-        assertTrue(result.background.contains("雪岭"))
-        assertTrue(result.background.contains("第3章"))
-    }
-
-    @Test fun unnamedParagraphInjectsNoPriorCharacters() = runTest {
-        val prepared = PreparedAnnotationContext("r", characters = listOf(
-            AnnotationCharacter("顾衡", listOf(AnnotationCharacterFact(2, "顾衡立下雪岭之誓。"))),
-            AnnotationCharacter("沈岚", listOf(AnnotationCharacterFact(4, "沈岚在城门张望，久候不至。")))
-        ))
-        val body = "今天天气很好，适合出门走走。"
-        val result = prepared.forParagraph(body, ProactiveAnnotationParagraph(0, body.length), 8_000)
-        // 目标段没点名任何人名时，不再退最近一章人物，前文人物块留空。
-        assertFalse(result.background.contains("【前文人物】"))
-        assertFalse(result.background.contains("沈岚"))
-        assertFalse(result.background.contains("顾衡"))
-    }
-
-    @Test fun charactersMergeByNameAcrossChaptersAndKeepLatestChapter() {
-        val merged = mergeAnnotationCharacters(listOf(
-            AnnotationChapterKnowledge(AnnotationOutline(2, "梗概"), listOf(
-                KnowledgeCharacter("顾衡", listOf(KnowledgeFact("在雪岭立誓", "q", 0, 1))),
-                KnowledgeCharacter("沈岚", listOf(KnowledgeFact("在城中等候", "q", 0, 1)))
-            )),
-            AnnotationChapterKnowledge(AnnotationOutline(4, "梗概"), listOf(
-                KnowledgeCharacter("顾衡", listOf(KnowledgeFact("把玉佩交还", "q", 0, 1)))
-            ))
-        ))
-        assertEquals(2, merged.size)
-        val guheng = merged.first { it.name == "顾衡" }
-        assertEquals(listOf("在雪岭立誓", "把玉佩交还"), guheng.facts.map { it.text })
-        assertEquals(4, guheng.latestChapterIndex)
-    }
-
     @Test fun cardProfileFiltersFactsAndRelationsByChapterAnchor() {
         val person = BookCharacter("顾衡",
             evidence = listOf(
@@ -252,27 +211,22 @@ class ProactiveAnnotationContextTest {
         assertFalse(result.background.contains("主次"))
     }
 
-    @Test fun characterCardAndUserNoteAreInjectedWhenNamed() = runTest {
+    @Test fun characterCardIsInjectedWhenNamed() = runTest {
         val prepared = PreparedAnnotationContext("r",
             characterCards = listOf(card("顾衡",
                 identity("主次：主角"),
-                content("经历：在雪岭立誓"), aliases = listOf("顾公子"))),
-            notes = listOf(AnnotationNote(2, "顾衡这个承诺很关键，我记下了。")))
+                content("经历：在雪岭立誓"), aliases = listOf("顾公子"))))
         val result = prepared.forParagraph(target, ProactiveAnnotationParagraph(0, target.length), 8_000)
         assertTrue(result.background.contains("【角色卡】"))
         assertTrue(result.background.contains("主角"))
-        assertTrue(result.background.contains("【读书笔记】"))
-        assertTrue(result.background.contains("承诺"))
     }
 
-    @Test fun cardAndNoteSkippedWhenNoNameOnStage() = runTest {
+    @Test fun cardSkippedWhenNoNameOnStage() = runTest {
         val prepared = PreparedAnnotationContext("r",
-            characterCards = listOf(card("顾衡", identity("主次：主角"))),
-            notes = listOf(AnnotationNote(2, "顾衡这个人值得留意。")))
+            characterCards = listOf(card("顾衡", identity("主次：主角"))))
         val body = "今天天气不错。"
         val result = prepared.forParagraph(body, ProactiveAnnotationParagraph(0, body.length), 8_000)
         assertFalse(result.background.contains("【角色卡】"))
-        assertFalse(result.background.contains("【读书笔记】"))
     }
 
     @Test fun cardContentFieldsAreGatedByRelevanceAgainstTheParagraph() = runTest {
@@ -327,7 +281,7 @@ class ProactiveAnnotationContextTest {
         assertTrue(result.background.contains("雪岭立誓"))
     }
 
-    @Test fun recallBreakdownCapturesOutlinesCardsNotesAndSnippetSources() = runTest {
+    @Test fun recallBreakdownCapturesOutlinesCardsAndSnippetSources() = runTest {
         val body = "顾衡取出玉佩，想起在雪岭对沈岚许下的承诺，终于决定兑现誓言。".repeat(3)
         val lexical = RetrievalCandidate(1, 0, 0, "顾衡在雪岭立誓，要把玉佩交还给沈岚。", 0, 20)
         val vector = VectorRecall(
@@ -341,13 +295,11 @@ class ProactiveAnnotationContextTest {
             characterCards = listOf(card("顾衡",
                 identity("主次：主角"),
                 content("经历：在雪岭立誓"))),
-            notes = listOf(AnnotationNote(2, "顾衡这个承诺很关键，我记下了。")),
             vectorRecall = vector
         )
         val recall = prepared.forParagraph(body, ProactiveAnnotationParagraph(0, body.length), 8_000).recall
         assertTrue(recall.outlines.any { it.text.contains("雪岭") })
         assertTrue(recall.characterCards.any { it.name == "顾衡" })
-        assertTrue(recall.notes.any { it.text.contains("承诺") })
         assertTrue(recall.snippets.any { it.source == "向量" && it.text.contains("雪岭上的誓言") })
         assertTrue(recall.snippets.any { it.source == "BM25" && it.text.contains("立誓") })
         // 落库走 encode()→decode() 往返，必须无损，否则详情页会读回空明细。

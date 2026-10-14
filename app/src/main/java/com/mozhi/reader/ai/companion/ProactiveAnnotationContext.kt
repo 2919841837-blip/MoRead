@@ -9,7 +9,6 @@ import com.mozhi.reader.ai.knowledge.BookCharactersCodec
 import com.mozhi.reader.ai.knowledge.ChapterKnowledgeCodec
 import com.mozhi.reader.ai.knowledge.CharacterAttributeKind
 import com.mozhi.reader.ai.knowledge.CharacterRole
-import com.mozhi.reader.ai.knowledge.KnowledgeCharacter
 import com.mozhi.reader.core.database.MoReadDatabase
 import com.mozhi.reader.core.database.entity.ChapterKnowledgeEntity
 import com.mozhi.reader.core.database.entity.ModelRole
@@ -19,7 +18,6 @@ import com.mozhi.reader.core.library.AnnotationRecall
 import com.mozhi.reader.core.library.LibraryRepository
 import com.mozhi.reader.core.library.RecallCard
 import com.mozhi.reader.core.library.RecallDiscussion
-import com.mozhi.reader.core.library.RecallNote
 import com.mozhi.reader.core.library.RecallOutline
 import com.mozhi.reader.core.library.RecallProactiveNote
 import com.mozhi.reader.core.library.RecallSnippet
@@ -62,16 +60,16 @@ class ProactiveAnnotationContextRepository @Inject constructor(
                 titles[index] = chapter.title
                 ChapterDocument(index, chapter.title, library.readChapterTextStrict(bookId, chapter))
             } }, loadChaptersThrough = { emptyList() })
-        val knowledge = database.chapterKnowledgeDao().getBefore(bookId, chapterIndex).mapNotNull { entry ->
+        val outlines = database.chapterKnowledgeDao().getBefore(bookId, chapterIndex).mapNotNull { entry ->
             currentCoroutineContext().ensureActive()
             validatedAnnotationOutline(entry, scope, revision, corpus.bodies[entry.chapterIndex])
         }
         check(isCurrent(bookId, revision)) { "正文已变化，请重新准备段评上下文" }
         val vectorRecall = resolveVectorRecall(bookId, corpus, chapterIndex)
-        PreparedAnnotationContext(revision, corpus.candidates, knowledge.map { it.outline }, titles,
-            !corpus.complete, mergeAnnotationCharacters(knowledge),
+        PreparedAnnotationContext(revision, corpus.candidates, outlines, titles,
+            !corpus.complete,
             recallCharacterCards(bookId, revision, chapterIndex),
-            recallUserNotes(bookId, chapterIndex), recallDiscussions(bookId, chapterIndex),
+            recallDiscussions(bookId, chapterIndex),
             recallProactiveNotes(bookId, chapterIndex), vectorRecall)
     }
 
@@ -132,14 +130,6 @@ class ProactiveAnnotationContextRepository @Inject constructor(
         return guide.characters.mapNotNull { person -> cardFor(person, currentChapter, guide.progressBounded) }
     }
 
-    /** 用户笔记：只取前文章节、有想法（非纯高亮）的批注。 */
-    private suspend fun recallUserNotes(bookId: Long, currentChapter: Int): List<AnnotationNote> {
-        if (currentChapter <= 0) return emptyList()
-        return database.annotationDao().getForChapterRangeByUser(bookId, 0, currentChapter - 1)
-            .filter { it.note.isNotBlank() }
-            .map { AnnotationNote(it.chapterIndex, it.note) }
-    }
-
     /** 讨论结论：前文章节里 AI 的讨论回复（结论/伏笔）；章锚与写时进度线已在 SQL 里双重过滤。 */
     private suspend fun recallDiscussions(bookId: Long, currentChapter: Int): List<AnnotationDiscussion> {
         if (currentChapter <= 0) return emptyList()
@@ -159,31 +149,14 @@ class ProactiveAnnotationContextRepository @Inject constructor(
 
 internal data class AnnotationOutline(val chapterIndex: Int, val text: String)
 
-/** 一章知识里能进段评上下文的部分：梗概 + 已核对的人物。 */
-internal data class AnnotationChapterKnowledge(
-    val outline: AnnotationOutline,
-    val characters: List<KnowledgeCharacter>
-)
-
 /** Never reuse a whole-chapter outline whose source reaches beyond the allowed boundary. */
 internal fun validatedAnnotationOutline(
     entry: ChapterKnowledgeEntity, scope: ReadingScope, revision: String, body: String?
-): AnnotationChapterKnowledge? {
+): AnnotationOutline? {
     val visible = ChapterKnowledgeCodec.visible(entry, scope, revision) ?: return null
     if (body == null || entry.sourceEnd > body.length ||
         ChapterKnowledgeCodec.hash(body.take(entry.sourceEnd)) != entry.sourceHash) return null
-    return AnnotationChapterKnowledge(
-        AnnotationOutline(entry.chapterIndex, visible.content.readableOutline),
-        visible.content.characters
-    )
-}
-
-/** 一位前文人物的单条事实，带出处章。 */
-internal data class AnnotationCharacterFact(val chapterIndex: Int, val text: String)
-
-/** 前文各章知识合并出的一位人物；[latestChapterIndex] 是它最近一次出场的章。 */
-internal data class AnnotationCharacter(val name: String, val facts: List<AnnotationCharacterFact>) {
-    val latestChapterIndex: Int get() = facts.maxOfOrNull(AnnotationCharacterFact::chapterIndex) ?: -1
+    return AnnotationOutline(entry.chapterIndex, visible.content.readableOutline)
 }
 
 /** 角色卡一段字段的收窄策略：[IDENTITY]/[TRAIT] 本人出场即注入，[RELATION] 逐条按目标名，[CONTENT] 走相关性闸。 */
@@ -207,20 +180,11 @@ internal data class AnnotationCharacterCard(
     val relationTargets: List<String> get() = fields.mapNotNull { it.target }
 }
 
-/** 用户的一条前文批注笔记（想法 + 章锚）。 */
-internal data class AnnotationNote(val chapterIndex: Int, val text: String)
-
 /** 一条前文讨论结论（AI 在讨论串里的回复正文 + 章锚）。 */
 internal data class AnnotationDiscussion(val chapterIndex: Int, val text: String)
 
 /** 一条前文段评（AI 段评的想法正文 + 章锚）。 */
 internal data class AnnotationProactiveNote(val chapterIndex: Int, val text: String)
-
-/** 每位人物跨章合并后最多保留几条事实。 */
-private const val MAX_FACTS_PER_CHARACTER = 6
-
-/** 每条段评最多注入几位人物。 */
-private const val MAX_CHARACTERS = 4
 
 /** 每条段评最多注入几位角色卡人物。 */
 private const val MAX_CARDS = 4
@@ -234,9 +198,6 @@ private const val CARD_RELATIONS = 4
 /** 角色卡内容字段（经历/简介/小传/成长/外貌）的相关性下限：BM25 不到本轮最高分这个比例就不注入。 */
 private const val CARD_CONTENT_RELEVANCE_RATIO = 0.35
 
-/** 每条段评最多召回几条用户笔记。 */
-private const val MAX_NOTES = 4
-
 /** 每条段评最多召回几条讨论结论。 */
 private const val MAX_DISCUSSIONS = 4
 
@@ -249,22 +210,6 @@ private const val SNIPPET_RECALL_DEPTH = 48
 
 /** 向量余弦距离闸：超过该距离的语义片段不算相关（与 RetrievalRequest.maxVectorDistance 一致）。 */
 private const val VECTOR_MAX_DISTANCE = 0.80
-
-/** 跨章按名字合并人物：同一人只留一条，事实去重后保留最近 [MAX_FACTS_PER_CHARACTER] 条。 */
-internal fun mergeAnnotationCharacters(knowledge: List<AnnotationChapterKnowledge>): List<AnnotationCharacter> {
-    val byName = linkedMapOf<String, MutableList<AnnotationCharacterFact>>()
-    knowledge.forEach { chapter ->
-        chapter.characters.forEach { person ->
-            val facts = byName.getOrPut(person.name) { mutableListOf() }
-            person.facts.forEach { fact -> facts += AnnotationCharacterFact(chapter.outline.chapterIndex, fact.text) }
-        }
-    }
-    return byName.mapNotNull { (name, facts) ->
-        facts.takeIf { it.isNotEmpty() }?.let {
-            AnnotationCharacter(name, it.distinctBy { it.text }.takeLast(MAX_FACTS_PER_CHARACTER))
-        }
-    }
-}
 
 private fun roleLabel(role: CharacterRole): String = when (role) {
     CharacterRole.PROTAGONIST -> "主角"
@@ -457,9 +402,7 @@ internal class PreparedAnnotationContext(
     private val outlines: List<AnnotationOutline> = emptyList(),
     private val titles: Map<Int, String> = emptyMap(),
     private val partial: Boolean = false,
-    private val characters: List<AnnotationCharacter> = emptyList(),
     private val characterCards: List<AnnotationCharacterCard> = emptyList(),
-    private val notes: List<AnnotationNote> = emptyList(),
     private val discussions: List<AnnotationDiscussion> = emptyList(),
     private val proactiveNotes: List<AnnotationProactiveNote> = emptyList(),
     private val vectorRecall: VectorRecall? = null
@@ -498,12 +441,10 @@ internal class PreparedAnnotationContext(
             val selectedOutlines = relatedOutlines
             fun chapterLabel(index: Int): String = "第 "+ (index + 1) + " 章" +
                 titles[index]?.takeIf { it.isNotBlank() }?.let { "「" + it.take(80) + "」" }.orEmpty()
-            val onStageCharacters = charactersOnStage(query)
             val onStageCards = cardsOnStage(query).mapNotNull { card ->
                 narrowedCardLines(card, query) { context.ensureActive() }
                     .takeIf { it.isNotEmpty() }?.let { card to it }
             }
-            val onStageNotes = notesOnStage(namesOnStage(query))
             val discussionCandidates = discussions.map { discussion ->
                 RetrievalCandidate(0, discussion.chapterIndex, 0, discussion.text)
             }
@@ -516,27 +457,11 @@ internal class PreparedAnnotationContext(
             val rankedProactiveNotes = Bm25LexicalRecall.rank(proactiveNoteCandidates, query, MAX_PROACTIVE_NOTES) { context.ensureActive() }
             val bestProactiveNote = rankedProactiveNotes.firstOrNull()?.lexicalScore ?: 0.0
             val onStageProactiveNotes = rankedProactiveNotes.filter { (it.lexicalScore ?: 0.0) >= bestProactiveNote * 0.35 }
-            val charactersText = packAnnotationBackground(
-                if (onStageCharacters.isEmpty()) emptyList() else
-                    listOf("【前文人物】与本文相关的人物（辅助资料，以原文为准）：") +
-                        onStageCharacters.map { person ->
-                            person.name + "：" + person.facts.joinToString("；") { fact ->
-                                "${fact.text}（第${fact.chapterIndex + 1}章）"
-                            }
-                        },
-                backgroundBudget / 4
-            )
             val cardsText = packAnnotationBackground(
                 if (onStageCards.isEmpty()) emptyList() else
                     listOf("【角色卡】与本文相关人物的档案（辅助资料，以原文为准）：") +
                         onStageCards.map { (card, lines) -> card.name + "\n" + lines.joinToString("\n") },
                 backgroundBudget / 4
-            )
-            val notesText = packAnnotationBackground(
-                if (onStageNotes.isEmpty()) emptyList() else
-                    listOf("【读书笔记】你此前的批注（辅助资料）：") +
-                        onStageNotes.map { note -> chapterLabel(note.chapterIndex) + "笔记：" + note.text },
-                backgroundBudget / 8
             )
             val discussionsText = packAnnotationBackground(
                 if (onStageDiscussions.isEmpty()) emptyList() else
@@ -555,14 +480,13 @@ internal class PreparedAnnotationContext(
             }, backgroundBudget / 4)
             val snippets = packAnnotationBackground(hits.map {
                 chapterLabel(it.chapterIndex) + "原文：\n" + it.text
-            }, (backgroundBudget - summaries.length - charactersText.length - cardsText.length - notesText.length - discussionsText.length - proactiveNotesText.length - 6).coerceAtLeast(0))
+            }, (backgroundBudget - summaries.length - cardsText.length - discussionsText.length - proactiveNotesText.length - 6).coerceAtLeast(0))
             val warning = if (partial) "前文检索只覆盖部分正文；未命中不代表书中没有。" else ""
-            val background = packAnnotationBackground(listOf(warning, summaries, charactersText, cardsText, notesText, proactiveNotesText, discussionsText, snippets), backgroundBudget)
+            val background = packAnnotationBackground(listOf(warning, summaries, cardsText, proactiveNotesText, discussionsText, snippets), backgroundBudget)
             val prefix = ProactiveAnnotationParagraphs.prefix(body, paragraph, budget - target.length - background.length)
             val recall = AnnotationRecall(
                 outlines = selectedOutlines.map { RecallOutline(chapterLabel(it.chapterIndex), it.text) },
                 characterCards = onStageCards.map { (card, lines) -> RecallCard(card.name, lines.joinToString("\n")) },
-                notes = onStageNotes.map { RecallNote(chapterLabel(it.chapterIndex), it.text) },
                 snippets = hits.map { RecallSnippet(chapterLabel(it.chapterIndex), it.text, snippetSource(it)) },
                 discussions = onStageDiscussions.map { RecallDiscussion(chapterLabel(it.chapterIndex), it.text) },
                 proactiveNotes = onStageProactiveNotes.map { RecallProactiveNote(chapterLabel(it.chapterIndex), it.text) }
@@ -570,27 +494,11 @@ internal class PreparedAnnotationContext(
             AnnotationReadingContext(prefix, target, background, recall)
         }
 
-    /** 只注入目标段附近点名的人物；没人点名就空着，不退最近一章的人物（避免无关前文污染）。 */
-    private fun charactersOnStage(window: String): List<AnnotationCharacter> {
-        if (characters.isEmpty()) return emptyList()
-        return characters.filter { it.name.length >= 2 && window.contains(it.name) }.take(MAX_CHARACTERS)
-    }
-
     /** 角色卡：目标段点名该人物（名字或别称），或点名它的关系对象时注入，最多 [MAX_CARDS] 位。 */
     private fun cardsOnStage(window: String): List<AnnotationCharacterCard> =
         characterCards.filter { card ->
             (listOf(card.name) + card.aliases + card.relationTargets).any { it.length >= 2 && window.contains(it) }
         }.take(MAX_CARDS)
-
-    /** 前文上下文里出现过的所有人名（角色卡 + 每章人物），用于给读书笔记做名字匹配。 */
-    private fun namesOnStage(window: String): List<String> =
-        (characterCards.flatMap { listOf(it.name) + it.aliases } + characters.map { it.name })
-            .filter { it.length >= 2 && window.contains(it) }.distinct()
-
-    /** 用户笔记：只召回提到当前上场人物的前文批注，取最近几条。 */
-    private fun notesOnStage(names: List<String>): List<AnnotationNote> =
-        if (names.isEmpty()) emptyList()
-        else notes.filter { note -> names.any { note.text.contains(it) } }.takeLast(MAX_NOTES)
 }
 
 /** 片段来源标签：向量 / BM25 / 两者融合，只用于召回明细展示，不参与召回逻辑。 */
