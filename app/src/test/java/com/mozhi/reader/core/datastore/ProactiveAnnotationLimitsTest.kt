@@ -133,6 +133,6 @@ class ProactiveAnnotationLimitsTest {
         assertEquals(21_000, resolveProactiveAnnotationLimits(global, restored[7L]).context.budgetChars)
         assertEquals(32_000, resolveProactiveAnnotationLimits(global, restored[7L]!!.copy(enabled = false)).context.budgetChars)
         assertEquals(4_000, book.copy(context = book.context.copy(customChars = -1)).normalized().context.budgetChars)
-        assertEquals(64_000, book.copy(context = book.context.copy(customChars = Int.MAX_VALUE)).normalized().context.budgetChars)
+        assertEquals(128_000, book.copy(context = book.context.copy(customChars = Int.MAX_VALUE)).normalized().context.budgetChars)
     }
 }
