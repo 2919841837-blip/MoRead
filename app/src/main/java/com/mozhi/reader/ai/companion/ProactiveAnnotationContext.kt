@@ -241,6 +241,13 @@ private fun speakerName(personaId: Long?, personaNames: Map<Long, String>): Stri
 /** 章节级召回上下文的缓存条数（随读段评 + 私聊共享）。 */
 private const val CONTEXT_CACHE_CAPACITY = 8
 
+private const val TAG = "ProactiveAnnotationRecall"
+
+/** 召回落空时的校准日志：记录 best BM25 分，判断绝对下限卡得是否合适；JVM 单测里 android.util.Log 不可用，静默跳过。 */
+private fun recallLog(message: String) {
+    runCatching { android.util.Log.d(TAG, message) }
+}
+
 /** 每条段评最多注入几位角色卡人物。 */
 private const val MAX_CARDS = 6
 
@@ -253,8 +260,17 @@ private const val CARD_RELATIONS = 4
 /** 角色卡内容字段（经历/简介/小传/成长/外貌）的相关性下限：BM25 不到本轮最高分这个比例就不注入。 */
 private const val CARD_CONTENT_RELEVANCE_RATIO = 0.35
 
+/** 角色卡内容字段的绝对 BM25 下限：候选集 N≤5、idf 上限低，一个专有词命中 ≈1.4 越过，单字偶合 ≈0.3 被挡。 */
+private const val CARD_CONTENT_LEXICAL_FLOOR = 0.5
+
 /** 每条段评最多召回几条前文讨论串（单层段评或多层讨论，合并计数）。 */
 private const val MAX_CONCLUSIONS = 8
+
+/** 「当前角色参与过的讨论串」独立通道的名额上限：不跟普通串抢名额，另算。 */
+private const val MAX_PARTICIPATED_CONCLUSIONS = 2
+
+/** 讨论串的绝对 BM25 下限，量级同大纲：单个罕见 n-gram 命中分远高于此，单字偶合被挡。 */
+private const val CONCLUSION_LEXICAL_FLOOR = 1.0
 
 /** 每条段评最多召回几条大纲，以及大纲向量腿的召回深度（正文切片命中反查章）。 */
 private const val MAX_OUTLINES = 25
@@ -267,6 +283,9 @@ private const val CONCLUSION_BUDGET_RATIO = 0.1
 
 /** 大纲向量腿的余弦距离闸：比通用片段闸更紧——「切片命中 → 反查章大纲」是有损映射，切片语义近不代表该章梗概必然相关。 */
 private const val OUTLINE_VECTOR_MAX_DISTANCE = 0.60
+
+/** 大纲词法腿的绝对 BM25 下限：候选集 N 大，单个罕见 n-gram 命中分远高于此，单字偶合被挡。 */
+private const val OUTLINE_LEXICAL_FLOOR = 1.0
 
 private fun roleLabel(role: CharacterRole): String = when (role) {
     CharacterRole.PROTAGONIST -> "主角"
@@ -385,7 +404,7 @@ internal fun cardProfile(person: BookCharacter, currentChapter: Int, bounded: Bo
 internal fun cardFor(person: BookCharacter, currentChapter: Int, bounded: Boolean): AnnotationCharacterCard? =
     cardFields(person, currentChapter, bounded)?.let { AnnotationCharacterCard(person.name, person.aliases, it) }
 
-/** 角色卡内容字段的相关性闸：对当前段做 BM25 打分，只保留不低于最高分 [CARD_CONTENT_RELEVANCE_RATIO] 的字段。 */
+/** 角色卡内容字段的相关性闸：对当前段做 BM25 打分，保留同时过「相对比例 + 绝对下限」的字段。 */
 private fun contentFieldsOnStage(fields: List<CardField>, window: String, checkActive: () -> Unit): List<CardField> {
     if (fields.isEmpty()) return emptyList()
     val candidates = fields.mapIndexed { index, field -> RetrievalCandidate(0, 0, index, field.text) }
@@ -393,7 +412,13 @@ private fun contentFieldsOnStage(fields: List<CardField>, window: String, checkA
     val best = ranked.firstOrNull()?.lexicalScore ?: 0.0
     if (best <= 0.0) return emptyList()
     val scores = ranked.associateBy { it.chunkIndex }
-    return fields.filterIndexed { index, _ -> (scores[index]?.lexicalScore ?: 0.0) >= best * CARD_CONTENT_RELEVANCE_RATIO }
+    val selected = fields.filterIndexed { index, _ ->
+        (scores[index]?.lexicalScore ?: 0.0) >= maxOf(best * CARD_CONTENT_RELEVANCE_RATIO, CARD_CONTENT_LEXICAL_FLOOR)
+    }
+    if (selected.isEmpty()) {
+        recallLog("card content recall empty: best BM25=$best (< floor $CARD_CONTENT_LEXICAL_FLOOR)")
+    }
+    return selected
 }
 
 /** 收窄一位角色卡到当前段：本人出场注入自身字段 + 相关内容字段，关系只留目标在场的。返回选中的字段行（无名字头）。 */
@@ -511,14 +536,17 @@ internal class PreparedAnnotationContext(
             lexicalWeight = RetrievalQuery.lexicalWeightFor(query)
         )
         val bestOutline = rankedOutlines.firstOrNull()?.lexicalScore ?: 0.0
-        // 相关性闸：向量距离达标，或 BM25 ≥ 本轮最高分 35%；召回落空就空着，不兜底上一章。
+        // 相关性闸：向量距离达标，或 BM25 同时过「相对比例 + 绝对下限」；召回落空就空着，不兜底上一章。
         val selectedOutlines = RetrievalSelection.select(
             fusedOutlines.filter { candidate ->
-                (candidate.lexicalScore != null && candidate.lexicalScore >= bestOutline * 0.35) ||
+                (candidate.lexicalScore != null && candidate.lexicalScore >= maxOf(bestOutline * 0.35, OUTLINE_LEXICAL_FLOOR)) ||
                     (candidate.vectorDistance != null && candidate.vectorDistance <= OUTLINE_VECTOR_MAX_DISTANCE)
             },
             topK = MAX_OUTLINES, maxPerChapter = 1, literalKeys = emptySet(), literalReserve = 0
         ).selected
+        if (selectedOutlines.isEmpty() && bestOutline > 0.0) {
+            recallLog("outline recall empty: best BM25=$bestOutline (< floor $OUTLINE_LEXICAL_FLOOR)")
+        }
         val onStageCards = cardsOnStage(query).mapNotNull { card ->
             narrowedCardLines(card, query) { context.ensureActive() }
                 .takeIf { it.isNotEmpty() }?.let { card to it }
@@ -526,15 +554,32 @@ internal class PreparedAnnotationContext(
         val conclusionCandidates = threads.mapIndexed { index, thread ->
             RetrievalCandidate(0, thread.chapterIndex, index, thread.bm25Text)
         }
-        // 全量 rank（不只 topK）：tier 重排后「当前角色参与的串」可能在 BM25 前 8 之外。
+        // 全量 rank（不只 topK）：拆「参与串」「普通串」两条通道，各自取、互不抢名额。两条都源自
+        // recallThreads 已按 chapterIndex < currentChapter 过滤好的 threads，防剧透不变。
         val rankedConclusions = Bm25LexicalRecall.rank(conclusionCandidates, query, conclusionCandidates.size) { context.ensureActive() }
-        val bestConclusion = rankedConclusions.firstOrNull()?.lexicalScore ?: 0.0
-        val onStageConclusions = rankedConclusions
-            .filter { (it.lexicalScore ?: 0.0) >= bestConclusion * 0.35 }
-            // 更高优先级 tier：当前角色参与过的串优先；sortedByDescending 稳定，同 tier 内保持 BM25 降序。
-            .sortedByDescending { candidate -> personaId != null && threads[candidate.chunkIndex].participants.contains(personaId) }
+        val normalConclusions = if (personaId == null) rankedConclusions else rankedConclusions.filterNot { candidate ->
+            threads[candidate.chunkIndex].participants.contains(personaId)
+        }
+        val bestConclusion = normalConclusions.firstOrNull()?.lexicalScore ?: 0.0
+        // 普通串通道：BM25 相对比例 + 绝对下限；best 只在本池内算。
+        val onStageNormal = normalConclusions
+            .filter { (it.lexicalScore ?: 0.0) >= maxOf(bestConclusion * 0.35, CONCLUSION_LEXICAL_FLOOR) }
             .take(MAX_CONCLUSIONS)
+        // 参与串通道：当前角色参与过即算，门槛降到 score > 0，按章节降序（最近优先），限量。
+        val onStageParticipated = if (personaId == null) emptyList() else rankedConclusions
+            .filter { candidate ->
+                (candidate.lexicalScore ?: 0.0) > 0.0 &&
+                    threads[candidate.chunkIndex].participants.contains(personaId)
+            }
+            .sortedByDescending { it.chapterIndex }
+            .take(MAX_PARTICIPATED_CONCLUSIONS)
+        // 打包顺序：参与串在前（更高价值），普通串在后；slot 独立、字符预算共享。
+        val onStageConclusions = (onStageParticipated + onStageNormal)
             .mapNotNull { threads.getOrNull(it.chunkIndex) }
+        val bestAnyConclusion = rankedConclusions.firstOrNull()?.lexicalScore ?: 0.0
+        if (onStageConclusions.isEmpty() && bestAnyConclusion > 0.0) {
+            recallLog("thread recall empty: best BM25=$bestAnyConclusion (< floor $CONCLUSION_LEXICAL_FLOOR)")
+        }
         val outlineBlocks = selectedOutlines.map {
             chapterLabel(it.chapterIndex) + "梗概（辅助资料，以原文为准）：\n" + it.text
         }

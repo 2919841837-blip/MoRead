@@ -196,17 +196,22 @@ class CompanionContextBuilder @Inject constructor(
     ): List<String> = try {
         val resolved = clientFactory.get().forRole(ModelRole.EMBEDDING)
         val vector = Embeddings.conformToIndex(resolved.client.embed(listOf(query)).first())
-        VectorQueries.searchMemories(
+        // 过采样再按距离闸过滤：距离闸会拦掉一部分近邻，只请求 5 条会经常凑不满 5。
+        val hits = VectorQueries.searchMemories(
             vectorStore.get(),
             personaId,
             vector,
-            MEMORY_TOP_K,
+            MEMORY_FETCH_K,
             bookId,
             maskId,
             currentBookId,
             readingScope.maxChapterIndex,
             readingScope.maxCharOffset
-        ).map { it.get().summary }
+        )
+        val accepted = hits.filter { it.score <= MEMORY_VECTOR_MAX_DISTANCE }.take(MEMORY_TOP_K)
+        // 校准日志：记录第 5 近邻的原始距离（闸前），判断距离闸 0.65 是否卡得合适。
+        memoryLog("memory recall: accepted=${accepted.size}/${hits.size}, fifth distance=${hits.getOrNull(4)?.score}, gate=$MEMORY_VECTOR_MAX_DISTANCE")
+        accepted.map { it.get().summary }
     } catch (cancelled: CancellationException) {
         throw cancelled
     } catch (_: Exception) {
@@ -218,6 +223,12 @@ class CompanionContextBuilder @Inject constructor(
         const val DEFAULT_BUDGET_CHARS = 16_000
         const val SCENE_MAX_CHARS = 2_000
         const val MEMORY_TOP_K = 5
+
+        /** 长期记忆过采样量：距离闸会拦掉一部分近邻，多取一些再过滤，避免凑不满 [MEMORY_TOP_K]。 */
+        private const val MEMORY_FETCH_K = 16
+
+        /** 长期记忆向量距离闸（余弦距离，[0,2]，越小越近）：松于大纲 0.60、紧于通用片段 0.80。 */
+        private const val MEMORY_VECTOR_MAX_DISTANCE = 0.65
 
         private const val SEPARATOR = "\n\n"
 
@@ -447,4 +458,9 @@ class CompanionContextBuilder @Inject constructor(
                 SCENE_HEADER + text.take(maxChars)
             }
     }
+}
+
+/** 记忆召回距离闸的校准日志；JVM 单测里 android.util.Log 不可用，静默跳过。 */
+private fun memoryLog(message: String) {
+    runCatching { android.util.Log.d("CompanionContextBuilder", message) }
 }

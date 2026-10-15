@@ -345,6 +345,34 @@ class ProactiveAnnotationContextTest {
         assertTrue(result.recall.threads.first().turns.any { it.speaker == "观澜" })
     }
 
+    @Test fun absoluteFloorDropsWeakOutlineEvenWhenItsTheOnlyMatch() = runTest {
+        // 只沾到「顾衡」一个 bigram 的弱相关大纲：旧逻辑纯相对 35% 会注入，绝对下限 1.0 应挡掉。
+        val prepared = PreparedAnnotationContext("r", outlines = listOf(
+            AnnotationOutline(0, "顾衡")
+        ))
+        val result = prepared.forParagraph(target, ProactiveAnnotationParagraph(0, target.length), 8_000)
+        assertTrue(result.recall.outlines.isEmpty())
+        assertFalse(result.background.contains("梗概"))
+    }
+
+    @Test fun participatedThreadRecalledAtLowerThresholdThanNormal() = runTest {
+        // 参与串只沾到「顾衡」一个 bigram（BM25 < 绝对下限 1.0）：普通串通道会挡，参与串通道 score>0 即召回。
+        val prepared = PreparedAnnotationContext("r",
+            threads = listOf(thread(0, listOf(ThreadTurn(7L, "观澜", "顾衡"))))
+        )
+        val result = prepared.forParagraph(target, ProactiveAnnotationParagraph(0, target.length), 8_000, personaId = 7L)
+        assertTrue(result.recall.threads.isNotEmpty())
+        assertTrue(result.recall.threads.single().turns.any { it.speaker == "观澜" })
+    }
+
+    @Test fun participatedThreadChannelCappedAtTwo() = runTest {
+        val prepared = PreparedAnnotationContext("r",
+            threads = (0..2).map { thread(it, listOf(ThreadTurn(7L, "观澜", "顾衡"))) }
+        )
+        val result = prepared.forParagraph(target, ProactiveAnnotationParagraph(0, target.length), 8_000, personaId = 7L)
+        assertEquals(2, result.recall.threads.size)
+    }
+
     @Test fun forQueryRecallsByQueryAndCarriesStructuredDetail() = runTest {
         val prepared = PreparedAnnotationContext("r", outlines = listOf(
             AnnotationOutline(2, "顾衡在雪岭立誓，要把玉佩交还给沈岚。"),
