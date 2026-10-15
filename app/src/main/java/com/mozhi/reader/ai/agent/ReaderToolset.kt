@@ -104,13 +104,14 @@ class ReaderToolset @Inject constructor(
                         .forParagraph(
                             chapter.body,
                             ProactiveAnnotationParagraph(match.startCharOffset, match.endCharOffset),
-                            ProactiveAnnotationContextSettings().budgetChars
+                            ProactiveAnnotationContextSettings().budgetChars,
+                            personaId
                         )
                         .recall
                     runCatching {
                         android.util.Log.d("ReaderToolset",
                             "annotation recall ch=${match.chapterIndex}: outlines=${recall.outlines.size} " +
-                                "cards=${recall.characterCards.size} notes=${recall.notes.size} snippets=${recall.snippets.size} discussions=${recall.discussions.size} proactiveNotes=${recall.proactiveNotes.size}")
+                                "cards=${recall.characterCards.size} notes=${recall.notes.size} snippets=${recall.snippets.size} threads=${recall.threads.size}")
                     }
                     recall
                 }

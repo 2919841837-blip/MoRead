@@ -307,30 +307,48 @@ class ProactiveAnnotationContextTest {
         assertEquals(recall, AnnotationRecall.decode(recall.encode()))
     }
 
-    @Test fun conclusionsRecallMergesNotesAndDiscussionsAndDropsIrrelevant() = runTest {
+    @Test fun threadRecallInjectsWholeDiscussionWithSpeakersAndDropsIrrelevant() = runTest {
         val body = "顾衡取出玉佩，想起在雪岭对沈岚许下的承诺，终于决定兑现誓言。".repeat(3)
         val prepared = PreparedAnnotationContext("r",
-            conclusions = listOf(
-                AnnotationConclusion(1, "顾衡在雪岭对沈岚许下的玉佩承诺，伏笔呼应。", ConclusionSource.PROACTIVE_NOTE),
-                AnnotationConclusion(1, "顾衡在雪岭对沈岚许下的玉佩承诺，和伏笔呼应。", ConclusionSource.DISCUSSION),
-                AnnotationConclusion(0, "集市上的陶罐都很便宜。", ConclusionSource.DISCUSSION)
+            threads = listOf(
+                thread(1, listOf(
+                    ThreadTurn(7L, "观澜", "顾衡在雪岭对沈岚许下的玉佩承诺，伏笔呼应。"),
+                    ThreadTurn(null, "用户", "我也觉得这个伏笔很关键。")
+                )),
+                thread(0, listOf(ThreadTurn(7L, "观澜", "集市上的陶罐都很便宜。")))
             )
         )
         val result = prepared.forParagraph(body, ProactiveAnnotationParagraph(0, body.length), 8_000)
-        assertTrue(result.background.contains("前文结论"))
+        assertTrue(result.background.contains("前文讨论"))
         assertTrue(result.background.contains("伏笔"))
         assertFalse(result.background.contains("陶罐"))
-        // 段评与讨论结论合并成一个块，但来源前缀保留，详情明细仍按来源分栏
-        assertTrue(result.background.contains("段评："))
-        assertTrue(result.background.contains("讨论："))
-        assertTrue(result.recall.proactiveNotes.any { it.text.contains("伏笔") })
-        assertTrue(result.recall.discussions.any { it.text.contains("伏笔") })
-        assertFalse(result.recall.discussions.any { it.text.contains("陶罐") })
+        // 整串注入：楼主层 + 用户回复都在，发言人身份保留
+        assertTrue(result.background.contains("观澜："))
+        assertTrue(result.background.contains("用户："))
+        // 详情明细按讨论串 + 发言人落库，且 encode→decode 无损
+        val recalled = result.recall.threads.single { it.label.contains("第 2 章") }
+        assertTrue(recalled.turns.any { it.speaker == "观澜" && it.text.contains("伏笔") })
+        assertTrue(recalled.turns.any { it.speaker == "用户" })
         assertEquals(result.recall, AnnotationRecall.decode(result.recall.encode()))
+    }
+
+    @Test fun threadRecallPrioritizesThreadsTheCurrentPersonaParticipatedIn() = runTest {
+        val body = "顾衡取出玉佩，想起在雪岭对沈岚许下的承诺，终于决定兑现誓言。".repeat(3)
+        // 两条内容完全相同（BM25 分数一致），只有发言人不同：当前角色参与的串应靠 tier 排前面。
+        val prepared = PreparedAnnotationContext("r",
+            threads = listOf(
+                thread(0, listOf(ThreadTurn(9L, "沈岚", "顾衡在雪岭对沈岚许下玉佩承诺，埋下伏笔。"))),
+                thread(1, listOf(ThreadTurn(7L, "观澜", "顾衡在雪岭对沈岚许下玉佩承诺，埋下伏笔。")))
+            )
+        )
+        val result = prepared.forParagraph(body, ProactiveAnnotationParagraph(0, body.length), 8_000, personaId = 7L)
+        assertTrue(result.recall.threads.first().turns.any { it.speaker == "观澜" })
     }
 
     private fun card(name: String, vararg fields: CardField, aliases: List<String> = emptyList()) =
         AnnotationCharacterCard(name, aliases, fields.toList())
+
+    private fun thread(chapterIndex: Int, turns: List<ThreadTurn>) = AnnotationThread(1L, chapterIndex, turns)
 
     private fun identity(line: String) = CardField(CardFieldKind.IDENTITY, line, line.substringAfter("："))
     private fun trait(line: String) = CardField(CardFieldKind.TRAIT, line, line.substringAfter("："))

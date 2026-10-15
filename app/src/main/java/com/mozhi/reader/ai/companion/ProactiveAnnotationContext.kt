@@ -5,21 +5,25 @@ import com.mozhi.reader.ai.agent.ReadableCorpus
 import com.mozhi.reader.ai.agent.loadReadableCorpus
 import com.mozhi.reader.ai.client.AiClientFactory
 import com.mozhi.reader.ai.knowledge.BookCharacter
+import com.mozhi.reader.ai.persona.PersonaRepository
 import com.mozhi.reader.ai.knowledge.BookCharactersCodec
 import com.mozhi.reader.ai.knowledge.ChapterKnowledgeCodec
 import com.mozhi.reader.ai.knowledge.CharacterAttributeKind
 import com.mozhi.reader.ai.knowledge.CharacterRole
 import com.mozhi.reader.core.database.MoReadDatabase
+import com.mozhi.reader.core.database.dao.AnnotationThreadCandidate
+import com.mozhi.reader.core.database.entity.AnnotationReplyEntity
 import com.mozhi.reader.core.database.entity.ChapterKnowledgeEntity
 import com.mozhi.reader.core.database.entity.ModelRole
+import com.mozhi.reader.core.database.entity.PersonaEntity
 import com.mozhi.reader.core.datastore.BookEmbeddingSettingsStore
 import com.mozhi.reader.core.datastore.ProactiveAnnotationContextSettings
 import com.mozhi.reader.core.library.AnnotationRecall
 import com.mozhi.reader.core.library.LibraryRepository
 import com.mozhi.reader.core.library.RecallCard
-import com.mozhi.reader.core.library.RecallDiscussion
 import com.mozhi.reader.core.library.RecallOutline
-import com.mozhi.reader.core.library.RecallProactiveNote
+import com.mozhi.reader.core.library.RecallThread
+import com.mozhi.reader.core.library.RecallThreadTurn
 import com.mozhi.reader.core.retrieval.Bm25LexicalRecall
 import com.mozhi.reader.core.retrieval.ReadingScope
 import com.mozhi.reader.core.retrieval.RetrievalCandidate
@@ -43,6 +47,7 @@ import kotlinx.coroutines.withContext
 class ProactiveAnnotationContextRepository @Inject constructor(
     private val library: LibraryRepository,
     private val database: MoReadDatabase,
+    private val personaRepository: PersonaRepository,
     private val clientFactory: dagger.Lazy<AiClientFactory>,
     private val vectorStore: dagger.Lazy<BoxStore>,
     private val embeddingSettingsStore: BookEmbeddingSettingsStore
@@ -68,7 +73,7 @@ class ProactiveAnnotationContextRepository @Inject constructor(
         PreparedAnnotationContext(revision, outlines, titles,
             !corpus.complete,
             recallCharacterCards(bookId, revision, chapterIndex),
-            recallConclusions(bookId, chapterIndex), vectorRecall)
+            recallThreads(bookId, chapterIndex), vectorRecall)
     }
 
     /** 向量召回：本书启用了 AI 索引、前文已有切片、EMBEDDING 模型可用三者齐备才启用；缺任意一环静默退回纯 BM25。 */
@@ -128,16 +133,32 @@ class ProactiveAnnotationContextRepository @Inject constructor(
         return guide.characters.mapNotNull { person -> cardFor(person, currentChapter, guide.progressBounded) }
     }
 
-    /** 前文结论：AI 段评的想法 + 讨论串里的 AI 回复，合并成一个召回源；章锚与写时进度线已在 SQL 里双重过滤。 */
-    private suspend fun recallConclusions(bookId: Long, currentChapter: Int): List<AnnotationConclusion> {
+    /**
+     * 前文讨论串：一条有 AI 参与的批注（AI 段评，或用户划线发起的讨论）整体作为一个召回单元，
+     * 楼主层在前、回复层按时间升序，每层带发言人身份。只按章锚防剧透，串内各层完整保留——
+     * 用户在讨论里可能主动向 AI 剧透，这段对话记忆要完整保留。
+     */
+    private suspend fun recallThreads(bookId: Long, currentChapter: Int): List<AnnotationThread> {
         if (currentChapter <= 0) return emptyList()
-        val proactive = database.annotationDao().getAiAnnotations(bookId, currentChapter)
-            .filter { it.note.isNotBlank() }
-            .map { AnnotationConclusion(it.chapterIndex, it.note, ConclusionSource.PROACTIVE_NOTE) }
-        val discussions = database.annotationDao().getAiDiscussionConclusions(bookId, currentChapter)
-            .filter { it.contentMarkdown.isNotBlank() }
-            .map { AnnotationConclusion(it.chapterIndex, it.contentMarkdown, ConclusionSource.DISCUSSION) }
-        return proactive + discussions
+        val candidates = database.annotationDao().getThreadCandidates(bookId, currentChapter)
+        if (candidates.isEmpty()) return emptyList()
+        val repliesByAnnotation = database.annotationDao()
+            .getRepliesForAnnotations(candidates.map { it.id })
+            .groupBy { it.annotationId }
+        val personaNames = personaRepository.getPersonas().associate { it.id to it.name }
+        return candidates.mapNotNull { candidate ->
+            val turns = buildList {
+                candidate.note.takeIf(String::isNotBlank)?.let { note ->
+                    add(ThreadTurn(candidate.personaId, speakerName(candidate.personaId, personaNames), note))
+                }
+                repliesByAnnotation[candidate.id].orEmpty().forEach { reply ->
+                    reply.contentMarkdown.takeIf(String::isNotBlank)?.let { content ->
+                        add(ThreadTurn(reply.personaId, speakerName(reply.personaId, personaNames), content))
+                    }
+                }
+            }
+            if (turns.isEmpty()) null else AnnotationThread(candidate.id, candidate.chapterIndex, turns)
+        }
     }
 }
 
@@ -174,11 +195,29 @@ internal data class AnnotationCharacterCard(
     val relationTargets: List<String> get() = fields.mapNotNull { it.target }
 }
 
-/** 前文结论的来源：AI 段评的想法（楼主层）或讨论串里的 AI 回复。 */
-internal enum class ConclusionSource { PROACTIVE_NOTE, DISCUSSION }
+/** 前文的一条讨论串（或单层 AI 段评）：楼主层在前，回复层按时间升序，每层标发言人身份。 */
+internal data class AnnotationThread(
+    val id: Long,
+    val chapterIndex: Int,
+    val turns: List<ThreadTurn>
+) {
+    /** 参与过这条串的 AI 角色（去重，用户不算）；用于「当前角色参与过」的优先级判断。 */
+    val participants: Set<Long> get() = turns.mapNotNull { it.personaId }.toSet()
 
-/** 一条前文 AI 结论（段评想法或讨论回复），带章锚与来源标记；两类合并成一个召回源。 */
-internal data class AnnotationConclusion(val chapterIndex: Int, val text: String, val source: ConclusionSource)
+    /** BM25 打分用的整串正文（不含发言人名字，避免角色名拉高词频）。 */
+    val bm25Text: String get() = turns.joinToString("\n") { it.content }
+}
+
+/** 讨论串的一层：发言人展示名 + 正文；[personaId] 为 null 表示用户，仅用于参与者判断。 */
+internal data class ThreadTurn(
+    val personaId: Long?,
+    val speaker: String,
+    val content: String
+)
+
+/** 讨论串一层发言人的展示名：用户 / 角色名 / 已删除角色。 */
+private fun speakerName(personaId: Long?, personaNames: Map<Long, String>): String =
+    if (personaId == null) "用户" else personaNames[personaId] ?: "已删除角色"
 
 /** 每条段评最多注入几位角色卡人物。 */
 private const val MAX_CARDS = 6
@@ -192,7 +231,7 @@ private const val CARD_RELATIONS = 4
 /** 角色卡内容字段（经历/简介/小传/成长/外貌）的相关性下限：BM25 不到本轮最高分这个比例就不注入。 */
 private const val CARD_CONTENT_RELEVANCE_RATIO = 0.35
 
-/** 每条段评最多召回几条前文结论（段评想法 + 讨论回复合并计数）。 */
+/** 每条段评最多召回几条前文讨论串（单层段评或多层讨论，合并计数）。 */
 private const val MAX_CONCLUSIONS = 8
 
 /** 每条段评最多召回几条大纲，以及大纲向量腿的召回深度（正文切片命中反查章）。 */
@@ -398,10 +437,10 @@ internal class PreparedAnnotationContext(
     private val titles: Map<Int, String> = emptyMap(),
     private val partial: Boolean = false,
     private val characterCards: List<AnnotationCharacterCard> = emptyList(),
-    private val conclusions: List<AnnotationConclusion> = emptyList(),
+    private val threads: List<AnnotationThread> = emptyList(),
     private val vectorRecall: VectorRecall? = null
 ) {
-    suspend fun forParagraph(body: String, paragraph: ProactiveAnnotationParagraph, budgetChars: Int): AnnotationReadingContext =
+    suspend fun forParagraph(body: String, paragraph: ProactiveAnnotationParagraph, budgetChars: Int, personaId: Long? = null): AnnotationReadingContext =
         withContext(Dispatchers.Default) {
             val context = currentCoroutineContext()
             val budget = budgetChars.coerceIn(ProactiveAnnotationContextSettings.MIN_CHARS, ProactiveAnnotationContextSettings.MAX_CHARS)
@@ -440,14 +479,18 @@ internal class PreparedAnnotationContext(
                 narrowedCardLines(card, query) { context.ensureActive() }
                     .takeIf { it.isNotEmpty() }?.let { card to it }
             }
-            val conclusionCandidates = conclusions.mapIndexed { index, conclusion ->
-                RetrievalCandidate(0, conclusion.chapterIndex, index, conclusion.text)
+            val conclusionCandidates = threads.mapIndexed { index, thread ->
+                RetrievalCandidate(0, thread.chapterIndex, index, thread.bm25Text)
             }
-            val rankedConclusions = Bm25LexicalRecall.rank(conclusionCandidates, query, MAX_CONCLUSIONS) { context.ensureActive() }
+            // 全量 rank（不只 topK）：tier 重排后「当前角色参与的串」可能在 BM25 前 8 之外。
+            val rankedConclusions = Bm25LexicalRecall.rank(conclusionCandidates, query, conclusionCandidates.size) { context.ensureActive() }
             val bestConclusion = rankedConclusions.firstOrNull()?.lexicalScore ?: 0.0
             val onStageConclusions = rankedConclusions
                 .filter { (it.lexicalScore ?: 0.0) >= bestConclusion * 0.35 }
-                .mapNotNull { conclusions.getOrNull(it.chunkIndex) }
+                // 更高优先级 tier：当前角色参与过的串优先；sortedByDescending 稳定，同 tier 内保持 BM25 降序。
+                .sortedByDescending { candidate -> personaId != null && threads[candidate.chunkIndex].participants.contains(personaId) }
+                .take(MAX_CONCLUSIONS)
+                .mapNotNull { threads.getOrNull(it.chunkIndex) }
             val outlineBlocks = selectedOutlines.map {
                 chapterLabel(it.chapterIndex) + "梗概（辅助资料，以原文为准）：\n" + it.text
             }
@@ -455,9 +498,9 @@ internal class PreparedAnnotationContext(
                 listOf("【角色卡】与本文相关人物的档案（辅助资料，以原文为准）：") +
                     onStageCards.map { (card, lines) -> card.name + "\n" + lines.joinToString("\n") }
             val conclusionBlocks = if (onStageConclusions.isEmpty()) emptyList() else
-                listOf("【前文结论】你此前写下的段评/讨论结论（辅助资料）：") +
-                    onStageConclusions.map { chapterLabel(it.chapterIndex) + conclusionPrefix(it.source) + it.text }
-            // 三类各占 backgroundBudget 的固定比例作硬上限；某类没用满的预算按 大纲 → 角色卡 → 结论 回流补给。
+                listOf("【前文讨论】你此前参与过的段评与讨论串（辅助资料，发言人以标注为准）：") +
+                    onStageConclusions.map { threadBlock(it, ::chapterLabel) }
+            // 三类各占 backgroundBudget 的固定比例作硬上限；某类没用满的预算按 大纲 → 角色卡 → 讨论串 回流补给。
             val outlineCap = (backgroundBudget * OUTLINE_BUDGET_RATIO).toInt()
             val cardCap = (backgroundBudget * CARD_BUDGET_RATIO).toInt()
             val conclusionCap = (backgroundBudget * CONCLUSION_BUDGET_RATIO).toInt()
@@ -479,10 +522,9 @@ internal class PreparedAnnotationContext(
             val recall = AnnotationRecall(
                 outlines = selectedOutlines.map { RecallOutline(chapterLabel(it.chapterIndex), it.text) },
                 characterCards = onStageCards.map { (card, lines) -> RecallCard(card.name, lines.joinToString("\n")) },
-                discussions = onStageConclusions.filter { it.source == ConclusionSource.DISCUSSION }
-                    .map { RecallDiscussion(chapterLabel(it.chapterIndex), it.text) },
-                proactiveNotes = onStageConclusions.filter { it.source == ConclusionSource.PROACTIVE_NOTE }
-                    .map { RecallProactiveNote(chapterLabel(it.chapterIndex), it.text) }
+                threads = onStageConclusions.map { thread ->
+                    RecallThread(chapterLabel(thread.chapterIndex), thread.turns.map { turn -> RecallThreadTurn(turn.speaker, turn.content) })
+                }
             )
             AnnotationReadingContext(prefix, target, background, recall)
         }
@@ -494,11 +536,10 @@ internal class PreparedAnnotationContext(
         }.take(MAX_CARDS)
 }
 
-/** 前文结论的来源前缀：合并成一个召回块后仍保留「段评/讨论」来路，便于追溯。 */
-private fun conclusionPrefix(source: ConclusionSource): String = when (source) {
-    ConclusionSource.PROACTIVE_NOTE -> "段评："
-    ConclusionSource.DISCUSSION -> "讨论："
-}
+/** 一条前文讨论串注入提示词的文本：章锚 + 每层「发言人：内容」。 */
+private fun threadBlock(thread: AnnotationThread, chapterLabel: (Int) -> String): String =
+    chapterLabel(thread.chapterIndex) + "：\n" +
+        thread.turns.joinToString("\n") { it.speaker + "：" + it.content }
 
 /** Clip on a UTF-16 boundary; labels and separators count against the same reading budget. */
 private fun packAnnotationBackground(blocks: List<String>, budget: Int): String = buildString {

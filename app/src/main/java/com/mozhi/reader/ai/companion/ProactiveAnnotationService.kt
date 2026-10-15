@@ -178,7 +178,7 @@ class ProactiveAnnotationService @Inject constructor(
             try {
                 val prepared = preparedContext ?: preparedContextFor(request.bookId, request.chapterIndex)
                     .also { preparedContext = it }
-                val context = prepared.forParagraph(request.body, paragraph, request.contextBudgetChars)
+                val context = prepared.forParagraph(request.body, paragraph, request.contextBudgetChars, request.persona.id)
                 suspend fun contextValid() = contextRepository.isCurrent(request.bookId, prepared.revision)
                 val refreshedPermit = allowance()
                 if (refreshedPermit == null || !refreshedPermit.accepted || refreshedPermit.maxAnnotations <= 0 || !contextValid()) {

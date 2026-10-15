@@ -16,12 +16,16 @@ data class AnnotationRecall(
     val characterCards: List<RecallCard> = emptyList(),
     val notes: List<RecallNote> = emptyList(),
     val snippets: List<RecallSnippet> = emptyList(),
+    /** 前文讨论串（整串 + 每层发言人）。新写入的数据走这里。 */
+    val threads: List<RecallThread> = emptyList(),
+    /** 旧结构：单条讨论回复。仅用于读取历史行，新写入不再填。 */
     val discussions: List<RecallDiscussion> = emptyList(),
+    /** 旧结构：单条段评想法。仅用于读取历史行，新写入不再填。 */
     val proactiveNotes: List<RecallProactiveNote> = emptyList()
 ) {
     val isEmpty: Boolean
         get() = outlines.isEmpty() && characterCards.isEmpty() && notes.isEmpty() && snippets.isEmpty() &&
-            discussions.isEmpty() && proactiveNotes.isEmpty()
+            threads.isEmpty() && discussions.isEmpty() && proactiveNotes.isEmpty()
 
     fun encode(): String = if (isEmpty) "{}" else codec.encodeToString(serializer(), this)
 
@@ -54,10 +58,18 @@ data class RecallNote(val label: String = "", val text: String = "")
 @Serializable
 data class RecallSnippet(val label: String = "", val text: String = "", val source: String = "")
 
-/** 召回的一条讨论结论（AI 在前文讨论串里的回复）；[label] 是章锚，[text] 是回复正文。 */
+/** 旧结构（仅历史行读取）：召回的一条讨论回复；新写入走 [RecallThread]。 */
 @Serializable
 data class RecallDiscussion(val label: String = "", val text: String = "")
 
-/** 召回的一条前文段评（AI 段评的想法正文）；[label] 是章锚，[text] 是想法正文。 */
+/** 旧结构（仅历史行读取）：召回的一条前文段评想法；新写入走 [RecallThread]。 */
 @Serializable
 data class RecallProactiveNote(val label: String = "", val text: String = "")
+
+/** 召回的一条前文讨论串（或单层段评）；[label] 是章锚，[turns] 是各层（发言人 + 正文）。 */
+@Serializable
+data class RecallThread(val label: String = "", val turns: List<RecallThreadTurn> = emptyList())
+
+/** 讨论串的一层；[speaker] 是发言人展示名（角色名 / 用户 / 已删除角色），[text] 是发言正文。 */
+@Serializable
+data class RecallThreadTurn(val speaker: String = "", val text: String = "")

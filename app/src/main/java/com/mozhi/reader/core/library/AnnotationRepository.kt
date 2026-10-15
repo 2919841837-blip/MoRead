@@ -1,8 +1,7 @@
 package com.mozhi.reader.core.library
 
 import com.mozhi.reader.core.database.dao.AnnotationDao
-import com.mozhi.reader.core.database.dao.AiAnnotationWithChapter
-import com.mozhi.reader.core.database.dao.AnnotationReplyWithChapter
+import com.mozhi.reader.core.database.dao.AnnotationThreadCandidate
 import com.mozhi.reader.core.database.entity.AnnotationColors
 import com.mozhi.reader.core.database.entity.AnnotationEntity
 import com.mozhi.reader.core.database.entity.AnnotationReplyEntity
@@ -134,13 +133,13 @@ class AnnotationRepository @Inject constructor(
     suspend fun getReplies(annotationId: Long): List<AnnotationReplyEntity> =
         annotationDao.getReplies(annotationId)
 
-    /** 前文章节里 AI 的讨论回复（结论/伏笔），供段评/讨论召回；已按写时进度线与父批注章锚双重防剧透过滤。 */
-    suspend fun getAiDiscussionConclusions(bookId: Long, currentChapter: Int): List<AnnotationReplyWithChapter> =
-        annotationDao.getAiDiscussionConclusions(bookId, currentChapter)
+    /** 前文章节里有 AI 参与的批注（讨论串楼主层候选），供段评/讨论召回；只按章锚防剧透。 */
+    suspend fun getThreadCandidates(bookId: Long, currentChapter: Int): List<AnnotationThreadCandidate> =
+        annotationDao.getThreadCandidates(bookId, currentChapter)
 
-    /** 前文章节里 AI 段评的想法（结论/伏笔），供段评/讨论召回；已按写时进度线与章锚双重防剧透过滤。 */
-    suspend fun getAiAnnotations(bookId: Long, currentChapter: Int): List<AiAnnotationWithChapter> =
-        annotationDao.getAiAnnotations(bookId, currentChapter)
+    /** 批量拉取回复层，供讨论串召回按 annotationId 组装整串。 */
+    suspend fun getRepliesForAnnotations(annotationIds: List<Long>): List<AnnotationReplyEntity> =
+        annotationDao.getRepliesForAnnotations(annotationIds)
 
     suspend fun addReply(
         annotationId: Long,

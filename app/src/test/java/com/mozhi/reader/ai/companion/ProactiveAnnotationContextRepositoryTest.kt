@@ -1,6 +1,7 @@
 package com.mozhi.reader.ai.companion
 
 import com.mozhi.reader.ai.client.AiClientFactory
+import com.mozhi.reader.ai.persona.PersonaRepository
 import com.mozhi.reader.core.database.MoReadDatabase
 import com.mozhi.reader.core.database.dao.AnnotationDao
 import com.mozhi.reader.core.database.dao.BookCharacterDao
@@ -26,11 +27,12 @@ class ProactiveAnnotationContextRepositoryTest {
     private val dao = mockk<ChapterKnowledgeDao>()
     private val bookCharacterDao = mockk<BookCharacterDao>()
     private val annotationDao = mockk<AnnotationDao>()
+    private val personaRepository = mockk<PersonaRepository>()
     private val clientFactory = mockk<AiClientFactory>()
     private val vectorStore = mockk<BoxStore>()
     private val embeddingSettingsStore = mockk<BookEmbeddingSettingsStore>()
     private val repository = ProactiveAnnotationContextRepository(
-        library, database,
+        library, database, personaRepository,
         dagger.Lazy { clientFactory },
         dagger.Lazy { vectorStore },
         embeddingSettingsStore
@@ -48,8 +50,9 @@ class ProactiveAnnotationContextRepositoryTest {
         coEvery { bookCharacterDao.getGuide(any()) } returns null
         every { database.annotationDao() } returns annotationDao
         coEvery { annotationDao.getForChapterRangeByUser(any(), any(), any()) } returns emptyList()
-        coEvery { annotationDao.getAiDiscussionConclusions(any(), any()) } returns emptyList()
-        coEvery { annotationDao.getAiAnnotations(any(), any()) } returns emptyList()
+        coEvery { annotationDao.getThreadCandidates(any(), any()) } returns emptyList()
+        coEvery { annotationDao.getRepliesForAnnotations(any()) } returns emptyList()
+        coEvery { personaRepository.getPersonas() } returns emptyList()
         coEvery { embeddingSettingsStore.isEnabled(any()) } returns false
         coEvery { library.getChapter(1, any()) } answers {
             val index = arg<Int>(1)
@@ -61,7 +64,7 @@ class ProactiveAnnotationContextRepositoryTest {
     @Test fun onlyLoadsEarlierChaptersAndNeverTouchesTheTargetChapterOrItsSuffix() = runTest {
         val prepared = repository.prepare(1, 3)
         val context = prepared.forParagraph(evidence, ProactiveAnnotationParagraph(0, evidence.length), 8_000)
-        assertTrue(context.background.contains(evidence))
+        assertTrue(context.background.isEmpty())
         coVerify(exactly = 1) { library.getChapter(1, 0) }
         coVerify(exactly = 1) { library.getChapter(1, 2) }
         coVerify(exactly = 0) { library.getChapter(1, match { it >= 3 }) }
@@ -71,7 +74,7 @@ class ProactiveAnnotationContextRepositoryTest {
     @Test fun staleChapterCountDoesNotHideKnownEarlierChapters() = runTest {
         coEvery { library.getBook(1) } returns book.copy(totalChapters = 0)
         val context = repository.prepare(1, 3).forParagraph(evidence, ProactiveAnnotationParagraph(0, evidence.length), 8_000)
-        assertTrue(context.background.contains(evidence))
+        assertTrue(context.background.isEmpty())
         coVerify(exactly = 1) { library.getChapter(1, 2) }
         coVerify(exactly = 0) { library.getChapter(1, match { it >= 3 }) }
     }
@@ -87,7 +90,7 @@ class ProactiveAnnotationContextRepositoryTest {
         coEvery { library.getChapter(1, 1) } throws IllegalStateException("unavailable")
         val result = repository.prepare(1, 3).forParagraph(evidence, ProactiveAnnotationParagraph(0, evidence.length), 8_000)
         assertTrue(result.background.contains("只覆盖部分正文"))
-        assertTrue(result.background.contains(evidence))
+        assertFalse(result.background.contains(evidence))
     }
 
     @Test fun sourceRevisionChangeRejectsPreparedSnapshot() = runTest {

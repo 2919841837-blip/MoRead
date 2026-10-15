@@ -1091,7 +1091,7 @@ private fun RecallBreakdown(recallJson: String, aiGenerated: Boolean, palette: R
     // 手动划线不召回也不渲染；AI 生成的段评（随读 / 聊天工具）即使召回为空也保留折叠区，好让人看出「确实没有前文可召回」。
     if (recall.isEmpty && !aiGenerated) return
     var expanded by rememberSaveable(recallJson) { mutableStateOf(false) }
-    val total = recall.outlines.size + recall.characterCards.size + recall.notes.size + recall.snippets.size + recall.discussions.size + recall.proactiveNotes.size
+    val total = recall.outlines.size + recall.characterCards.size + recall.notes.size + recall.snippets.size + recall.threads.size + recall.discussions.size + recall.proactiveNotes.size
     Column(
         modifier = Modifier
             .fillMaxWidth(),
@@ -1134,6 +1134,11 @@ private fun RecallBreakdown(recallJson: String, aiGenerated: Boolean, palette: R
             }
             if (recall.notes.isNotEmpty()) {
                 RecallGroup(stringResource(R.string.discussion_recall_group_note), recall.notes.map { it.label to it.text }, palette)
+            }
+            if (recall.threads.isNotEmpty()) {
+                RecallGroup(stringResource(R.string.discussion_recall_group_thread), recall.threads.map { thread ->
+                    thread.label to thread.turns.joinToString("\n") { it.speaker + "：" + it.text }
+                }, palette)
             }
             if (recall.proactiveNotes.isNotEmpty()) {
                 RecallGroup(stringResource(R.string.discussion_recall_group_proactive_note), recall.proactiveNotes.map { it.label to it.text }, palette)

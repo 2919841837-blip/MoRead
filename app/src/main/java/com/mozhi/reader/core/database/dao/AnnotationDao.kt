@@ -14,15 +14,11 @@ data class AnnotationReplyCount(
 
 data class AnnotationVisibleCounts(val total: Int, val currentChapter: Int)
 
-/** 讨论结论召回用的投影：一条 AI 回复的正文 + 它所属批注的章锚。 */
-data class AnnotationReplyWithChapter(
-    val contentMarkdown: String,
-    val chapterIndex: Int
-)
-
-/** 段评召回用的投影：一条 AI 段评的想法正文 + 章锚。 */
-data class AiAnnotationWithChapter(
+/** 讨论串召回用的楼主层投影：一条批注的 id / 想法 / 楼主身份 / 章锚。 */
+data class AnnotationThreadCandidate(
+    val id: Long,
     val note: String,
+    val personaId: Long?,
     val chapterIndex: Int
 )
 
@@ -134,24 +130,20 @@ interface AnnotationDao {
     )
     fun observeRepliedAnnotationIds(bookId: Long): Flow<List<Long>>
 
-    /** 讨论结论召回：前文章节里 AI 的讨论回复；[sourceScopeChapterIndex] 为空的历史行回退到父批注章锚。 */
+    /**
+     * 讨论串召回：当前章之前的、有 AI 参与的批注（AI 段评，或楼主为用户但有 AI 回复的讨论串）。
+     * 只按章锚防剧透；串内各层不做进度线过滤——用户在讨论里可能主动向 AI 剧透，这段对话记忆要完整保留。
+     */
     @Query(
-        "SELECT r.contentMarkdown, a.chapterIndex FROM annotation_replies r " +
-            "JOIN annotations a ON r.annotationId = a.id " +
-            "WHERE a.bookId = :bookId AND r.personaId IS NOT NULL " +
-            "AND a.chapterIndex < :currentChapter " +
-            "AND (r.sourceScopeChapterIndex IS NULL OR r.sourceScopeChapterIndex < :currentChapter) " +
-            "ORDER BY a.chapterIndex ASC, r.createdAt ASC"
-    )
-    suspend fun getAiDiscussionConclusions(bookId: Long, currentChapter: Int): List<AnnotationReplyWithChapter>
-
-    /** 段评召回：前文章节里 AI 段评的想法（结论/伏笔）；[sourceScopeChapterIndex] 为空的历史行回退到自身章锚。 */
-    @Query(
-        "SELECT a.note, a.chapterIndex FROM annotations a " +
-            "WHERE a.bookId = :bookId AND a.personaId IS NOT NULL " +
-            "AND a.chapterIndex < :currentChapter " +
-            "AND (a.sourceScopeChapterIndex IS NULL OR a.sourceScopeChapterIndex < :currentChapter) " +
+        "SELECT a.id, a.note, a.personaId, a.chapterIndex FROM annotations a " +
+            "WHERE a.bookId = :bookId AND a.chapterIndex < :currentChapter " +
+            "AND (a.personaId IS NOT NULL OR a.id IN (" +
+            "SELECT annotationId FROM annotation_replies WHERE personaId IS NOT NULL)) " +
             "ORDER BY a.chapterIndex ASC, a.id ASC"
     )
-    suspend fun getAiAnnotations(bookId: Long, currentChapter: Int): List<AiAnnotationWithChapter>
+    suspend fun getThreadCandidates(bookId: Long, currentChapter: Int): List<AnnotationThreadCandidate>
+
+    /** 批量拉取回复层，供讨论串召回按 annotationId 组装整串；不按进度线过滤（见 [getThreadCandidates]）。 */
+    @Query("SELECT * FROM annotation_replies WHERE annotationId IN (:annotationIds) ORDER BY annotationId ASC, createdAt ASC, id ASC")
+    suspend fun getRepliesForAnnotations(annotationIds: List<Long>): List<AnnotationReplyEntity>
 }

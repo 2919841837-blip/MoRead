@@ -666,5 +666,6 @@
     <string name="discussion_recall_group_proactive_note">段评</string>
     <string name="discussion_recall_group_snippet">片段</string>
     <string name="discussion_recall_group_discussion">讨论结论</string>
+    <string name="discussion_recall_group_thread">讨论串</string>
     <string name="shelf_tags_clear">清除</string>
 </resources>

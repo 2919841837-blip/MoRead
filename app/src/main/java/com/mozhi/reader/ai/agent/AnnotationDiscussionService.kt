@@ -66,7 +66,7 @@ class AnnotationDiscussionService @Inject constructor(
             val replies = annotationRepository.getReplies(annotationId)
             val personaNames = personaRepository.getPersonas().associate { it.id to it.name }
             val neighborhood = loadAnchorNeighborhood(book, annotation, scope)
-            val recallContext = loadRecallContext(bookId, annotation)
+            val recallContext = loadRecallContext(bookId, annotation, personaId)
             val transcript = buildDiscussionTranscript(annotation, replies, personaNames)
             val system = buildDiscussionSystemPrompt(
                 persona = persona,
@@ -167,7 +167,7 @@ class AnnotationDiscussionService @Inject constructor(
      * 正文片段），让「用户手动划线、AI 自动回复」这条路径的发言同样以前文资料为依据。
      * 召回失败不阻断应答，返回空上下文（前文资料只是辅助，正文核验已通过）。
      */
-    private suspend fun loadRecallContext(bookId: Long, annotation: AnnotationEntity): AnnotationReadingContext {
+    private suspend fun loadRecallContext(bookId: Long, annotation: AnnotationEntity, personaId: Long): AnnotationReadingContext {
         val chapter = libraryRepository.getChapter(bookId, annotation.chapterIndex)
             ?: return AnnotationReadingContext("", "", "")
         val body = try {
@@ -182,7 +182,8 @@ class AnnotationDiscussionService @Inject constructor(
                 .forParagraph(
                     body,
                     ProactiveAnnotationParagraph(annotation.startCharOffset, annotation.endCharOffset),
-                    ProactiveAnnotationContextSettings().budgetChars
+                    ProactiveAnnotationContextSettings().budgetChars,
+                    personaId
                 )
         } catch (cancelled: CancellationException) {
             throw cancelled
