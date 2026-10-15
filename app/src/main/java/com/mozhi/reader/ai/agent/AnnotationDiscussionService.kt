@@ -26,7 +26,7 @@ import kotlinx.coroutines.flow.first
  *
  * 走 [AgentLoop.runDetached]——讨论内容归 annotation_replies，绝不落聊天会话
  * （否则污染统计口径与记忆固化）。工具白名单只留检索类；上下文 = 人设 +
- * 锚点原文邻域 + 完整讨论串，防剧透照旧（邻域截到用户当前阅读位置）。
+ * 锚点原文上文 + 完整讨论串，防剧透照旧（上文截到用户当前阅读位置）。
  */
 @Singleton
 class AnnotationDiscussionService @Inject constructor(
@@ -142,7 +142,7 @@ class AnnotationDiscussionService @Inject constructor(
         }
     }
 
-    /** 锚点原文邻域：前后各 ~[NEIGHBORHOOD_RADIUS] 字；当前章截到用户实际阅读位置。 */
+    /** 锚点原文上文：锚点前 ~[NEIGHBORHOOD_RADIUS] 字，不含后文；当前章截到用户实际阅读位置。 */
     private suspend fun loadAnchorNeighborhood(
         book: BookEntity,
         annotation: AnnotationEntity,
@@ -198,7 +198,7 @@ class AnnotationDiscussionService @Inject constructor(
     }
 }
 
-/** 锚点邻域抽取；[readLimit] 非空时整段截到该 UTF-16 偏移（防剧透当前章后半）。 */
+/** 锚点上文抽取：只取锚点之前 ~[radius] 字（含锚点本身），不带后文；[readLimit] 非空时整段截到该 UTF-16 偏移。 */
 internal fun extractAnchorNeighborhood(
     chapterText: String,
     start: Int,
@@ -211,7 +211,7 @@ internal fun extractAnchorNeighborhood(
     val safeStart = start.coerceIn(0, limit)
     val safeEnd = end.coerceIn(safeStart, limit)
     val from = (safeStart - radius).coerceAtLeast(0)
-    val to = (safeEnd + radius).coerceAtMost(limit)
+    val to = safeEnd
     if (from >= to) return ""
     return buildString {
         if (from > 0) append("……")

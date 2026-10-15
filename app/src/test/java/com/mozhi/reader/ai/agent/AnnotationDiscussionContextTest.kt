@@ -14,7 +14,7 @@ import org.junit.Test
 class AnnotationDiscussionContextTest {
 
     @Test
-    fun neighborhoodExpandsAroundAnchorWithEllipses() {
+    fun neighborhoodTakesOnlyPrecedingContextWithEllipses() {
         val text = "甲".repeat(100) + "锚点" + "乙".repeat(100)
         val result = extractAnchorNeighborhood(
             chapterText = text,
@@ -23,11 +23,11 @@ class AnnotationDiscussionContextTest {
             readLimit = null,
             radius = 10
         )
-        assertEquals("……" + "甲".repeat(10) + "锚点" + "乙".repeat(10) + "……", result)
+        assertEquals("……" + "甲".repeat(10) + "锚点" + "……", result)
     }
 
     @Test
-    fun neighborhoodAtChapterHeadHasNoLeadingEllipsis() {
+    fun neighborhoodAtChapterHeadKeepsNoTrailingContent() {
         val result = extractAnchorNeighborhood(
             chapterText = "开头锚点后文后文",
             start = 2,
@@ -35,7 +35,7 @@ class AnnotationDiscussionContextTest {
             readLimit = null,
             radius = 100
         )
-        assertEquals("开头锚点后文后文", result)
+        assertEquals("开头锚点……", result)
     }
 
     @Test
