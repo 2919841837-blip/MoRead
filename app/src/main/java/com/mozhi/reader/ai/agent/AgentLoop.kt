@@ -15,6 +15,7 @@ import com.mozhi.reader.ai.memory.RollingSummarizer
 import com.mozhi.reader.core.database.dao.ChatDao
 import com.mozhi.reader.core.database.entity.MessageEntity
 import com.mozhi.reader.core.database.entity.ModelRole
+import com.mozhi.reader.core.library.AnnotationRecall
 import com.mozhi.reader.core.library.AttachmentStore
 import com.mozhi.reader.core.library.MessageAttachment
 import java.util.UUID
@@ -98,8 +99,9 @@ class AgentLoop @Inject constructor(
         systemPrompt: String? = null,
         modelRole: ModelRole = ModelRole.CHAT,
         maxRounds: Int = MAX_ROUNDS,
-        validateContext: suspend () -> Unit = {}
-    ): Flow<AgentEvent> = runWith(conversationId, tools, systemPrompt, maxRounds, validateContext) {
+        validateContext: suspend () -> Unit = {},
+        recall: AnnotationRecall = AnnotationRecall()
+    ): Flow<AgentEvent> = runWith(conversationId, tools, systemPrompt, maxRounds, validateContext, recall) {
         val resolved = clientFactory.get().forRole(modelRole)
         Streamer { messages, specs ->
             resolved.client.chatStream(messages, specs, resolved.options)
@@ -180,6 +182,7 @@ class AgentLoop @Inject constructor(
         systemPrompt: String? = null,
         maxRounds: Int = MAX_ROUNDS,
         validateContext: suspend () -> Unit = {},
+        recall: AnnotationRecall = AnnotationRecall(),
         resolve: suspend () -> Streamer
     ): Flow<AgentEvent> = flow {
         val entities = chatDao.getMessages(conversationId)
@@ -259,7 +262,8 @@ class AgentLoop @Inject constructor(
                         toolCalls = emptyList(),
                         reasoning = reasoning.toString(),
                         clientRoundId = roundId,
-                        usage = usage
+                        usage = usage,
+                        recall = recall
                     )?.let { message ->
                         emit(AgentEvent.RoundCommitted(message))
                     }
@@ -274,7 +278,8 @@ class AgentLoop @Inject constructor(
                 toolCalls = requested,
                 reasoning = reasoning.toString(),
                 clientRoundId = roundId,
-                usage = usage
+                usage = usage,
+                recall = recall
             )
             if (committedMessage != null) {
                 emit(AgentEvent.RoundCommitted(committedMessage))
@@ -304,7 +309,7 @@ class AgentLoop @Inject constructor(
                 val noticeRoundId = UUID.randomUUID().toString()
                 emit(AgentEvent.RoundStarted(noticeRoundId))
                 emit(AgentEvent.Text(notice))
-                persistAssistant(conversationId, notice, emptyList(), clientRoundId = noticeRoundId)?.let { message ->
+                persistAssistant(conversationId, notice, emptyList(), clientRoundId = noticeRoundId, recall = recall)?.let { message ->
                     emit(AgentEvent.RoundCommitted(message))
                 }
             }
@@ -347,7 +352,8 @@ class AgentLoop @Inject constructor(
         toolCalls: List<ToolCall>,
         reasoning: String = "",
         clientRoundId: String,
-        usage: ChatUsageAccumulator? = null
+        usage: ChatUsageAccumulator? = null,
+        recall: AnnotationRecall = AnnotationRecall()
     ): MessageEntity? {
         if (content.isBlank() && toolCalls.isEmpty()) return null
         val now = System.currentTimeMillis()
@@ -364,7 +370,9 @@ class AgentLoop @Inject constructor(
             tokenUsage = usage?.totalTokens,
             inputTokens = usage?.inputTokens,
             outputTokens = usage?.outputTokens,
-            generationTimeMs = usage?.elapsedMillis()
+            generationTimeMs = usage?.elapsedMillis(),
+            // 召回明细只在确有召回时落库（null = 无召回，气泡不渲染折叠区）。
+            recallJson = recall.takeUnless { it.isEmpty }?.encode()
         )
         val messageId = chatDao.insertMessage(message)
         chatDao.touchConversation(conversationId, now)

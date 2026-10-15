@@ -377,6 +377,12 @@ internal fun CompanionChatBubble(
                 modifier = Modifier.padding(top = 3.dp)
             )
         }
+        // 召回明细：只挂在 AI 回复轮次的最后一部分，且本轮确有前文资料召回时。
+        if (!fromUser && entry.isLastMessagePart && message != null && !message.recallJson.isNullOrBlank()) {
+            Box(Modifier.padding(top = 8.dp)) {
+                RecallBreakdown(message.recallJson, aiGenerated = true, palette = palette)
+            }
+        }
     }
     if (style.inline && !fromUser) {
         val isWidget = entry.part is CompanionBubblePart.Widget

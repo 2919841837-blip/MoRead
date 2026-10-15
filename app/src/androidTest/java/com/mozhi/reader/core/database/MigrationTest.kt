@@ -1359,6 +1359,20 @@ class MigrationTest {
         }
     }
 
+    @Test fun migrate38To39AddsRecallColumnOnMessages() {
+        helper.createDatabase(DB_NAME, 38).use { db ->
+            db.execSQL("INSERT INTO conversations (id, bookId, title, type, createdAt) VALUES (1, NULL, '旧会话', 'COMPANION', 1000)")
+            db.execSQL("INSERT INTO messages (id, conversationId, role, content, createdAt) VALUES (1, 1, 'assistant', '旧回复', 1001)")
+        }
+        helper.runMigrationsAndValidate(DB_NAME, 39, true, DatabaseMigrations.Migration38To39).use { db ->
+            db.query("SELECT content, recallJson FROM messages WHERE id = 1").use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals("旧回复", cursor.getString(0))
+                assertTrue(cursor.isNull(1))
+            }
+        }
+    }
+
     private companion object {
         const val DB_NAME = "migration-test.db"
     }

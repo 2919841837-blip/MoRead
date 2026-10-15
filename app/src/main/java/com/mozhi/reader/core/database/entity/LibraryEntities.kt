@@ -400,7 +400,12 @@ data class MessageEntity(
      * 用户消息发送时附带给模型的界面状态摘要（不显示）。重建历史与重生成时原样复用，
      * 模型因此知道用户在上一条回复的界面里改了什么。
      */
-    val uiContextJson: String? = null
+    val uiContextJson: String? = null,
+    /**
+     * 这条 AI 回复生成时召回的前文资料明细（大纲/角色卡/讨论串，[AnnotationRecall] 编码）。
+     * null = 无召回或非 AI 回复；聊天气泡据此折叠展示「召回明细」，供用户检查回复依据。
+     */
+    val recallJson: String? = null
 )
 
 /** RikkaHub-style assignment: a role points at one concrete model, not a whole provider. */

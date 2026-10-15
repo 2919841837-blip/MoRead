@@ -11,6 +11,7 @@ import com.mozhi.reader.core.database.entity.worldBook
 import com.mozhi.reader.core.datastore.ReaderSettingsRepository
 import com.mozhi.reader.core.datastore.UserMask
 import com.mozhi.reader.core.datastore.UserMaskStore
+import com.mozhi.reader.core.library.AnnotationRecall
 import com.mozhi.reader.core.library.AnnotationRepository
 import com.mozhi.reader.core.library.LibraryRepository
 import com.mozhi.reader.core.retrieval.ReadingScope
@@ -53,6 +54,15 @@ data class ConversationShape(
 }
 
 /**
+ * [CompanionContextBuilder.build] 的产出：组装好的系统提示词，加上本轮召回的结构化明细。
+ * 明细随消息落库（[MessageEntity.recallJson]），供气泡折叠展示「召回明细」。
+ */
+data class CompanionContext(
+    val systemPrompt: String,
+    val recall: AnnotationRecall = AnnotationRecall()
+)
+
+/**
  * 伴读上下文构建器（DEVELOPMENT_PLAN §4.5）：每次请求前组装系统提示词——
  * 人设 → 书籍进度 → 防剧透边界 → 主动记忆 → 场景原文，
  * 按「字符数/2 ≈ token」做预算控制，超限先弃记忆、再截场景，人设与防剧透永不裁。
@@ -82,7 +92,7 @@ class CompanionContextBuilder @Inject constructor(
         conversationShape: ConversationShape = ConversationShape(),
         budgetChars: Int = DEFAULT_BUDGET_CHARS,
         recallBudgetChars: Int = DEFAULT_BUDGET_CHARS
-    ): String {
+    ): CompanionContext {
         val progress = bookId?.let { id ->
             libraryRepository.getBook(id)?.let { book ->
                 val current = libraryRepository.getChapter(id, book.lastReadChapterIndex)
@@ -128,41 +138,50 @@ class CompanionContextBuilder @Inject constructor(
             emptyList()
         }
         // 前文资料（大纲/角色卡/讨论串）：与段评共用同一套召回，query 取「场景 + 用户最新输入」。
-        val recall = if (bookId != null && progress != null && recallBudgetChars > 0) {
+        // 文本进系统提示词，结构化明细随消息落库供气泡折叠展示。
+        var recallText = ""
+        var recallDetail = AnnotationRecall()
+        if (bookId != null && progress != null && recallBudgetChars > 0) {
             val query = listOfNotNull(scene, memoryQuery).map(String::trim).filter(String::isNotBlank).joinToString("\n")
             if (query.isNotBlank()) {
                 try {
-                    proactiveContextRepository.cachedPrepare(bookId, progress.currentChapterIndex)
-                        .forQuery(query, persona?.id, recallBudgetChars).background
+                    val narrowed = proactiveContextRepository.cachedPrepare(bookId, progress.currentChapterIndex)
+                        .forQuery(query, persona?.id, recallBudgetChars)
+                    recallText = narrowed.background
+                    recallDetail = narrowed.recall
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (_: Exception) {
-                    ""
+                    recallText = ""
+                    recallDetail = AnnotationRecall()
                 }
-            } else ""
-        } else ""
-        return assemble(
-            persona = persona,
-            userMask = userMask,
-            progress = progress,
-            scene = scene,
-            annotations = promptAnnotations,
-            memories = memories,
-            recall = recall,
-            // 用户画像是角色级全局数据，没有 bookId 来源。跨书关闭时不得把它注入
-            // 书内会话，否则其中偶然混入的其他书信息会绕过记忆的 bookId 过滤。
-            userProfile = persona
-                ?.takeIf {
-                    it.memoryEnabled && memorySettings.longTermEnabled &&
-                        (bookId == null || memorySettings.crossBookEnabled)
-                }
-                ?.userProfile
-                .orEmpty(),
-            readingScope = readingScope,
-            conversationShape = conversationShape,
-            // 关键词触发的世界书条目拿「场景原文 + 用户最新输入」当命中材料。
-            loreTrigger = listOfNotNull(scene, memoryQuery).joinToString("\n"),
-            budgetChars = budgetChars
+            }
+        }
+        return CompanionContext(
+            systemPrompt = assemble(
+                persona = persona,
+                userMask = userMask,
+                progress = progress,
+                scene = scene,
+                annotations = promptAnnotations,
+                memories = memories,
+                recall = recallText,
+                // 用户画像是角色级全局数据，没有 bookId 来源。跨书关闭时不得把它注入
+                // 书内会话，否则其中偶然混入的其他书信息会绕过记忆的 bookId 过滤。
+                userProfile = persona
+                    ?.takeIf {
+                        it.memoryEnabled && memorySettings.longTermEnabled &&
+                            (bookId == null || memorySettings.crossBookEnabled)
+                    }
+                    ?.userProfile
+                    .orEmpty(),
+                readingScope = readingScope,
+                conversationShape = conversationShape,
+                // 关键词触发的世界书条目拿「场景原文 + 用户最新输入」当命中材料。
+                loreTrigger = listOfNotNull(scene, memoryQuery).joinToString("\n"),
+                budgetChars = budgetChars
+            ),
+            recall = recallDetail
         )
     }
 

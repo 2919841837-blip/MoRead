@@ -817,6 +817,13 @@ object DatabaseMigrations {
         }
     }
 
+    /** 私聊 AI 回复召回明细：消息落库时记下本轮召回的大纲/角色卡/讨论串，供气泡折叠展示。 */
+    val Migration38To39 = object : Migration(38, 39) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("ALTER TABLE `messages` ADD COLUMN `recallJson` TEXT DEFAULT NULL")
+        }
+    }
+
     /** 人物档案：逐人落库的断点与缓存，删书级联清理。 */
     val Migration34To35 = object : Migration(34, 35) {
         override fun migrate(db: SupportSQLiteDatabase) {

@@ -861,7 +861,7 @@ class ReaderCompanionViewModel @Inject constructor(
                             entity
                         )
                     } ?: error("未找到当前书籍")
-                ),
+                ).systemPrompt,
                 firstUserMessage = null,
                 personaId = persona.id
             )
@@ -1046,7 +1046,7 @@ class ReaderCompanionViewModel @Inject constructor(
             streaming.clear()
             val ticker = viewModelScope.launchStreamingTicker(::publishStreamingSnapshot)
             try {
-                val (tools, systemPrompt) = prepareCompanionContext {
+                val (tools, systemPrompt, recall) = prepareCompanionContext {
                     val webSearchEnabled = webSearchSettingsStore.current().enabled
                     val readingScope = libraryRepository.getBook(book)?.let { entity ->
                         ReadingScopeResolver.resolve(
@@ -1089,7 +1089,7 @@ class ReaderCompanionViewModel @Inject constructor(
                     )
                     val genUiSettings = settingsRepository.companionGenUi.first()
                     refreshGenUiBookData(book)
-                    val systemPrompt = contextBuilder.build(
+                    val context = contextBuilder.build(
                         persona = persona,
                         bookId = book,
                         scene = sceneQuote.takeIf(String::isNotBlank),
@@ -1110,10 +1110,10 @@ class ReaderCompanionViewModel @Inject constructor(
                         // 前文资料召回预算复用段评旋钮：省流/均衡/充分/自定义同一把尺。
                         recallBudgetChars = autonomy.annotationLimitsFor(book).context.budgetChars
                     )
-                    tools to systemPrompt
+                    Triple(tools, context.systemPrompt, context.recall)
                 }
                 if (session.value.conversationId != conversationId) return@launch
-                agentLoop.run(conversationId, tools, systemPrompt)
+                agentLoop.run(conversationId, tools, systemPrompt, recall = recall)
                     .buffer(Channel.BUFFERED)
                     .flowOn(Dispatchers.Default)
                     .collect { event ->

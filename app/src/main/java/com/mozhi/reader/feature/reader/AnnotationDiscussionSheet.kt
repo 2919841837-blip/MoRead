@@ -1086,7 +1086,7 @@ private fun AnnotationMediaContent(
  * （recallJson 为空且无 persona）不渲染，AI 段评（随读 / 聊天工具）即使召回为空也展示空态。
  */
 @Composable
-private fun RecallBreakdown(recallJson: String, aiGenerated: Boolean, palette: ReaderPalette) {
+internal fun RecallBreakdown(recallJson: String?, aiGenerated: Boolean, palette: ReaderPalette) {
     val recall = remember(recallJson) { AnnotationRecall.decode(recallJson) }
     // 手动划线不召回也不渲染；AI 生成的段评（随读 / 聊天工具）即使召回为空也保留折叠区，好让人看出「确实没有前文可召回」。
     if (recall.isEmpty && !aiGenerated) return
