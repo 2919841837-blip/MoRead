@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredHeightIn
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.Spacer
@@ -670,7 +671,7 @@ internal fun AnnotationDiscussionSheet(
             onStop = onCancelStreaming,
             maxLines = 4,
             textFieldModifier = Modifier.focusRequester(focusRequester),
-            modifier = Modifier.padding(top = 10.dp, bottom = 10.dp)
+            modifier = Modifier.requiredHeightIn(min = COMPOSER_FOOTER_MIN).padding(top = 10.dp, bottom = 10.dp)
         )
     }
 }
@@ -703,7 +704,7 @@ private fun StyledQuote(
             lineHeight = 31.sp
         ),
         color = palette.onBackground,
-        maxLines = 4,
+        maxLines = 2,
         overflow = TextOverflow.Ellipsis,
         onTextLayout = { layout = it },
         modifier = modifier.drawBehind {

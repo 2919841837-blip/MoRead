@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredHeightIn
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
@@ -74,7 +75,7 @@ internal fun ReaderComposerBar(
             border = BorderStroke(1.dp, palette.glassBorder),
             modifier = Modifier
                 .fillMaxWidth()
-                .heightIn(min = COMPOSER_BAR_MIN_HEIGHT)
+                .requiredHeightIn(min = COMPOSER_BAR_MIN_HEIGHT)
         ) {
             Row(
                 modifier = Modifier.padding(horizontal = 7.dp, vertical = 7.dp),
@@ -179,3 +180,6 @@ internal fun ComposerRoundAction(
 /** 单行时胶囊内所有元素同高，两端圆钮与文字行严丝合缝。 */
 private val COMPOSER_SLOT = 38.dp
 private val COMPOSER_BAR_MIN_HEIGHT = 52.dp
+
+/** 段评讨论弹层里输入框整条 footer 的保底高度：胶囊下限 52 + 调用方上下各 10dp 间距。 */
+internal val COMPOSER_FOOTER_MIN = COMPOSER_BAR_MIN_HEIGHT + 20.dp
