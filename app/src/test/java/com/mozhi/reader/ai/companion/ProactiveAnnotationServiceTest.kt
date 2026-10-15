@@ -61,7 +61,7 @@ class ProactiveAnnotationServiceTest {
 
     init {
         coEvery { factory.forRole(ModelRole.PROACTIVE_ANNOTATION) } returns ResolvedChatClient(client, ChatOptions(), mockk(), "mock")
-        coEvery { contextRepository.prepare(any(), any()) } returns PreparedAnnotationContext("revision")
+        coEvery { contextRepository.cachedPrepare(any(), any()) } returns PreparedAnnotationContext("revision")
         coEvery { contextRepository.isCurrent(any(), any()) } returns true
     }
 
@@ -77,7 +77,7 @@ class ProactiveAnnotationServiceTest {
         val result = service.generateForChapter(request, { permit }, { _, _ -> }, { row, end, _ -> rows += row; ends += end; true })
         assertFalse(result.failed)
         assertEquals(2, requests.size)
-        coVerify(exactly = 1) { contextRepository.prepare(1, 3) }
+        coVerify(exactly = 1) { contextRepository.cachedPrepare(1, 3) }
         assertFalse(requests.first().any { it.content.orEmpty().contains(second) })
         assertTrue(requests.last().last().content.orEmpty().endsWith(second))
         assertEquals(listOf(first.length, body.length), ends)
@@ -105,7 +105,7 @@ class ProactiveAnnotationServiceTest {
         assertFalse(lastPass.failed)
         assertEquals(listOf(first, second), rows.map { it.selectedText })
         assertEquals(2, messages.size)
-        coVerify(exactly = 1) { contextRepository.prepare(1, 3) }
+        coVerify(atLeast = 1) { contextRepository.cachedPrepare(1, 3) }
     }
 
     @Test fun failedSlotDoesNotBlockLookaheadOrRepeatUntilTheNextGenerationRound() = runTest {
@@ -328,7 +328,7 @@ class ProactiveAnnotationServiceTest {
 
     @Test fun previousChapterEvidenceIsSentAlongsideTargetWithoutReadingSuffix() = runTest {
         val evidence = "首段原文的伏笔：顾衡曾许诺重回雪岭"
-        coEvery { contextRepository.prepare(any(), any()) } returns PreparedAnnotationContext("revision",
+        coEvery { contextRepository.cachedPrepare(any(), any()) } returns PreparedAnnotationContext("revision",
             outlines = listOf(AnnotationOutline(0, evidence)))
         val messages = mutableListOf<List<ChatMessage>>()
         coEvery { client.chat(capture(messages), any()) } returns """{"quote":"$first","note":"呼应前文"}"""

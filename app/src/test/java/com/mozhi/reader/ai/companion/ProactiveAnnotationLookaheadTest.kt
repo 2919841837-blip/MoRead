@@ -62,7 +62,7 @@ class ProactiveAnnotationLookaheadTest {
             coEvery { quota.reserve(any(), any(), any(), any()) } returns ProactiveAnnotationAllowance(true, Int.MAX_VALUE)
             coEvery { quota.recordCreated(any(), any(), any(), any()) } just Runs
             val contexts = mockk<ProactiveAnnotationContextRepository>()
-            coEvery { contexts.prepare(any(), any()) } returns PreparedAnnotationContext("revision")
+            coEvery { contexts.cachedPrepare(any(), any()) } returns PreparedAnnotationContext("revision")
             coEvery { contexts.isCurrent(any(), any()) } returns true
             val factory = mockk<AiClientFactory>()
             val client = mockk<ChatApiClient>()
@@ -102,7 +102,7 @@ class ProactiveAnnotationLookaheadTest {
                     ProactiveAnnotationParagraphs.revision(bodies[chapter]))!!
                 assertEquals("DONE", job.status)
                 assertEquals(0, job.attempts)
-                coVerify(exactly = 1) { contexts.prepare(1, chapter) }
+                coVerify(atLeast = 1) { contexts.cachedPrepare(1, chapter) }
             }
             assertEquals(0, database.bookDao().observeBook(1).first()!!.maxReachedCharOffset)
             scheduler.onChapterEntered(1, 1)

@@ -247,6 +247,7 @@ class ProactiveAnnotationService @Inject constructor(
             } catch (error: Exception) {
                 // A bad paragraph must not prevent the remaining paragraphs from being tried.
                 logSkip("request failed: ${error.javaClass.simpleName}")
+                runCatching { android.util.Log.w(TAG, "proactive annotation request failed", error) }
                 break
             } finally {
                 // Sink guarantees null/throw means rollback; committed acknowledgement is cancellation-safe.
