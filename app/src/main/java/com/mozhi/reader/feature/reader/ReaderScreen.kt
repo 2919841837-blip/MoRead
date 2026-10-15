@@ -2,6 +2,7 @@ package com.mozhi.reader.feature.reader
 
 import com.mozhi.reader.core.i18n.resolve
 import com.mozhi.reader.ui.components.MoReadBottomSheet
+import com.mozhi.reader.ui.components.safeTopPadding
 import android.content.Context
 import android.content.ContextWrapper
 import android.content.Intent
@@ -14,6 +15,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -1448,43 +1450,70 @@ fun ReaderScreen(
         val discussionState by discussionViewModel.uiState.collectAsStateWithLifecycle()
         val threadIds = threadAnnotations.map { it.id }
         LaunchedEffect(threadIds) { discussionViewModel.open(threadIds) }
-        MoReadBottomSheet(
-            onDismissRequest = {
-                screenState.annotationThread = null
-                discussionViewModel.close()
-            },
-            // IME inset must constrain the sheet itself. Padding only the inner Column leaves a
-            // full-height discussion measured behind the keyboard, so its composer cannot move.
-            modifier = Modifier.imePadding(),
-            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
-            containerColor = palette.glassStrong,
-            contentColor = palette.onBackground,
-            scrimColor = palette.scrim
-        ) {
-            AnnotationDiscussionSheet(
-                annotations = threadAnnotations,
-                replies = discussionState.replies,
-                streaming = discussionState.streaming,
-                error = discussionState.error,
-                personas = companionState.personas,
-                defaultRespondPersonaId = discussionState.rememberedPersonaId
-                    ?: companionState.activePersona?.id,
-                onRememberRespondPersona = discussionViewModel::rememberRespondPersona,
-                illustrations = visibleIllustrations,
-                palette = palette,
-                onPlayAudio = selectionMediaViewModel::playCachedSpeech,
-                onSend = { target, text, respondPersonaId ->
-                    discussionViewModel.sendUserReply(bookId, target, text, respondPersonaId)
-                },
-                onUpdateStyle = viewModel::updateAnnotationStyle,
-                onDeleteAnnotation = viewModel::deleteAnnotation,
-                onDeleteReply = discussionViewModel::deleteReply,
-                onCancelStreaming = discussionViewModel::cancelStreaming,
-                onDismiss = {
-                    screenState.annotationThread = null
-                    discussionViewModel.close()
-                }
+        // 主窗口 overlay，替代 ModalBottomSheet：后者是独立 Popup 窗口，API 30+ 写死
+        // SOFT_INPUT_ADJUST_NOTHING，永远拿不到 IME inset，imePadding 恒为 0（键盘盖住输入区）。
+        // 回到主窗口后靠 Activity 的 adjustResize，imePadding 才真正生效。
+        Box(Modifier.fillMaxSize()) {
+            // 遮罩：点一下关闭
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .background(palette.scrim)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) {
+                        screenState.annotationThread = null
+                        discussionViewModel.close()
+                    }
             )
+            // 面板贴底、按内容高；imePadding 在键盘弹出时把整块面板抬到键盘上方（列表被压缩、输入区保住）。
+            Column(
+                Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .imePadding()
+            ) {
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        // 吃掉点击，避免落在面板空白处时穿透到下面的遮罩触发关闭
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null
+                        ) {},
+                    shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
+                    color = palette.glassStrong,
+                    contentColor = palette.onBackground
+                ) {
+                    Column(Modifier.safeTopPadding()) {
+                        AnnotationDiscussionSheet(
+                            annotations = threadAnnotations,
+                            replies = discussionState.replies,
+                            streaming = discussionState.streaming,
+                            error = discussionState.error,
+                            personas = companionState.personas,
+                            defaultRespondPersonaId = discussionState.rememberedPersonaId
+                                ?: companionState.activePersona?.id,
+                            onRememberRespondPersona = discussionViewModel::rememberRespondPersona,
+                            illustrations = visibleIllustrations,
+                            palette = palette,
+                            onPlayAudio = selectionMediaViewModel::playCachedSpeech,
+                            onSend = { target, text, respondPersonaId ->
+                                discussionViewModel.sendUserReply(bookId, target, text, respondPersonaId)
+                            },
+                            onUpdateStyle = viewModel::updateAnnotationStyle,
+                            onDeleteAnnotation = viewModel::deleteAnnotation,
+                            onDeleteReply = discussionViewModel::deleteReply,
+                            onCancelStreaming = discussionViewModel::cancelStreaming,
+                            onDismiss = {
+                                screenState.annotationThread = null
+                                discussionViewModel.close()
+                            }
+                        )
+                    }
+                }
+            }
         }
     }
 
