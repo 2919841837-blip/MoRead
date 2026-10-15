@@ -345,6 +345,31 @@ class ProactiveAnnotationContextTest {
         assertTrue(result.recall.threads.first().turns.any { it.speaker == "观澜" })
     }
 
+    @Test fun forQueryRecallsByQueryAndCarriesStructuredDetail() = runTest {
+        val prepared = PreparedAnnotationContext("r", outlines = listOf(
+            AnnotationOutline(2, "顾衡在雪岭立誓，要把玉佩交还给沈岚。"),
+            AnnotationOutline(3, "当地人忙着耕种庄稼，讨论今日天气。")
+        ))
+        val result = prepared.forQuery("玉佩 雪岭 沈岚 顾衡", null, 8_000)
+        assertTrue(result.background.contains("立誓"))
+        assertTrue(result.background.contains("第 3 章"))
+        assertFalse(result.background.contains("耕种"))
+        assertTrue(result.recall.outlines.any { it.text.contains("立誓") })
+    }
+
+    @Test fun forQueryUsesWholeBudgetWithoutTargetOrMultiplier() = runTest {
+        // 私聊无「目标段落」：整段预算都当召回预算，不扣 target、不乘 0.45。
+        // 一条超长且高度相关的梗概足以吃满 0.6 的初始上限，回流后应接近整段预算，
+        // 而不是缩水到 8000×0.45≈3600。
+        val prepared = PreparedAnnotationContext("r", outlines = listOf(
+            AnnotationOutline(0, promise.repeat(400))
+        ))
+        val result = prepared.forQuery("玉佩 雪岭 沈岚 顾衡", null, 8_000)
+        assertTrue(result.background.contains("梗概"))
+        assertTrue(result.background.length > 7_000)
+        assertTrue(result.background.length <= 8_000)
+    }
+
     private fun card(name: String, vararg fields: CardField, aliases: List<String> = emptyList()) =
         AnnotationCharacterCard(name, aliases, fields.toList())
 

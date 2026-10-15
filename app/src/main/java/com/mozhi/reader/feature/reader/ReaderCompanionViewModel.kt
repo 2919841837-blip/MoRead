@@ -1106,7 +1106,9 @@ class ReaderCompanionViewModel @Inject constructor(
                                 book = true,
                                 characters = true
                             )
-                        )
+                        ),
+                        // 前文资料召回预算复用段评旋钮：省流/均衡/充分/自定义同一把尺。
+                        recallBudgetChars = autonomy.annotationLimitsFor(book).context.budgetChars
                     )
                     tools to systemPrompt
                 }

@@ -457,4 +457,54 @@ class CompanionContextBuilderTest {
         assertTrue(prompt.contains("【对话形态】"))
         assertFalse(prompt.contains("【长期记忆】"))
     }
+
+    // ---- 前文资料（大纲/角色卡/讨论串）召回块：永不裁剪，长度加宽进总预算 ----
+
+    @Test
+    fun recallBlockRendersAsReferenceMaterial() {
+        val prompt = CompanionContextBuilder.assemble(
+            readingScope = readingScope,
+            persona = null,
+            progress = progress,
+            scene = "当前场景原文",
+            memories = emptyList(),
+            recall = "第 3 章「雪岭之誓」梗概（辅助资料，以原文为准）：\n顾衡在雪岭立誓。"
+        )
+        assertTrue(prompt.contains("【前文资料】"))
+        assertTrue(prompt.contains("顾衡在雪岭立誓"))
+        // 召回块紧跟进度/防剧透之后，排在记忆/划线/场景之前。
+        assertTrue(prompt.indexOf("【前文资料】") < prompt.indexOf("【当前场景】"))
+    }
+
+    @Test
+    fun blankRecallAddsNoBlock() {
+        val prompt = CompanionContextBuilder.assemble(
+            readingScope = readingScope,
+            persona = null,
+            progress = progress,
+            scene = null,
+            memories = emptyList(),
+            recall = "   "
+        )
+        assertFalse(prompt.contains("【前文资料】"))
+    }
+
+    @Test
+    fun recallSurvivesBudgetPressureAndWidensBudgetWithoutStarvingScene() {
+        val recall = "第 3 章梗概（辅助资料，以原文为准）：\n" + "顾衡".repeat(2_000)
+        val prompt = CompanionContextBuilder.assemble(
+            readingScope = readingScope,
+            persona = null,
+            progress = progress,
+            scene = "景".repeat(3_000),
+            memories = List(5) { "记忆${it}".padEnd(200, '忆') },
+            recall = recall,
+            budgetChars = 800
+        )
+        // 召回块完整保留（即使远大于基础预算），不被裁剪。
+        assertTrue(prompt.contains("【前文资料】"))
+        assertTrue(prompt.contains("顾衡".repeat(2_000)))
+        // 基础预算仍照常挤掉记忆，但召回本身不参与裁剪。
+        assertFalse(prompt.contains("【长期记忆】"))
+    }
 }

@@ -108,4 +108,21 @@ class ProactiveAnnotationContextRepositoryTest {
             fail("cancelled")
         } catch (_: CancellationException) { }
     }
+
+    @Test fun cachedPrepareReusesTheChapterSnapshotWithinItsRevision() = runTest {
+        repository.cachedPrepare(1, 3)
+        repository.cachedPrepare(1, 3)
+        // 命中缓存：只做 revision 校验，不再重拉章梗概、角色卡与讨论串。
+        coVerify(exactly = 1) { dao.getBefore(1, 3) }
+        coVerify(exactly = 1) { bookCharacterDao.getGuide(any()) }
+        coVerify(exactly = 1) { annotationDao.getThreadCandidates(any(), any()) }
+    }
+
+    @Test fun cachedPrepareRevalidatesWhenTheSourceRevisionChanges() = runTest {
+        repository.cachedPrepare(1, 3)
+        coEvery { library.bookTextRevision(1) } returns "changed"
+        repository.cachedPrepare(1, 3)
+        // 源文件版本变了：缓存失效，重新召回。
+        coVerify(exactly = 2) { dao.getBefore(1, 3) }
+    }
 }

@@ -3,6 +3,7 @@ package com.mozhi.reader.ai.prompt
 import com.mozhi.reader.ai.agent.PromptAnnotation
 import com.mozhi.reader.ai.agent.formatPromptAnnotations
 import com.mozhi.reader.ai.client.AiClientFactory
+import com.mozhi.reader.ai.companion.ProactiveAnnotationContextRepository
 import com.mozhi.reader.core.database.entity.ModelRole
 import com.mozhi.reader.core.database.entity.PersonaEntity
 import com.mozhi.reader.core.database.entity.exampleDialogs
@@ -65,7 +66,8 @@ class CompanionContextBuilder @Inject constructor(
     private val clientFactory: dagger.Lazy<AiClientFactory>,
     private val vectorStore: dagger.Lazy<BoxStore>,
     private val userMaskStore: UserMaskStore,
-    private val settingsRepository: ReaderSettingsRepository
+    private val settingsRepository: ReaderSettingsRepository,
+    private val proactiveContextRepository: ProactiveAnnotationContextRepository
 ) {
     /**
      * @param scene 调用方备好的场景原文（选段及其邻域，或章节开头），可空
@@ -78,7 +80,8 @@ class CompanionContextBuilder @Inject constructor(
         memoryQuery: String? = null,
         readingScope: ReadingScope,
         conversationShape: ConversationShape = ConversationShape(),
-        budgetChars: Int = DEFAULT_BUDGET_CHARS
+        budgetChars: Int = DEFAULT_BUDGET_CHARS,
+        recallBudgetChars: Int = DEFAULT_BUDGET_CHARS
     ): String {
         val progress = bookId?.let { id ->
             libraryRepository.getBook(id)?.let { book ->
@@ -124,6 +127,20 @@ class CompanionContextBuilder @Inject constructor(
         } else {
             emptyList()
         }
+        // 前文资料（大纲/角色卡/讨论串）：与段评共用同一套召回，query 取「场景 + 用户最新输入」。
+        val recall = if (bookId != null && progress != null && recallBudgetChars > 0) {
+            val query = listOfNotNull(scene, memoryQuery).map(String::trim).filter(String::isNotBlank).joinToString("\n")
+            if (query.isNotBlank()) {
+                try {
+                    proactiveContextRepository.cachedPrepare(bookId, progress.currentChapterIndex)
+                        .forQuery(query, persona?.id, recallBudgetChars).background
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    ""
+                }
+            } else ""
+        } else ""
         return assemble(
             persona = persona,
             userMask = userMask,
@@ -131,6 +148,7 @@ class CompanionContextBuilder @Inject constructor(
             scene = scene,
             annotations = promptAnnotations,
             memories = memories,
+            recall = recall,
             // 用户画像是角色级全局数据，没有 bookId 来源。跨书关闭时不得把它注入
             // 书内会话，否则其中偶然混入的其他书信息会绕过记忆的 bookId 过滤。
             userProfile = persona
@@ -196,9 +214,11 @@ class CompanionContextBuilder @Inject constructor(
             readingScope: ReadingScope,
             conversationShape: ConversationShape = ConversationShape(),
             loreTrigger: String = "",
+            recall: String = "",
             budgetChars: Int = DEFAULT_BUDGET_CHARS
         ): String {
             val genUiBlock = com.mozhi.reader.ai.genui.GenUiPrompt.section(conversationShape.genUi)
+            val recallBlockText = recallBlock(recall)
             val fixedBlocks = listOfNotNull(
                 personaBlock(persona, loreTrigger),
                 // 画像与人设同级：它是「你认识的这个人是谁」，裁掉它角色立刻变得陌生。
@@ -210,9 +230,11 @@ class CompanionContextBuilder @Inject constructor(
                 // 裁掉它模型就会写回长段落，用户看到的是开关时灵时不灵。
                 conversationShapeBlock(conversationShape, progress),
                 // 互动回答的规格同样不裁；预算按它的长度放宽，不挤掉记忆与场景原文。
-                genUiBlock
+                genUiBlock,
+                // 前文资料与人设/防剧透同级：永不裁剪，长度加宽进总预算，不挤占记忆/划线/场景。
+                recallBlockText
             )
-            val budgetChars = budgetChars + (genUiBlock?.length ?: 0)
+            val budgetChars = budgetChars + (genUiBlock?.length ?: 0) + (recallBlockText?.length ?: 0)
             val closing = buildString {
                 append("回答使用简体中文。")
                 if (progress != null) {
@@ -391,6 +413,11 @@ class CompanionContextBuilder @Inject constructor(
                         if (row.note.isNotBlank()) append("（想法：").append(row.note).append("）")
                     }
                 }
+            }
+
+        private fun recallBlock(recall: String): String? =
+            recall.trim().takeIf(String::isNotEmpty)?.let {
+                "【前文资料】本书已读部分的相关资料（大纲、角色卡与前文讨论；辅助资料，以原文为准）：\n" + it
             }
 
         private const val SCENE_HEADER = "【当前场景】用户所读位置附近的原文：\n"

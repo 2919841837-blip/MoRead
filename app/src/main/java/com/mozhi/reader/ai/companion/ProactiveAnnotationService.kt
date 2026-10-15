@@ -135,21 +135,7 @@ class ProactiveAnnotationService @Inject constructor(
     private val mediaService: AiMediaGenerationService,
     private val contextRepository: ProactiveAnnotationContextRepository
 ) {
-    // Keep chapter context across fair-scheduling passes and companions, with revision validation.
-    private val contextCache = linkedMapOf<Pair<Long, Int>, PreparedAnnotationContext>()
-
-    private suspend fun preparedContextFor(bookId: Long, chapterIndex: Int): PreparedAnnotationContext {
-        val key = bookId to chapterIndex
-        val cached = synchronized(contextCache) { contextCache[key] }
-        if (cached != null && contextRepository.isCurrent(bookId, cached.revision)) return cached
-        val prepared = contextRepository.prepare(bookId, chapterIndex)
-        synchronized(contextCache) {
-            contextCache.remove(key)
-            contextCache[key] = prepared
-            while (contextCache.size > 6) contextCache.remove(contextCache.keys.first())
-        }
-        return prepared
-    }
+    // Chapter context is cached inside the repository (revision-validated, shared with the companion chat).
 
     /** Revalidation is mandatory before every paid call and immediately before the atomic sink. */
     suspend fun generateForChapter(
@@ -176,7 +162,7 @@ class ProactiveAnnotationService @Inject constructor(
             var detachedImage: com.mozhi.reader.core.database.entity.IllustrationEntity? = null
             var committed = false
             try {
-                val prepared = preparedContext ?: preparedContextFor(request.bookId, request.chapterIndex)
+                val prepared = preparedContext ?: contextRepository.cachedPrepare(request.bookId, request.chapterIndex)
                     .also { preparedContext = it }
                 val context = prepared.forParagraph(request.body, paragraph, request.contextBudgetChars, request.persona.id)
                 suspend fun contextValid() = contextRepository.isCurrent(request.bookId, prepared.revision)
