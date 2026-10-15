@@ -1450,6 +1450,11 @@ fun ReaderScreen(
         val discussionState by discussionViewModel.uiState.collectAsStateWithLifecycle()
         val threadIds = threadAnnotations.map { it.id }
         LaunchedEffect(threadIds) { discussionViewModel.open(threadIds) }
+        // 返回键优先关段评：这一层只在段评打开时注册，关掉后返回键才落到 NavHost 退出书籍。
+        BackHandler {
+            screenState.annotationThread = null
+            discussionViewModel.close()
+        }
         // 主窗口 overlay，替代 ModalBottomSheet：后者是独立 Popup 窗口，API 30+ 写死
         // SOFT_INPUT_ADJUST_NOTHING，永远拿不到 IME inset，imePadding 恒为 0（键盘盖住输入区）。
         // 回到主窗口后靠 Activity 的 adjustResize，imePadding 才真正生效。
