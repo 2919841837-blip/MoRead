@@ -3,6 +3,9 @@ package com.mozhi.reader.feature.reader
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.mozhi.reader.ai.agent.AnnotationDiscussionService
+import com.mozhi.reader.ai.agent.buildDiscussionTurns
+import com.mozhi.reader.ai.agent.ownerAnnotationId
+import com.mozhi.reader.ai.agent.userSpeaksAsOpener
 import com.mozhi.reader.core.database.entity.AnnotationEntity
 import com.mozhi.reader.core.database.entity.AnnotationReplyEntity
 import com.mozhi.reader.core.library.AnnotationRepository
@@ -47,6 +50,9 @@ class AnnotationDiscussionViewModel @Inject constructor(
     private var repliesJob: Job? = null
     private var respondJob: Job? = null
 
+    /** 当前弹层绑定的一组批注 id（同锚点的全部划线），讨论串按整组拼时间线。 */
+    private var threadIds: List<Long> = emptyList()
+
     /** 流式正文真源；UI 快照按 显示帧节拍发布，避免逐 token 重组。 */
     private val streamBuffer = StringBuilder()
 
@@ -71,6 +77,7 @@ class AnnotationDiscussionViewModel @Inject constructor(
     fun open(annotationIds: List<Long>) {
         repliesJob?.cancel()
         respondJob?.cancel()
+        threadIds = annotationIds
         mutableState.update { DiscussionUiState(rememberedPersonaId = it.rememberedPersonaId) }
         if (annotationIds.isEmpty()) return
         repliesJob = viewModelScope.launch {
@@ -87,7 +94,8 @@ class AnnotationDiscussionViewModel @Inject constructor(
     }
 
     /**
-     * 用户发言：纯高亮的自有批注先把发言写进楼主层（note），其余情况落回复层；
+     * 用户发言：落点由时间线定——只有用户自己那条空批注不晚于组内任何发言时，他才算第一个
+     * 开口的人，写进楼主层（note）；否则落回复层，挂在楼主那条批注下面。
      * [respondPersonaId] 非空时随后让该角色应答。
      */
     fun sendUserReply(
@@ -103,10 +111,16 @@ class AnnotationDiscussionViewModel @Inject constructor(
         }
         if (respondJob?.isActive == true) return
         viewModelScope.launch {
-            if (target.personaId == null && target.note.isBlank()) {
+            val group = annotationRepository.getAnnotations((threadIds + target.id).distinct())
+            val turns = buildDiscussionTurns(group.ifEmpty { listOf(target) }, mutableState.value.replies)
+            if (userSpeaksAsOpener(target, turns)) {
                 annotationRepository.updateNote(target.id, content)
             } else {
-                annotationRepository.addReply(target.id, personaId = null, contentMarkdown = content)
+                annotationRepository.addReply(
+                    annotationId = turns.firstOrNull()?.ownerAnnotationId() ?: target.id,
+                    personaId = null,
+                    contentMarkdown = content
+                )
             }
             if (respondPersonaId != null) {
                 respond(bookId, target.id, respondPersonaId)
@@ -132,7 +146,7 @@ class AnnotationDiscussionViewModel @Inject constructor(
                 }
             }
             try {
-                discussionService.respond(bookId, annotationId, personaId).collect { event ->
+                discussionService.respond(bookId, annotationId, personaId, threadIds).collect { event ->
                     when (event) {
                         is AnnotationDiscussionService.Event.Text -> {
                             streamBuffer.append(event.delta)

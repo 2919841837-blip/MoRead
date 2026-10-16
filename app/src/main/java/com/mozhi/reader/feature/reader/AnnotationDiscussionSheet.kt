@@ -28,7 +28,6 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.res.stringResource
 import com.mozhi.reader.R
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -73,6 +72,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.mozhi.reader.ai.agent.DiscussionTurn
+import com.mozhi.reader.ai.agent.buildDiscussionTurns
 import com.mozhi.reader.core.database.entity.AnnotationColors
 import com.mozhi.reader.core.database.entity.AnnotationEntity
 import com.mozhi.reader.core.database.entity.AnnotationReplyEntity
@@ -379,7 +380,10 @@ internal fun AnnotationDiscussionSheet(
     val ownAnnotation = annotations.firstOrNull { it.personaId == null }
     val quoteSource = ownAnnotation ?: annotations.firstOrNull()
     val quote = quoteSource?.selectedText.orEmpty()
-    val talkCount = annotations.count { it.note.isNotBlank() } + replies.size
+    // 讨论串 = 楼主层与回复层合成的时间线：只划线没写想法的批注不占楼，第一个开口的发言
+    // 就是楼主，渲染在最外层。
+    val turns = buildDiscussionTurns(annotations, replies)
+    val talkCount = turns.size
     val listState = rememberLazyListState()
     val timeFormat = remember { SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()) }
     val focusRequester = remember { FocusRequester() }
@@ -490,71 +494,38 @@ internal fun AnnotationDiscussionSheet(
                     )
                 }
             }
-            annotations.forEach { annotation ->
-                item(key = "annotation-${annotation.id}") {
+            turns.forEachIndexed { index, turn ->
+                val isOpener = index == 0
+                item(key = turn.renderKey()) {
                     ThreadComment(
-                        authorId = annotation.personaId,
+                        authorId = turn.personaId,
                         personas = personas,
                         palette = palette,
-                        timeText = timeFormat.format(Date(annotation.createdAt)),
-                        depth = 0,
-                        onReply = { replyTo(annotation.personaId) },
-                        onCopy = if (annotation.note.isNotBlank()) {
-                            { clipboard.setText(AnnotatedString(annotation.note)) }
-                        } else null,
-                        deleteLabel = "删除批注",
-                        onDelete = { onDeleteAnnotation(annotation.id) }
-                    ) {
-                        // 召回明细在上、段评内容在下，用 Column 竖向排布避免重叠；展开召回时内容自动下移。
-                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            RecallBreakdown(
-                                annotation.recallJson,
-                                aiGenerated = annotation.personaId != null,
-                                palette = palette
-                            )
-                            if (annotation.note.isNotBlank()) {
-                                ThreadText(annotation.note, palette)
-                            } else {
-                                Text(
-                                    "划了这段原文，还没写想法",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = palette.muted
-                                )
+                        timeText = timeFormat.format(Date(turn.createdAt)),
+                        depth = if (isOpener) 0 else 1,
+                        isOpener = isOpener,
+                        onReply = { replyTo(turn.personaId) },
+                        onCopy = { clipboard.setText(AnnotatedString(turn.text)) },
+                        deleteLabel = if (turn is DiscussionTurn.FromAnnotation) "删除批注" else "删除",
+                        onDelete = {
+                            when (turn) {
+                                is DiscussionTurn.FromAnnotation -> onDeleteAnnotation(turn.annotation.id)
+                                is DiscussionTurn.FromReply -> onDeleteReply(turn.reply.id)
                             }
-                            AnnotationMediaContent(
-                                media = AnnotationMedia.decode(annotation.mediaJson),
-                                text = annotation.note,
-                                illustrations = illustrations,
-                                palette = palette,
-                                onPlayAudio = onPlayAudio
-                            )
                         }
-                    }
-                }
-                val threadReplies = replies.filter { it.annotationId == annotation.id }
-                items(threadReplies, key = { "reply-${it.id}" }) { reply ->
-                    ThreadComment(
-                        authorId = reply.personaId,
-                        personas = personas,
-                        palette = palette,
-                        timeText = timeFormat.format(Date(reply.createdAt)),
-                        depth = 1,
-                        onReply = { replyTo(reply.personaId) },
-                        onCopy = { clipboard.setText(AnnotatedString(reply.contentMarkdown)) },
-                        deleteLabel = "删除",
-                        onDelete = { onDeleteReply(reply.id) }
                     ) {
-                        // AI 回复同样带召回明细：召回在上、正文在下，与楼主层一致；用户发言（personaId == null）无召回，RecallBreakdown 自动不渲染。
+                        // 召回明细在上、发言正文在下，用 Column 竖向排布避免重叠；展开召回时正文自动下移。
+                        // 用户发言（personaId == null）没有召回，RecallBreakdown 自动不渲染。
                         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             RecallBreakdown(
-                                reply.recallJson,
-                                aiGenerated = reply.personaId != null,
+                                turn.recallJson(),
+                                aiGenerated = turn.personaId != null,
                                 palette = palette
                             )
-                            ThreadText(reply.contentMarkdown, palette)
+                            ThreadText(turn.text, palette)
                             AnnotationMediaContent(
-                                media = AnnotationMedia.decode(reply.mediaJson),
-                                text = reply.contentMarkdown,
+                                media = AnnotationMedia.decode(turn.mediaJson()),
+                                text = turn.text,
                                 illustrations = illustrations,
                                 palette = palette,
                                 onPlayAudio = onPlayAudio
@@ -923,9 +894,26 @@ private fun ThreadText(content: String, palette: ReaderPalette) {
     }
 }
 
+/** 列表项 key、召回明细与媒体都跟着发言的来源走：批注行取批注，回复行取回复。 */
+private fun DiscussionTurn.renderKey(): String = when (this) {
+    is DiscussionTurn.FromAnnotation -> "annotation-${annotation.id}"
+    is DiscussionTurn.FromReply -> "reply-${reply.id}"
+}
+
+private fun DiscussionTurn.recallJson(): String = when (this) {
+    is DiscussionTurn.FromAnnotation -> annotation.recallJson
+    is DiscussionTurn.FromReply -> reply.recallJson
+}
+
+private fun DiscussionTurn.mediaJson(): String = when (this) {
+    is DiscussionTurn.FromAnnotation -> annotation.mediaJson
+    is DiscussionTurn.FromReply -> reply.mediaJson
+}
+
 /**
  * 讨论串里的一条：挂在朱砂线上的头像、名字与身份、时间、宋体正文，下面一行「回复 / 复制」。
- * [depth] 为 1 时是回复：再缩进一级，用一段折角线接回上一条。
+ * [depth] 为 1 时是回复：再缩进一级，用一段折角线接回上一条。[isOpener] 标出楼主（讨论串
+ * 第一条有内容的发言）。
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -939,6 +927,7 @@ private fun ThreadComment(
     onCopy: (() -> Unit)?,
     deleteLabel: String,
     onDelete: () -> Unit,
+    isOpener: Boolean = false,
     content: @Composable () -> Unit
 ) {
     var menuOpen by remember { mutableStateOf(false) }
@@ -1005,6 +994,19 @@ private fun ThreadComment(
                         .background(palette.onBackground.copy(alpha = if (palette.isDark) 0.09f else 0.06f))
                         .padding(horizontal = 6.dp, vertical = 1.dp)
                 )
+                // 楼主标：讨论串第一条有内容的发言（用户只划线没写想法时，让给最早开口的角色）。
+                if (isOpener) {
+                    Text(
+                        text = stringResource(R.string.discussion_role_opener),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = seal,
+                        modifier = Modifier
+                            .padding(start = 4.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(seal.copy(alpha = if (palette.isDark) 0.18f else 0.10f))
+                            .padding(horizontal = 6.dp, vertical = 1.dp)
+                    )
+                }
                 Text(
                     timeText,
                     style = MaterialTheme.typography.labelSmall,

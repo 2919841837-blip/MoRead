@@ -648,6 +648,7 @@
     <string name="discussion_placeholder">写下你的想法…</string>
     <string name="discussion_role_me">读者</string>
     <string name="discussion_role_persona">角色</string>
+    <string name="discussion_role_opener">楼主</string>
     <string name="discussion_reply">回复</string>
     <string name="discussion_copy">复制</string>
     <string name="annotation_style_highlight">荧光</string>

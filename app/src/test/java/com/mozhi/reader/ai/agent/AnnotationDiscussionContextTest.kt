@@ -218,6 +218,43 @@ class AnnotationDiscussionContextTest {
         )
     }
 
+    /** 用户那条空划线早于组内所有发言：他自己就是楼主，发言写进 note。 */
+    @Test
+    fun userSpeaksAsOpenerWhenOwnHighlightIsEarliest() {
+        val highlight = annotation(personaId = null, note = "", createdAt = 10)
+        val turns = buildDiscussionTurns(
+            listOf(annotation(personaId = 7, note = "AI 段评", id = 2, createdAt = 30)),
+            emptyList()
+        )
+        assertTrue(userSpeaksAsOpener(highlight, turns))
+    }
+
+    /** 组里已经有人更早开口：用户落回复层，不抢楼主位。 */
+    @Test
+    fun userFallsBackToRepliesWhenSomeoneSpokeEarlier() {
+        val highlight = annotation(personaId = null, note = "", createdAt = 10)
+        val turns = buildDiscussionTurns(
+            listOf(annotation(personaId = 7, note = "AI 段评", id = 2, createdAt = 5)),
+            emptyList()
+        )
+        assertFalse(userSpeaksAsOpener(highlight, turns))
+    }
+
+    /** 批注已经有想法、或那条批注属于角色：都不再往 note 里写。 */
+    @Test
+    fun userNeverOpensWhenTheAnnotationAlreadyHasANoteOrBelongsToAPersona() {
+        assertFalse(userSpeaksAsOpener(annotation(personaId = null, note = "已经写过"), emptyList()))
+        assertFalse(userSpeaksAsOpener(annotation(personaId = 7, note = ""), emptyList()))
+    }
+
+    /** 发言归属：回复挂在它所属的批注上，批注发言挂在自己。 */
+    @Test
+    fun turnsReportTheAnnotationTheyHangFrom() {
+        val opener = annotation(personaId = 7, note = "AI 段评", id = 2)
+        assertEquals(2L, DiscussionTurn.FromAnnotation(opener).ownerAnnotationId())
+        assertEquals(1L, DiscussionTurn.FromReply(reply(id = 9, personaId = null, content = "接着说")).ownerAnnotationId())
+    }
+
     @Test
     fun systemPromptCarriesPersonaSpoilerLineQuoteAndTranscript() {
         val prompt = buildDiscussionSystemPrompt(

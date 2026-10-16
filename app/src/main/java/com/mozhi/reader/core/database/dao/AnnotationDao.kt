@@ -45,6 +45,10 @@ interface AnnotationDao {
     @Query("SELECT * FROM annotations WHERE id = :annotationId")
     suspend fun getAnnotation(annotationId: Long): AnnotationEntity?
 
+    /** 按 id 批量取批注，供段评讨论串按整组（同锚点的全部划线）拼时间线。 */
+    @Query("SELECT * FROM annotations WHERE id IN (:annotationIds)")
+    suspend fun getAnnotations(annotationIds: List<Long>): List<AnnotationEntity>
+
     @Query(
         "SELECT * FROM annotations WHERE bookId = :bookId " +
             "ORDER BY chapterIndex ASC, startCharOffset ASC"

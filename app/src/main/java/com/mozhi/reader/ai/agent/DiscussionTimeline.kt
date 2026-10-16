@@ -54,6 +54,24 @@ internal fun buildDiscussionTurns(
         replies.map { DiscussionTurn.FromReply(it) }
     ).sortedWith(compareBy<DiscussionTurn> { it.createdAt }.thenBy { it.id })
 
+/** 一条发言挂在哪条批注上：回复挂在它所属的批注，批注发言挂在自己。 */
+internal fun DiscussionTurn.ownerAnnotationId(): Long = when (this) {
+    is DiscussionTurn.FromAnnotation -> annotation.id
+    is DiscussionTurn.FromReply -> reply.annotationId
+}
+
+/**
+ * 用户这条发言写进楼主层（自己批注的 note）还是落回复层。
+ *
+ * 只有「用户自己那条空批注不晚于组内任何发言」时才写楼主层——写 note 不改 createdAt，
+ * 所以判定和「写完之后再排一遍时间线」是同一个结果，不会刚说完就发现自己的话排在别人
+ * 下面。用户已经有想法、或批注属于角色、或组里已经有人更早开口，都落回复层。
+ */
+internal fun userSpeaksAsOpener(target: AnnotationEntity, turns: List<DiscussionTurn>): Boolean =
+    target.personaId == null &&
+        target.note.isBlank() &&
+        turns.none { it.createdAt < target.createdAt }
+
 /**
  * 讨论串转写成给模型看的对话记录。发言按时间线顺序排，发言人按 personaId 标
  * 「（你）/（其他角色）/用户」——空 note 的批注不入线，所以第一条就是楼主。

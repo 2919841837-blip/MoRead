@@ -58,6 +58,10 @@ class AnnotationRepository @Inject constructor(
     suspend fun getAnnotation(annotationId: Long): AnnotationEntity? =
         annotationDao.getAnnotation(annotationId)
 
+    /** 一组批注（段评讨论串的整组楼主层：弹层里点开的那几条同锚点划线）。 */
+    suspend fun getAnnotations(annotationIds: List<Long>): List<AnnotationEntity> =
+        if (annotationIds.isEmpty()) emptyList() else annotationDao.getAnnotations(annotationIds)
+
     suspend fun add(
         bookId: Long,
         personaId: Long?,
@@ -137,9 +141,9 @@ class AnnotationRepository @Inject constructor(
     suspend fun getThreadCandidates(bookId: Long, currentChapter: Int): List<AnnotationThreadCandidate> =
         annotationDao.getThreadCandidates(bookId, currentChapter)
 
-    /** 批量拉取回复层，供讨论串召回按 annotationId 组装整串。 */
+    /** 批量拉取回复层，供讨论串召回与讨论串时间线按 annotationId 组装整串。 */
     suspend fun getRepliesForAnnotations(annotationIds: List<Long>): List<AnnotationReplyEntity> =
-        annotationDao.getRepliesForAnnotations(annotationIds)
+        if (annotationIds.isEmpty()) emptyList() else annotationDao.getRepliesForAnnotations(annotationIds)
 
     suspend fun addReply(
         annotationId: Long,

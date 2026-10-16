@@ -46,10 +46,18 @@ class AnnotationDiscussionService @Inject constructor(
     }
 
     /**
-     * 让 [personaId] 回复 [annotationId] 的讨论串（最新一条用户发言视为被回复对象）。
+     * 让 [personaId] 回复 [annotationId] 所在的讨论串（最新一条用户发言视为被回复对象）。
      * 完成时把全文写入 annotation_replies 并发出 [Event.Done]。
+     *
+     * [threadAnnotationIds] 是弹层里看到的整组批注（同锚点的全部划线）：转录与落库都按整组
+     * 算——楼主是整组里第一个真正开口的发言，新回复挂在它下面。
      */
-    fun respond(bookId: Long, annotationId: Long, personaId: Long): Flow<Event> = flow {
+    fun respond(
+        bookId: Long,
+        annotationId: Long,
+        personaId: Long,
+        threadAnnotationIds: List<Long>
+    ): Flow<Event> = flow {
         try {
             val persona = personaRepository.getPersona(personaId)
                 ?: run { emit(Event.Failed("角色不存在或已删除")); return@flow }
@@ -62,9 +70,13 @@ class AnnotationDiscussionService @Inject constructor(
             if (annotation.bookId != bookId) {
                 emit(Event.Failed("这条批注不属于当前书籍")); return@flow
             }
-            val replies = annotationRepository.getReplies(annotationId)
-            // 讨论串时间线：空 note 的批注不入线，第一个真正开口的发言就是楼主。
-            val turns = buildDiscussionTurns(listOf(annotation), replies)
+            // 讨论串整组：同锚点那几条划线一起拼时间线——空 note 的批注不入线，第一个真正
+            // 开口的发言就是楼主（[annotationId] 兜底在列，防调用方给的组里漏了锚点）。
+            val threadIds = (threadAnnotationIds + annotationId).distinct()
+            val group = annotationRepository.getAnnotations(threadIds)
+                .ifEmpty { listOf(annotation) }
+            val replies = annotationRepository.getRepliesForAnnotations(threadIds)
+            val turns = buildDiscussionTurns(group, replies)
             val personaNames = personaRepository.getPersonas().associate { it.id to it.name }
             val neighborhood = loadAnchorNeighborhood(book, annotation, scope)
             val recallContext = loadRecallContext(bookId, annotation, personaId)
@@ -130,8 +142,12 @@ class AnnotationDiscussionService @Inject constructor(
             libraryRepository.getBook(bookId) ?: return@flow
             val currentAnnotation = annotationRepository.getAnnotation(annotationId) ?: return@flow
             if (currentAnnotation.bookId != bookId) return@flow
+            // 挂到楼主那条批注上：整组共用一个讨论串，回复跟楼主一起被召回。
+            val replyHostId = turns.firstOrNull()?.ownerAnnotationId() ?: annotationId
+            val replyHost = annotationRepository.getAnnotation(replyHostId) ?: return@flow
+            if (replyHost.bookId != bookId) return@flow
             val replyId = annotationRepository.addReply(
-                annotationId = annotationId,
+                annotationId = replyHostId,
                 personaId = personaId,
                 contentMarkdown = content.take(MAX_REPLY_CHARS),
                 recallJson = recallContext.recall.encode(),
