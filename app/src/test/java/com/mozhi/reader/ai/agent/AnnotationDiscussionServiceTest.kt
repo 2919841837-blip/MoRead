@@ -102,4 +102,20 @@ class AnnotationDiscussionServiceTest {
         assertEquals(ReadingScope.upto(98, 350), scope.captured)
         coVerify(exactly = 1) { annotations.addReply(3, 7, any(), any(), any(), any(), any()) }
     }
+
+    /** 用户只划线没写想法、同伴已经说过话：楼主位让给同伴，用户轮请他接着往下说。 */
+    @Test fun blankNoteThreadWithAPeerTellsModelToPickUpThePeersPoint() = runTest {
+        val service = prepare()
+        coEvery { annotations.getAnnotation(3) } returns AnnotationEntity(id = 3, bookId = 1,
+            chapterIndex = 2, startCharOffset = 0, endCharOffset = 2, selectedText = "承诺", note = "", createdAt = 0)
+        coEvery { annotations.getReplies(3) } returns listOf(AnnotationReplyEntity(id = 1, annotationId = 3,
+            personaId = 9, contentMarkdown = "这里埋了伏笔", createdAt = 1))
+        service.respond(1, 3, 7).toList()
+        // 空 note 的批注不入线：第一个开口的角色就是楼主，并被标成「其他角色」。
+        assertTrue(history.captured.first().content.orEmpty()
+            .contains("目前的讨论串：\n已删除角色（其他角色）：这里埋了伏笔"))
+        val userTurn = history.captured.last().content.orEmpty()
+        assertTrue(userTurn.contains("已经有其他角色的发言"))
+        assertTrue(userTurn.contains("先明确你在回应谁的哪一点"))
+    }
 }

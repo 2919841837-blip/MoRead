@@ -7,7 +7,6 @@ import com.mozhi.reader.ai.companion.ProactiveAnnotationContextRepository
 import com.mozhi.reader.ai.companion.ProactiveAnnotationParagraph
 import com.mozhi.reader.ai.persona.PersonaRepository
 import com.mozhi.reader.core.database.entity.AnnotationEntity
-import com.mozhi.reader.core.database.entity.AnnotationReplyEntity
 import com.mozhi.reader.core.database.entity.BookEntity
 import com.mozhi.reader.core.database.entity.PersonaEntity
 import com.mozhi.reader.core.datastore.ProactiveAnnotationContextSettings
@@ -64,10 +63,12 @@ class AnnotationDiscussionService @Inject constructor(
                 emit(Event.Failed("这条批注不属于当前书籍")); return@flow
             }
             val replies = annotationRepository.getReplies(annotationId)
+            // 讨论串时间线：空 note 的批注不入线，第一个真正开口的发言就是楼主。
+            val turns = buildDiscussionTurns(listOf(annotation), replies)
             val personaNames = personaRepository.getPersonas().associate { it.id to it.name }
             val neighborhood = loadAnchorNeighborhood(book, annotation, scope)
             val recallContext = loadRecallContext(bookId, annotation, personaId)
-            val transcript = buildDiscussionTranscript(annotation, replies, personaNames)
+            val transcript = buildDiscussionTranscript(turns, personaNames, persona.id)
             val system = buildDiscussionSystemPrompt(
                 persona = persona,
                 book = book,
@@ -79,8 +80,7 @@ class AnnotationDiscussionService @Inject constructor(
                 transcript = transcript,
                 readingScope = scope
             )
-            val latestUser = replies.lastOrNull { it.personaId == null }?.contentMarkdown
-                ?: annotation.note.takeIf { annotation.personaId == null && it.isNotBlank() }
+            val latestUser = turns.lastOrNull { it.personaId == null }?.text
             val memorySettings = settingsRepository.companionMemorySettings.first()
             val memoryEnabled = persona.memoryEnabled && memorySettings.longTermEnabled
             val enabledTools = CompanionToolRouter.forDiscussion(memoryEnabled)
@@ -99,9 +99,12 @@ class AnnotationDiscussionService @Inject constructor(
                 ChatMessage(ChatRole.SYSTEM, system),
                 ChatMessage(
                     ChatRole.USER,
-                    (latestUser?.let { "用户在这段讨论里说：「$it」\n" }
-                        ?: "用户邀请你点评这段划线原文，没有附加想法。\n") +
-                        "请以${persona.name}的身份直接给出你在讨论串里的下一条发言。"
+                    buildDiscussionUserTurn(
+                        personaName = persona.name,
+                        latestUserText = latestUser,
+                        peerSpoke = turns.any { it.personaId != null && it.personaId != personaId },
+                        selfSpoke = turns.any { it.personaId == personaId }
+                    )
                 )
             )
             val text = StringBuilder()
@@ -220,21 +223,6 @@ internal fun extractAnchorNeighborhood(
     }
 }
 
-/** 讨论串转写成给模型看的对话记录；楼主层在最前。 */
-internal fun buildDiscussionTranscript(
-    annotation: AnnotationEntity,
-    replies: List<AnnotationReplyEntity>,
-    personaNames: Map<Long, String>
-): String = buildString {
-    val opener = annotation.personaId?.let { personaNames[it] ?: "已删除角色" } ?: "用户"
-    append(opener).append("：")
-    append(annotation.note.ifBlank { "（只划了这段原文，没有写想法）" })
-    replies.forEach { reply ->
-        val speaker = reply.personaId?.let { personaNames[it] ?: "已删除角色" } ?: "用户"
-        append('\n').append(speaker).append("：").append(reply.contentMarkdown)
-    }
-}
-
 internal fun buildDiscussionSystemPrompt(
     persona: PersonaEntity,
     book: BookEntity,
@@ -270,7 +258,8 @@ internal fun buildDiscussionSystemPrompt(
     append("\n\n目前的讨论串：\n").append(transcript)
     append("\n\n规则：")
     append("\n- 只围绕这段原文和它的上下文发言；上面的前文资料只是参考——只有能直接呼应、补全或延续这段原文的内容才用，与这段原文无关就忽略，不要展开无关的前文人物、承诺或剧情")
-    append("\n- 这是段落旁的讨论区，回复要短小、口语化、直接说观点，一般不超过 150 字")
+    append("\n- 这是段落旁的讨论区，回复要短小、口语化、直接说自己的想法，一般不超过 150 字")
+    append("\n- 讨论串里有其他角色发言。回应可以是同意、补充、延伸、共鸣，也可以是有实质依据的反驳——依据来自原文或人物设定上的矛盾；没有依据就不必反驳，不要为了显得有观点而反驳。同意也要落到具体的点，不要只附和")
     append("\n- 不用 Markdown 标题和列表，像聊天一样自然")
     if (!readingScope.isWholeBook) {
         append("\n- 只谈用户已读到的内容，绝不涉及第 ")
