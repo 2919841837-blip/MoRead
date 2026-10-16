@@ -25,8 +25,14 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
@@ -43,6 +49,10 @@ import com.mozhi.reader.ui.components.MoReadIcons
  * 而不像一个输入框；选词 AI 则直接裸用 `OutlinedTextField`，与全局玻璃语言完全不搭。
  *
  * 发送图标统一为 [MoReadIcons.Send]，圆形底上的居中向上箭头。
+ *
+ * 正文对外是 [String]（调用方只关心文字），光标位置由这里自己管：外部改写正文时（点「回复」
+ * 写进 `@某人 `、发送后清空）光标一律落到末尾。用 `BasicTextField` 的 String 重载会把旧的
+ * 光标位留在 0，接着打出来的字会插到 `@某人 ` 前面，把那句点名拆散。
  *
  * 导航栏内边距在这里统一处理（包在 Surface **外面**，胶囊本体不能被拉进导航栏区域）：
  * 键盘弹出时 `navigationBars.exclude(ime)` 归零，避免与调用点的 `imePadding()` 叠出一条空隙
@@ -104,9 +114,16 @@ internal fun ReaderComposerBar(
                             overflow = TextOverflow.Ellipsis
                         )
                     }
+                    // 光标跟着正文一起记：调用方改字（点名、清空）时把光标放到末尾，用户自己
+                    // 打字时原样保留他放的光标位。
+                    var value by remember { mutableStateOf(TextFieldValue(input, TextRange(input.length))) }
+                    if (value.text != input) value = TextFieldValue(input, TextRange(input.length))
                     BasicTextField(
-                        value = input,
-                        onValueChange = onInputChange,
+                        value = value,
+                        onValueChange = {
+                            value = it
+                            onInputChange(it.text)
+                        },
                         textStyle = MaterialTheme.typography.bodyMedium.copy(
                             color = palette.onBackground
                         ),

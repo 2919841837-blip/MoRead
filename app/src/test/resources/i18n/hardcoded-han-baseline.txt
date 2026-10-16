@@ -65,7 +65,7 @@ feature/listen/AudiobookScriptViewModel.kt	17
 feature/listen/ListenChapterGrouping.kt	3
 feature/listen/ListenPlayerScreen.kt	34
 feature/reader/AiRichText.kt	1
-feature/reader/AnnotationDiscussionSheet.kt	23
+feature/reader/AnnotationDiscussionSheet.kt	20
 feature/reader/AutoReadSession.kt	7
 feature/reader/BilingualReadingDialog.kt	22
 feature/reader/CompanionChatActions.kt	6

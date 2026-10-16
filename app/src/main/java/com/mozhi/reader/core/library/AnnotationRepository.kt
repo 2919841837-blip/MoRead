@@ -116,7 +116,16 @@ class AnnotationRepository @Inject constructor(
     }
 
     suspend fun delete(annotationId: Long) {
+        // 回复层与批注分两张表且无外键：删批注时一并清掉它的回复，不留孤儿行。
+        annotationDao.deleteRepliesForAnnotations(listOf(annotationId))
         annotationDao.delete(annotationId)
+    }
+
+    /** 删除整段讨论：同锚点的全部批注连同它们的回复一起删（讨论串整串消失）。 */
+    suspend fun deleteThread(annotationIds: List<Long>) {
+        if (annotationIds.isEmpty()) return
+        annotationDao.deleteRepliesForAnnotations(annotationIds)
+        annotationDao.deleteAnnotations(annotationIds)
     }
 
     /** 撤销批量删除：按原编号写回划线及其讨论串，删除前由调用方先取快照。 */

@@ -66,6 +66,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -73,8 +74,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mozhi.reader.ai.agent.DiscussionTurn
+import com.mozhi.reader.ai.agent.applyDiscussionMention
 import com.mozhi.reader.ai.agent.buildDiscussionTurns
+import com.mozhi.reader.ai.agent.discussionBodyWithoutMention
 import com.mozhi.reader.ai.agent.discussionRoster
+import com.mozhi.reader.ai.agent.leadingMentionPersonaId
 import com.mozhi.reader.core.database.entity.AnnotationColors
 import com.mozhi.reader.core.database.entity.AnnotationEntity
 import com.mozhi.reader.core.database.entity.AnnotationReplyEntity
@@ -362,6 +366,8 @@ internal fun AnnotationDiscussionSheet(
     onSend: (target: AnnotationEntity, text: String, respondPersonaId: Long?) -> Unit,
     onUpdateStyle: (annotationId: Long, style: AnnotationStyle, colorTag: String) -> Unit,
     onDeleteAnnotation: (Long) -> Unit,
+    /** 头部「删除批注」：这一段的全部批注（同锚点）与整串讨论一起删。 */
+    onDeleteThread: (List<Long>) -> Unit,
     onDeleteReply: (Long) -> Unit,
     onCancelStreaming: () -> Unit,
     onDismiss: () -> Unit,
@@ -369,6 +375,7 @@ internal fun AnnotationDiscussionSheet(
     onRememberRespondPersona: (Long) -> Unit = {}
 ) {
     var input by remember { mutableStateOf("") }
+    var confirmDeleteThread by remember { mutableStateOf(false) }
     // 点名默认落在「上次点过的角色 → 当前伴读角色 → 第一个角色」上，不必每次重选。
     // 取消点名（再点一次选中的胶囊）只对这一条发言生效，不写回记忆。
     var overridden by rememberSaveable { mutableStateOf(false) }
@@ -385,13 +392,12 @@ internal fun AnnotationDiscussionSheet(
     // 就是楼主，渲染在最外层。
     val turns = buildDiscussionTurns(annotations, replies)
     val talkCount = turns.size
-    // @点名 的染色名单与 SYSTEM 里那份花名册同源（同名角色同样带数字后缀），所以 @观澜2 也
-    // 染得上色。currentPersonaId 传一个不存在的 id：署名里的「（你）」与染色无关。
-    val mentionHandles = discussionRoster(
-        turns,
-        personas.associate { it.id to it.name },
-        currentPersonaId = -1L
-    ).map { it.handle }.toSet()
+    // @点名 的染色、解析与 SYSTEM 里那份花名册同源（同名角色同样带数字后缀），所以 @观澜2 也
+    // 染得上色、也点得中。currentPersonaId 传一个不存在的 id：署名里的「（你）」与点名无关。
+    val roster = discussionRoster(turns, personas.associate { it.id to it.name }, currentPersonaId = -1L)
+    val mentionHandles = roster.map { it.handle }.toSet()
+    val handleByPersonaId = roster.associate { it.personaId to it.handle }
+    val handleToPersonaId = roster.associate { it.handle to it.personaId }
     val listState = rememberLazyListState()
     val timeFormat = remember { SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()) }
     val focusRequester = remember { FocusRequester() }
@@ -416,12 +422,15 @@ internal fun AnnotationDiscussionSheet(
         val total = listState.layoutInfo.totalItemsCount
         if (total > 0) listState.scrollToItem(total - 1)
     }
-    val replyTo: (Long?) -> Unit = { personaId ->
-        if (personaId != null && personas.any { it.id == personaId }) {
-            overridden = true
-            overriddenTarget = personaId
-            onRememberRespondPersona(personaId)
-        }
+    // 点名：输入框里恒为一条 `@名字 `，写在最前面。点「回复」与改选胶囊都走这里——被点到的人
+    // 就是回话的人；再点一次已选中的胶囊 = 取消点名（这条只记想法，不叫人回复）。
+    // 花名册里没有的人（还没发过言、或角色已删除）不写 @，只改变由谁来答。
+    val setMention: (Long?) -> Unit = { personaId ->
+        val target = personaId?.takeIf { id -> personas.any { it.id == id } }
+        overridden = true
+        overriddenTarget = target
+        if (target != null) onRememberRespondPersona(target)
+        input = applyDiscussionMention(input, target?.let { handleByPersonaId[it] })
         runCatching { focusRequester.requestFocus() }
     }
 
@@ -441,9 +450,41 @@ internal fun AnnotationDiscussionSheet(
                 color = seal,
                 modifier = Modifier.weight(1f)
             )
+            // 「删除批注」：这一段（同锚点）的全部划线与批注、连同整串讨论一起删。
+            if (annotations.isNotEmpty()) {
+                TextButton(
+                    onClick = { confirmDeleteThread = true },
+                    modifier = Modifier.testTag("discussion-delete-thread")
+                ) {
+                    Text(stringResource(R.string.discussion_delete_annotation), color = MaterialTheme.colorScheme.error)
+                }
+            }
             TextButton(onClick = onDismiss) {
                 Text("完成", color = palette.onBackground, fontWeight = FontWeight.SemiBold)
             }
+        }
+
+        if (confirmDeleteThread) {
+            AlertDialog(
+                onDismissRequest = { confirmDeleteThread = false },
+                title = { Text(stringResource(R.string.discussion_delete_thread_title)) },
+                text = { Text(stringResource(R.string.discussion_delete_thread_body)) },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            confirmDeleteThread = false
+                            onDeleteThread(annotations.map { it.id })
+                            onDismiss()
+                        },
+                        modifier = Modifier.testTag("discussion-delete-confirm")
+                    ) {
+                        Text(stringResource(R.string.discussion_delete), color = MaterialTheme.colorScheme.error)
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { confirmDeleteThread = false }) { Text(stringResource(R.string.action_cancel)) }
+                }
+            )
         }
 
         if (quote.isNotBlank() && quoteSource != null) {
@@ -512,9 +553,13 @@ internal fun AnnotationDiscussionSheet(
                         timeText = timeFormat.format(Date(turn.createdAt)),
                         depth = if (isOpener) 0 else 1,
                         isOpener = isOpener,
-                        onReply = { replyTo(turn.personaId) },
+                        // 用户自己那条不给「回复」：@自己无意义；要点名别人用下面的胶囊。
+                        onReply = turn.personaId?.let { id -> { setMention(id) } },
                         onCopy = { clipboard.setText(AnnotatedString(turn.text)) },
-                        deleteLabel = if (turn is DiscussionTurn.FromAnnotation) "删除批注" else "删除",
+                        deleteLabel = stringResource(
+                            if (turn is DiscussionTurn.FromAnnotation) R.string.discussion_delete_annotation
+                            else R.string.discussion_delete
+                        ),
                         onDelete = {
                             when (turn) {
                                 is DiscussionTurn.FromAnnotation -> onDeleteAnnotation(turn.annotation.id)
@@ -593,15 +638,8 @@ internal fun AnnotationDiscussionSheet(
                 personas.forEach { persona ->
                     val selected = respondTarget == persona.id
                     Surface(
-                        onClick = {
-                            overridden = true
-                            if (selected) {
-                                overriddenTarget = null
-                            } else {
-                                overriddenTarget = persona.id
-                                onRememberRespondPersona(persona.id)
-                            }
-                        },
+                        // 选中即点名：输入框里的 @ 跟着换；再点一次取消点名。
+                        onClick = { setMention(if (selected) null else persona.id) },
                         shape = CircleShape,
                         color = if (selected) palette.background else Color.Transparent,
                         contentColor = if (selected) palette.onBackground else palette.muted,
@@ -645,7 +683,11 @@ internal fun AnnotationDiscussionSheet(
             palette = palette,
             onSend = {
                 val target = annotations.firstOrNull { it.personaId == null } ?: annotations.first()
-                onSend(target, input.trim(), respondTarget)
+                // 正文里点谁的名，就由谁来回应；正文只有点名、没说别的时按「请他写这段段评」发。
+                val mentioned = leadingMentionPersonaId(input, handleToPersonaId)
+                    ?.takeIf { id -> personas.any { it.id == id } }
+                val hasBody = discussionBodyWithoutMention(input).isNotBlank()
+                onSend(target, if (hasBody) input.trim() else "", mentioned ?: respondTarget)
                 input = ""
             },
             onStop = onCancelStreaming,
@@ -923,6 +965,7 @@ private fun DiscussionTurn.mediaJson(): String = when (this) {
  * 讨论串里的一条：挂在朱砂线上的头像、名字与身份、时间、宋体正文，下面一行「回复 / 复制」。
  * [depth] 为 1 时是回复：再缩进一级。讨论串是严格时间线，回复不按父子嵌套，所以不画接回上一条
  * 的折角线——回了谁由发言里的 @点名 自己说明。[isOpener] 标出楼主（讨论串第一条有内容的发言）。
+ * [onReply] 为空时不给「回复」这一项：用户自己那条不点自己的名。
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -932,7 +975,7 @@ private fun ThreadComment(
     palette: ReaderPalette,
     timeText: String,
     depth: Int,
-    onReply: () -> Unit,
+    onReply: (() -> Unit)?,
     onCopy: (() -> Unit)?,
     deleteLabel: String,
     onDelete: () -> Unit,
@@ -1015,7 +1058,7 @@ private fun ThreadComment(
                 modifier = Modifier.padding(top = 2.dp),
                 horizontalArrangement = Arrangement.spacedBy(2.dp)
             ) {
-                ThreadAction(stringResource(R.string.discussion_reply), palette, onReply)
+                onReply?.let { reply -> ThreadAction(stringResource(R.string.discussion_reply), palette, reply) }
                 onCopy?.let { copy -> ThreadAction(stringResource(R.string.discussion_copy), palette, copy) }
             }
             DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {

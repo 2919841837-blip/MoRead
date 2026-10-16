@@ -42,6 +42,13 @@ interface AnnotationDao {
     @Query("DELETE FROM annotations WHERE id = :annotationId")
     suspend fun delete(annotationId: Long)
 
+    @Query("DELETE FROM annotations WHERE id IN (:annotationIds)")
+    suspend fun deleteAnnotations(annotationIds: List<Long>)
+
+    /** 删除这些批注的整串讨论：回复层与批注分两张表且无外键，必须显式清，否则留下孤儿行。 */
+    @Query("DELETE FROM annotation_replies WHERE annotationId IN (:annotationIds)")
+    suspend fun deleteRepliesForAnnotations(annotationIds: List<Long>)
+
     @Query("SELECT * FROM annotations WHERE id = :annotationId")
     suspend fun getAnnotation(annotationId: Long): AnnotationEntity?
 

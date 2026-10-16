@@ -7,6 +7,7 @@ import com.mozhi.reader.core.database.entity.BookSourceType
 import com.mozhi.reader.core.database.entity.PersonaEntity
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -262,32 +263,30 @@ class AnnotationDiscussionContextTest {
         assertFalse(turn.contains("点评这段划线原文"))
     }
 
-    /** 谁都没开口：照旧请他点评这段原文。 */
+    /** 谁都没开口：这一条由他起头，等于写这段原文的段评。 */
     @Test
-    fun userTurnFallsBackToReviewingTheQuoteWhenNobodySpoke() {
+    fun userTurnAsksForTheOpeningAnnotationWhenNobodySpoke() {
         assertEquals(
-            "用户邀请你点评这段划线原文，没有附加想法。\n请以观澜的身份直接给出你在讨论串里的下一条发言。",
+            "用户请你为这段原文写一条段评，没有附加想法。\n请以观澜的身份写下你在讨论串里的这条段评。",
             buildDiscussionUserTurn("观澜", null, peerSpoke = false, selfSpoke = false)
         )
     }
 
-    /** 用户那条空划线早于组内所有发言：他自己就是楼主，发言写进 note。 */
+    /** 谁第一个对这段原文发表段评，谁就是楼主：空串里用户这句就是段评，写进 note。 */
     @Test
-    fun userSpeaksAsOpenerWhenOwnHighlightIsEarliest() {
+    fun userOpensTheThreadWhenNobodyHasSpokenYet() {
+        assertTrue(userSpeaksAsOpener(annotation(personaId = null, note = "", createdAt = 10), emptyList()))
+    }
+
+    /**
+     * 段评比划线晚落地是常态：AI 已经开口，用户这句就是回应，落回复层。
+     * 早先按 createdAt 比较的写法会在这里误判成楼主，把他的话顶到 AI 段评前面。
+     */
+    @Test
+    fun userNeverOpensOnceAnAiAnnotationHasSpoken() {
         val highlight = annotation(personaId = null, note = "", createdAt = 10)
         val turns = buildDiscussionTurns(
             listOf(annotation(personaId = 7, note = "AI 段评", id = 2, createdAt = 30)),
-            emptyList()
-        )
-        assertTrue(userSpeaksAsOpener(highlight, turns))
-    }
-
-    /** 组里已经有人更早开口：用户落回复层，不抢楼主位。 */
-    @Test
-    fun userFallsBackToRepliesWhenSomeoneSpokeEarlier() {
-        val highlight = annotation(personaId = null, note = "", createdAt = 10)
-        val turns = buildDiscussionTurns(
-            listOf(annotation(personaId = 7, note = "AI 段评", id = 2, createdAt = 5)),
             emptyList()
         )
         assertFalse(userSpeaksAsOpener(highlight, turns))
@@ -300,6 +299,34 @@ class AnnotationDiscussionContextTest {
         assertFalse(userSpeaksAsOpener(annotation(personaId = 7, note = ""), emptyList()))
     }
 
+    /** 点名写法：`@名字 ` 写在最前，恒为一个；改点别人只换这一个 token，不叠第二个。 */
+    @Test
+    fun mentionTokenIsTheOnlyOneAtTheHead() {
+        assertEquals("@林致 ", discussionMentionToken("林致"))
+        assertEquals("@林致 我觉得不是这样", applyDiscussionMention("我觉得不是这样", "林致"))
+        assertEquals("@观澜 我觉得不是这样", applyDiscussionMention("@林致 我觉得不是这样", "观澜"))
+        assertEquals("我觉得不是这样", applyDiscussionMention("@林致 我觉得不是这样", null))
+    }
+
+    /** 只有首部的 @ 才算点名，且名字必须在花名册里；手打名单外的 @ 只是正文。 */
+    @Test
+    fun leadingMentionOnlyCountsRosterNamesAtTheHead() {
+        val roster = mapOf("林致" to 7L, "用户" to null)
+        assertEquals(7L, leadingMentionPersonaId("@林致 你觉得呢", roster))
+        assertNull(leadingMentionPersonaId("我觉得不是这样", roster))
+        assertNull(leadingMentionPersonaId("@路人 你怎么看", roster))
+        assertNull(leadingMentionPersonaId("我觉得 @林致 说得对", roster))
+        assertNull(leadingMentionPersonaId("@林致你觉得呢", roster))
+    }
+
+    /** 只有点名、没说别的：这条只请对方接话，不把 `@名字` 当正文存进讨论串。 */
+    @Test
+    fun mentionAloneLeavesNoBody() {
+        assertEquals("", discussionBodyWithoutMention("@林致 "))
+        assertEquals("我觉得不是这样", discussionBodyWithoutMention("@林致 我觉得不是这样"))
+        assertEquals("", discussionBodyWithoutMention(""))
+    }
+
     /** 发言归属：回复挂在它所属的批注上，批注发言挂在自己。 */
     @Test
     fun turnsReportTheAnnotationTheyHangFrom() {
@@ -308,7 +335,7 @@ class AnnotationDiscussionContextTest {
         assertEquals(1L, DiscussionTurn.FromReply(reply(id = 9, personaId = null, content = "接着说")).ownerAnnotationId())
     }
 
-    /** 回应不是写段评：篇幅分档 + 交流感 + 点名规则都要落到提示词里。 */
+    /** 2 楼起是回应，不是写段评：篇幅、交流感、点名规则都要落到提示词里。 */
     @Test
     fun systemPromptKeepsRepliesShortAndTeachesNamedTargets() {
         val prompt = buildDiscussionSystemPrompt(
@@ -324,19 +351,22 @@ class AnnotationDiscussionContextTest {
         )
         assertTrue(prompt.contains("你是在跟人聊天，不是写段评"))
         assertTrue(prompt.contains("一般 30 字以内，最多不超过 60 字"))
-        assertTrue(prompt.contains("由你起头时才放宽到 150 字"))
         assertTrue(prompt.contains("不要凑成一段四平八稳的完整评论收尾"))
         assertTrue(prompt.contains("@名字"))
         assertTrue(prompt.contains("最多两三个"))
         assertTrue(prompt.contains("不必只接最后一条发言"))
+        assertTrue(prompt.contains("用户点了谁，就先回应谁"))
         assertTrue(prompt.contains("回应别人的一句话时不必检索"))
+        // 段评档的篇幅与口吻只属于楼主，不能漏到回应里。
+        assertFalse(prompt.contains("150 字以内"))
+        assertFalse(prompt.contains("等于你在这段原文旁写一条段评"))
         // 名单排在讨论串之前：模型先知道有谁在场，再读谁说过什么。
         assertTrue(prompt.indexOf("参与讨论的人") < prompt.indexOf("目前的讨论串"))
     }
 
-    /** 谁都没开口时不发名单行：那一条是模型起头点评原文，没有人可点。 */
+    /** 楼主档：谁都没开口时这一条是段评本体，篇幅与口吻走段评方向，不发名单、也不教点名。 */
     @Test
-    fun systemPromptOmitsRosterWhenNobodySpoke() {
+    fun systemPromptWritesAnAnnotationWhenNobodySpokeYet() {
         val prompt = buildDiscussionSystemPrompt(
             persona = persona(name = "观澜", personality = "", isRoleplay = true),
             book = book(lastReadChapterIndex = 5),
@@ -344,9 +374,17 @@ class AnnotationDiscussionContextTest {
             chapterNumber = 3,
             quote = "引文",
             neighborhood = "",
+            isOpeningThread = true,
             transcript = EMPTY_THREAD_TRANSCRIPT,
             readingScope = com.mozhi.reader.core.retrieval.ReadingScope.upto(5, 100)
         )
+        assertTrue(prompt.contains("等于你在这段原文旁写一条段评"))
+        assertTrue(prompt.contains("150 字以内"))
+        assertTrue(prompt.contains("不要写成客观的编辑评语"))
+        assertFalse(prompt.contains("你是在跟人聊天，不是写段评"))
+        assertFalse(prompt.contains("一般 30 字以内"))
+        assertFalse(prompt.contains("@名字"))
+        assertFalse(prompt.contains("回应别人的一句话时不必检索"))
         // 规则条里会提到「参与讨论的人」这四个字，这里判的是名单行本身有没有出现。
         assertFalse(prompt.contains("\n\n参与讨论的人："))
         assertTrue(prompt.contains("目前的讨论串：\n" + EMPTY_THREAD_TRANSCRIPT))

@@ -56,7 +56,7 @@ class AnnotationDiscussionViewModelTest {
         } finally { vm.viewModelScope.cancel(); Dispatchers.resetMain() }
     }
 
-    /** 组里已经有人更早开口：用户的话落回复层，挂在楼主那条批注下面。 */
+    /** 组里已经有人开口：用户的话落回复层，挂在楼主那条批注下面。 */
     @Test fun userReplyLandsUnderTheOpenerWhenSomeoneSpokeEarlier() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val repository = mockk<AnnotationRepository>()
@@ -74,6 +74,31 @@ class AnnotationDiscussionViewModelTest {
             vm.sendUserReply(7, highlight, " 我补一句 ", null)
             runCurrent()
             coVerify(exactly = 1) { repository.addReply(5, null, "我补一句", any(), any(), any(), any()) }
+            coVerify(exactly = 0) { repository.updateNote(any(), any()) }
+        } finally { vm.viewModelScope.cancel(); Dispatchers.resetMain() }
+    }
+
+    /**
+     * 段评比划线晚落地是常态：AI 已经当了楼主时，用户回一句不能升格成楼主。
+     * （写 note 沿用划线的 createdAt = 5，会把这句顶到 AI 段评 createdAt = 9 前面抢位。）
+     */
+    @Test fun userReplyNeverClaimsOpenerWhenTheAiCommentCameLater() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repository = mockk<AnnotationRepository>()
+        val service = mockk<AnnotationDiscussionService>()
+        val settings = mockk<ReaderSettingsRepository>()
+        every { settings.discussionPersonaId } returns flowOf(null)
+        val opener = AnnotationEntity(id = 5, bookId = 7, personaId = 3, chapterIndex = 2,
+            startCharOffset = 20, endCharOffset = 30, selectedText = "这是一段划线原文。",
+            note = "AI 段评", createdAt = 9)
+        val highlight = annotation.copy(createdAt = 5)
+        coEvery { repository.getAnnotations(any()) } returns listOf(highlight, opener)
+        coEvery { repository.addReply(5, null, "我不这么觉得", any(), any(), any(), any()) } returns 21
+        val vm = AnnotationDiscussionViewModel(repository, service, settings)
+        try {
+            vm.sendUserReply(7, highlight, "我不这么觉得", null)
+            runCurrent()
+            coVerify(exactly = 1) { repository.addReply(5, null, "我不这么觉得", any(), any(), any(), any()) }
             coVerify(exactly = 0) { repository.updateNote(any(), any()) }
         } finally { vm.viewModelScope.cancel(); Dispatchers.resetMain() }
     }

@@ -92,6 +92,7 @@ class AnnotationDiscussionService @Inject constructor(
                 recallBackground = recallContext.background,
                 // 谁都没开口时没有名单可给：那一条由模型起头，不涉及点名。
                 rosterLine = if (turns.isEmpty()) "" else buildDiscussionRosterLine(roster),
+                isOpeningThread = turns.isEmpty(),
                 transcript = transcript,
                 readingScope = scope
             )
@@ -251,6 +252,8 @@ internal fun buildDiscussionSystemPrompt(
     neighborhood: String,
     recallBackground: String = "",
     rosterLine: String = "",
+    /** 这一条是讨论串的第一条（没有人开口过）：走段评档，而不是 2 楼起的聊天档。 */
+    isOpeningThread: Boolean = false,
     transcript: String,
     readingScope: ReadingScope
 ): String = buildString {
@@ -281,17 +284,26 @@ internal fun buildDiscussionSystemPrompt(
     append("\n\n目前的讨论串：\n").append(transcript)
     append("\n\n规则：")
     append("\n- 只围绕这段原文和它的上下文发言；上面的前文资料只是参考——只有能直接呼应、补全或延续这段原文的内容才用，与这段原文无关就忽略，不要展开无关的前文人物、承诺或剧情")
-    append("\n- 这是段落旁的讨论区，你是在跟人聊天，不是写段评：回应别人时直接说自己的想法，一句话回过去就好，一般 30 字以内，最多不超过 60 字；只有讨论串里还没有别人开口、由你起头时才放宽到 150 字")
-    append("\n- 有来有回才叫讨论：接住具体的某一点（一处原文细节、一句质疑、一个补充），或者把话头递回去（问一句、换个角度）。不要复述原文，不要总结别人说过的话，不要把自己刚说过的再讲一遍，也不要凑成一段四平八稳的完整评论收尾")
-    append("\n- 讨论串里有其他角色发言时，你可以指名回应：在发言里用 @名字 点出对象，可以只点一个人，也可以一次点两三个人同时回应（最多两三个，别把所有人都点一遍）；不点也行。谁的话最值得回应就点谁，不必只接最后一条发言。只点上面「参与讨论的人」里出现过的名字，也不要点自己")
-    append("\n- 回应可以是同意、补充、延伸、共鸣，也可以是有实质依据的反驳——依据来自原文或人物设定上的矛盾；没有依据就不必反驳，不要为了显得有观点而反驳。同意也要落到具体的点，不要只附和")
-    append("\n- 不用 Markdown 标题和列表，像聊天一样自然")
+    if (isOpeningThread) {
+        // 楼主档：这一条就是这段原文的段评本体，按段评的方向写。
+        append("\n- 这条发言是讨论串的第一条，等于你在这段原文旁写一条段评：用你自己的口吻和性格写，可以感慨、吐槽、提问或联想，一两句话（150 字以内）就够；不要写成客观的编辑评语，也不要复述或概括这段原文")
+    } else {
+        append("\n- 这是段落旁的讨论区，你是在跟人聊天，不是写段评：回应别人时直接说自己的想法，一句话回过去就好，一般 30 字以内，最多不超过 60 字")
+        append("\n- 有来有回才叫讨论：接住具体的某一点（一处原文细节、一句质疑、一个补充），或者把话头递回去（问一句、换个角度）。不要复述原文，不要总结别人说过的话，不要把自己刚说过的再讲一遍，也不要凑成一段四平八稳的完整评论收尾")
+        append("\n- 讨论串里有其他角色发言时，你可以指名回应：在发言里用 @名字 点出对象，可以只点一个人，也可以一次点两三个人同时回应（最多两三个，别把所有人都点一遍）；不点也行。谁的话最值得回应就点谁，不必只接最后一条发言。只点上面「参与讨论的人」里出现过的名字，也不要点自己")
+        append("\n- 发言里带 @名字 就是在点那个人的名，用户的发言也一样：用户点了谁，就先回应谁")
+        append("\n- 回应可以是同意、补充、延伸、共鸣，也可以是有实质依据的反驳——依据来自原文或人物设定上的矛盾；没有依据就不必反驳，不要为了显得有观点而反驳。同意也要落到具体的点，不要只附和")
+    }
+    append("\n- 不用 Markdown 标题和列表，像说话一样自然")
     if (!readingScope.isWholeBook) {
         append("\n- 只谈用户已读到的内容，绝不涉及第 ")
             .append(readingScope.maxChapterIndex + 1)
             .append(" 章未读部分及之后的剧情；以工具提供的可读范围为准")
     }
-    append("\n- 涉及前文人物、承诺、伏笔或因果而当前材料不足时，先用 search_book / grep_book 查找，再用 read_book_section 核对。检索范围覆盖所有允许读取的章节，不限最近几章；不能把少量命中当作完整结论；回应别人的一句话时不必检索，除非你要断言的正是前文事实")
+    append("\n- 涉及前文人物、承诺、伏笔或因果而当前材料不足时，先用 search_book / grep_book 查找，再用 read_book_section 核对。检索范围覆盖所有允许读取的章节，不限最近几章；不能把少量命中当作完整结论")
+    if (!isOpeningThread) {
+        append("；回应别人的一句话时不必检索，除非你要断言的正是前文事实")
+    }
     if (!persona.isRoleplay) {
         append("\n- 你是阅读助手：观点务实、聚焦文本本身")
     }

@@ -94,9 +94,10 @@ class AnnotationDiscussionViewModel @Inject constructor(
     }
 
     /**
-     * 用户发言：落点由时间线定——只有用户自己那条空批注不晚于组内任何发言时，他才算第一个
-     * 开口的人，写进楼主层（note）；否则落回复层，挂在楼主那条批注下面。
-     * [respondPersonaId] 非空时随后让该角色应答。
+     * 用户发言：谁第一个对这段原文发表段评，谁就是楼主——串里还完全没人开口时，他这句话就是
+     * 段评，写进楼主层（note，照旧进「想法」）；已经有人开口过，他就是在回应，落回复层并挂在
+     * 楼主那条批注下面（与 AI 回复同构，不许再升格成楼主）。
+     * [respondPersonaId] 非空时随后让该角色应答——它就是被用户 @ 到的那个人。
      */
     fun sendUserReply(
         bookId: Long,

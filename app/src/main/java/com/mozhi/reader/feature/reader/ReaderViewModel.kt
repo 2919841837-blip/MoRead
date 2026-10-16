@@ -1311,6 +1311,12 @@ class ReaderViewModel @Inject constructor(
         viewModelScope.launch { annotationRepository.delete(annotationId) }
     }
 
+    /** 弹层头部「删除批注」：这一段的全部批注（同锚点）连同整串讨论一起删。 */
+    fun deleteAnnotationThread(annotationIds: List<Long>) {
+        if (annotationIds.isEmpty()) return
+        viewModelScope.launch { annotationRepository.deleteThread(annotationIds) }
+    }
+
     /** Saves an edited selection back into the local book text and reloads the visible window. */
     fun editSelectedText(chapterIndex: Int, range: IntRange, replacement: String) {
         if (!sourceEditAllowed()) return

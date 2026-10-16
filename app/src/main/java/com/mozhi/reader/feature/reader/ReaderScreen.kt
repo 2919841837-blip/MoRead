@@ -1509,6 +1509,7 @@ fun ReaderScreen(
                             },
                             onUpdateStyle = viewModel::updateAnnotationStyle,
                             onDeleteAnnotation = viewModel::deleteAnnotation,
+                            onDeleteThread = viewModel::deleteAnnotationThread,
                             onDeleteReply = discussionViewModel::deleteReply,
                             onCancelStreaming = discussionViewModel::cancelStreaming,
                             onDismiss = {

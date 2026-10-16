@@ -652,8 +652,13 @@
     <string name="discussion_placeholder">Write your thoughts…</string>
     <string name="discussion_role_me">Reader</string>
     <string name="discussion_role_persona">Persona</string>
+    <string name="discussion_role_opener">OP</string>
     <string name="discussion_reply">Reply</string>
     <string name="discussion_copy">Copy</string>
+    <string name="discussion_delete_annotation">Delete annotation</string>
+    <string name="discussion_delete">Delete</string>
+    <string name="discussion_delete_thread_title">Delete this annotation?</string>
+    <string name="discussion_delete_thread_body">Every highlight and annotation under this passage, along with the whole discussion, will be deleted. This cannot be undone.</string>
     <string name="annotation_style_highlight">Highlight</string>
     <string name="annotation_style_underline">Underline</string>
     <string name="annotation_style_wavy">Wavy</string>

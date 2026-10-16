@@ -61,16 +61,44 @@ internal fun DiscussionTurn.ownerAnnotationId(): Long = when (this) {
 }
 
 /**
- * 用户这条发言写进楼主层（自己批注的 note）还是落回复层。
+ * 用户这条发言写进楼主层（自己批注的 note）还是落回复层：**谁第一个对这段原文发表段评，谁就是楼主**。
  *
- * 只有「用户自己那条空批注不晚于组内任何发言」时才写楼主层——写 note 不改 createdAt，
- * 所以判定和「写完之后再排一遍时间线」是同一个结果，不会刚说完就发现自己的话排在别人
- * 下面。用户已经有想法、或批注属于角色、或组里已经有人更早开口，都落回复层。
+ * 只有这一串还完全没人开口（[turns] 为空——没有 AI 段评，也没有任何一条回复）时，用户这句话才是
+ * 段评：写进 note、占楼主位、照旧进「想法」。一旦有人开口过，他就是在回应，一律落回复层。
+ *
+ * 判定只看「此刻有没有人说过话」，不比时间戳。写 note 不改 createdAt，所以一旦放用户写 note，
+ * 他这句话就落在自己那条划线的创建时间上——而划线通常早于 AI 段评。早先按 `createdAt` 比较的写法
+ * 会因此把「已经有 AI 当楼主」的串里的用户回应误判成楼主，把它顶到 AI 段评前面。
  */
 internal fun userSpeaksAsOpener(target: AnnotationEntity, turns: List<DiscussionTurn>): Boolean =
     target.personaId == null &&
         target.note.isBlank() &&
-        turns.none { it.createdAt < target.createdAt }
+        turns.isEmpty()
+
+/** 点名的写法：`@名字 `（名字用花名册的 handle），用户一次只能点一个人。 */
+internal fun discussionMentionToken(handle: String): String = "@" + handle + " "
+
+/** 首部点名：`@名字` 开头，后面跟空白或到此为止。只有开头那一个算点名，中间手打的不算。 */
+private val LEADING_MENTION = Regex("^@[\\p{L}\\p{N}]{1,16}(?=\\s|$)")
+
+/** 去掉首部点名后的正文；只用来判断「除了点名还有没有说别的」。 */
+internal fun discussionBodyWithoutMention(input: String): String =
+    input.replaceFirst(LEADING_MENTION, "").removePrefix(" ")
+
+/** 换掉首部点名：[handle] 为 null 就删掉点名，正文其余部分原样保留。 */
+internal fun applyDiscussionMention(input: String, handle: String?): String {
+    val body = discussionBodyWithoutMention(input)
+    return if (handle == null) body else discussionMentionToken(handle) + body
+}
+
+/**
+ * 用户这句话点的是谁：只看首部的 `@名字`，且名字必须在 [handleToPersonaId]（花名册）里。
+ * 手打一个名单外的 @ 不算点名——那只是正文，不改变谁来回应。
+ */
+internal fun leadingMentionPersonaId(input: String, handleToPersonaId: Map<String, Long?>): Long? {
+    val handle = LEADING_MENTION.find(input)?.value?.removePrefix("@") ?: return null
+    return if (handleToPersonaId.containsKey(handle)) handleToPersonaId[handle] else null
+}
 
 internal const val USER_SPEAKER_NAME = "用户"
 internal const val DELETED_PERSONA_NAME = "已删除角色"
@@ -150,7 +178,8 @@ internal fun buildDiscussionTranscript(
  * [buildDiscussionTurns] 的结果推出来。
  *
  * 用户说过话时以他的话为准（旧行为）；只有同伴说过 → 请他接同伴的点（可以点名回应任何一个人，
- * 不必只接最后一条）；只有自己说过 → 请他补新东西而不是把点评重讲一遍；谁都没说过 → 照旧点评原文。
+ * 不必只接最后一条）；只有自己说过 → 请他补新东西而不是把点评重讲一遍；谁都没说过 → 由他起头写
+ * 这条段评（篇幅与口吻走段评档，见 buildDiscussionSystemPrompt 的 isOpeningThread）。
  */
 internal fun buildDiscussionUserTurn(
     personaName: String,
@@ -169,6 +198,6 @@ internal fun buildDiscussionUserTurn(
         "用户没有补充想法，讨论串里最后是你自己的发言。\n" +
             "请以${personaName}的身份补充一点前面没说到的新东西，不要重复上面说过的话。"
     else ->
-        "用户邀请你点评这段划线原文，没有附加想法。\n" +
-            "请以${personaName}的身份直接给出你在讨论串里的下一条发言。"
+        "用户请你为这段原文写一条段评，没有附加想法。\n" +
+            "请以${personaName}的身份写下你在讨论串里的这条段评。"
 }
