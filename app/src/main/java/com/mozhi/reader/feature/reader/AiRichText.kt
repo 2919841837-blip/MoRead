@@ -4,10 +4,14 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.platform.UriHandler
 import androidx.compose.ui.text.TextLinkStyles
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import com.mikepenz.markdown.m3.Markdown
@@ -18,19 +22,32 @@ import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
 import org.jsoup.nodes.Node
 import org.jsoup.nodes.TextNode
+import java.net.URLEncoder
 
 /**
  * AI 气泡统一富文本：Markdown 原样渲染；检测到 HTML 时先做白名单语义转换再交给
  * Compose Markdown，绝不把模型输出交给可执行脚本的 WebView。
+ *
+ * [mentions] 非空时启用讨论串的 @点名 染色：改写成链接的在场者名字按朱砂色渲染（见
+ * [AiRichTextNormalizer.linkifyMentions]），并且这一段里的链接不再跳转——点名只是人名，
+ * 不是可点的目标。其余调用点不传，行为与从前一致。
  */
 @Composable
 internal fun AiRichText(
     content: String,
     palette: ReaderPalette,
     modifier: Modifier = Modifier,
-    parseSynchronously: Boolean = false
+    parseSynchronously: Boolean = false,
+    mentions: Set<String> = emptySet()
 ) {
-    val safeMarkdown = remember(content) { AiRichTextNormalizer.toMarkdown(content) }
+    val safeMarkdown = remember(content, mentions) {
+        AiRichTextNormalizer.linkifyMentions(AiRichTextNormalizer.toMarkdown(content), mentions)
+    }
+    val linkTextStyle = if (mentions.isEmpty()) {
+        MaterialTheme.typography.bodyMedium.copy(color = palette.accent, textDecoration = TextDecoration.Underline)
+    } else {
+        MaterialTheme.typography.bodyMedium.copy(color = palette.seal, fontWeight = FontWeight.Medium)
+    }
     val colors = markdownColor(
             text = palette.onBackground,
             codeBackground = palette.onBackground.copy(alpha = 0.08f),
@@ -50,19 +67,33 @@ internal fun AiRichText(
             bullet = MaterialTheme.typography.bodyMedium,
             list = MaterialTheme.typography.bodyMedium,
             quote = MaterialTheme.typography.bodyMedium,
-            textLink = TextLinkStyles(
-                style = MaterialTheme.typography.bodyMedium
-                    .copy(color = palette.accent, textDecoration = TextDecoration.Underline)
-                    .toSpanStyle()
-            )
+            textLink = TextLinkStyles(style = linkTextStyle.toSpanStyle())
         )
-    if (parseSynchronously) {
-        // Bounded, completed dictionary entries need their full height on the first frame:
-        // an asynchronous empty/loading frame clamps a restored ScrollState back to zero.
-        val parsed = remember(safeMarkdown) { parseMarkdown(safeMarkdown) }
-        Markdown(state = parsed, colors = colors, typography = typography, modifier = modifier)
-    } else {
-        Markdown(content = safeMarkdown, colors = colors, typography = typography, modifier = modifier)
+    // 点名伪装成链接只是为了拿到一段可着色的行内 span；点它没有任何去处，所以拦下除
+    // http(s)/mailto 以外的所有 scheme，避免以 uri 方式打开 "mor-mention:" 抛异常。
+    val outerUriHandler = LocalUriHandler.current
+    val mentionUriHandler = remember(outerUriHandler) {
+        object : UriHandler {
+            override fun openUri(uri: String) {
+                if (uri.startsWith("http://", true) || uri.startsWith("https://", true) ||
+                    uri.startsWith("mailto:", true)
+                ) {
+                    runCatching { outerUriHandler.openUri(uri) }
+                }
+            }
+        }
+    }
+    CompositionLocalProvider(
+        LocalUriHandler provides if (mentions.isEmpty()) outerUriHandler else mentionUriHandler
+    ) {
+        if (parseSynchronously) {
+            // Bounded, completed dictionary entries need their full height on the first frame:
+            // an asynchronous empty/loading frame clamps a restored ScrollState back to zero.
+            val parsed = remember(safeMarkdown) { parseMarkdown(safeMarkdown) }
+            Markdown(state = parsed, colors = colors, typography = typography, modifier = modifier)
+        } else {
+            Markdown(content = safeMarkdown, colors = colors, typography = typography, modifier = modifier)
+        }
     }
 }
 
@@ -75,7 +106,8 @@ internal fun AiRichText(
 internal fun StreamingAiRichText(
     content: String,
     palette: ReaderPalette,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    mentions: Set<String> = emptySet()
 ) {
     val chunks = remember(content) {
         if (AiRichTextNormalizer.containsHtml(content)) {
@@ -85,12 +117,12 @@ internal fun StreamingAiRichText(
         }
     }
     if (chunks.size <= 1) {
-        AiRichText(content = content, palette = palette, modifier = modifier)
+        AiRichText(content = content, palette = palette, modifier = modifier, mentions = mentions)
     } else {
         Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
             chunks.forEachIndexed { index, chunk ->
                 key(index) {
-                    AiRichText(content = chunk, palette = palette)
+                    AiRichText(content = chunk, palette = palette, mentions = mentions)
                 }
             }
         }
@@ -150,6 +182,39 @@ internal object AiRichTextNormalizer {
                 .replace(excessiveBlankLines, "\n\n")
                 .trim()
         )
+    }
+
+    // 点名：@ 后面跟 1-16 个字母/数字/汉字。名字只会长这样，不必更宽松。
+    private val mentionName = Regex("@([\\p{L}\\p{N}]{1,16})")
+
+    /**
+     * 把讨论串里 @到在场者（[handles]）的名字改写成 Markdown 链接，渲染时按朱砂色染色
+     * （见 AiRichText 的 mentions 参数）。名单外的 @xxx 原样保留——模型可能点了不在场的人，
+     * 宁可让它显示成普通文字，也不改写模型写下的正文；行内代码里的 @ 不算点名。
+     */
+    fun linkifyMentions(source: String, handles: Set<String>): String {
+        if (source.isEmpty() || handles.isEmpty() || '@' !in source) return source
+        val out = StringBuilder(source.length)
+        var last = 0
+        codeSpan.findAll(source).forEach { match ->
+            out.append(linkifyHandles(source.substring(last, match.range.first), handles))
+            out.append(match.value)
+            last = match.range.last + 1
+        }
+        out.append(linkifyHandles(source.substring(last), handles))
+        return out.toString()
+    }
+
+    private fun linkifyHandles(text: String, handles: Set<String>): String {
+        if ('@' !in text) return text
+        return mentionName.replace(text) { match ->
+            val handle = match.groupValues[1]
+            if (handle in handles) {
+                "[@" + handle + "](mor-mention:" + URLEncoder.encode(handle, "UTF-8") + ")"
+            } else {
+                match.value
+            }
+        }
     }
 
     /**

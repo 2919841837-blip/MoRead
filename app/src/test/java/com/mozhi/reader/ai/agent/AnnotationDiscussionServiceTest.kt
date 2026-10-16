@@ -119,9 +119,13 @@ class AnnotationDiscussionServiceTest {
         // 空 note 的批注不入线：第一个开口的角色就是楼主，并被标成「其他角色」。
         assertTrue(history.captured.first().content.orEmpty()
             .contains("目前的讨论串：\n已删除角色（其他角色）：这里埋了伏笔"))
+        // 在场名单排在讨论串之前，是模型点名时的合法名单。
+        assertTrue(history.captured.first().content.orEmpty()
+            .contains("参与讨论的人：已删除角色（其他角色）"))
         val userTurn = history.captured.last().content.orEmpty()
         assertTrue(userTurn.contains("已经有其他角色的发言"))
-        assertTrue(userTurn.contains("先明确你在回应谁的哪一点"))
+        assertTrue(userTurn.contains("一句话就够"))
+        assertTrue(userTurn.contains("不必只接最后一条"))
     }
 
     /** 整组时间线：同锚点的 AI 段评更早落地时它占楼主位，本次发言挂在它下面而不是用户那条划线。 */

@@ -74,6 +74,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mozhi.reader.ai.agent.DiscussionTurn
 import com.mozhi.reader.ai.agent.buildDiscussionTurns
+import com.mozhi.reader.ai.agent.discussionRoster
 import com.mozhi.reader.core.database.entity.AnnotationColors
 import com.mozhi.reader.core.database.entity.AnnotationEntity
 import com.mozhi.reader.core.database.entity.AnnotationReplyEntity
@@ -384,6 +385,13 @@ internal fun AnnotationDiscussionSheet(
     // 就是楼主，渲染在最外层。
     val turns = buildDiscussionTurns(annotations, replies)
     val talkCount = turns.size
+    // @点名 的染色名单与 SYSTEM 里那份花名册同源（同名角色同样带数字后缀），所以 @观澜2 也
+    // 染得上色。currentPersonaId 传一个不存在的 id：署名里的「（你）」与染色无关。
+    val mentionHandles = discussionRoster(
+        turns,
+        personas.associate { it.id to it.name },
+        currentPersonaId = -1L
+    ).map { it.handle }.toSet()
     val listState = rememberLazyListState()
     val timeFormat = remember { SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()) }
     val focusRequester = remember { FocusRequester() }
@@ -522,7 +530,7 @@ internal fun AnnotationDiscussionSheet(
                                 aiGenerated = turn.personaId != null,
                                 palette = palette
                             )
-                            ThreadText(turn.text, palette)
+                            ThreadText(turn.text, palette, mentionHandles)
                             AnnotationMediaContent(
                                 media = AnnotationMedia.decode(turn.mediaJson()),
                                 text = turn.text,
@@ -550,6 +558,7 @@ internal fun AnnotationDiscussionSheet(
                         streaming = active,
                         personas = personas,
                         palette = palette,
+                        mentions = mentionHandles,
                         onCancel = onCancelStreaming
                     )
                 }
@@ -884,13 +893,13 @@ private fun InkDot(color: Color, selected: Boolean, palette: ReaderPalette, onCl
 
 /** 讨论正文：界面黑体、比正文略大一档的行高——它是对话，不是书。原文那段才用宋体。 */
 @Composable
-private fun ThreadText(content: String, palette: ReaderPalette) {
+private fun ThreadText(content: String, palette: ReaderPalette, mentions: Set<String> = emptySet()) {
     val base = MaterialTheme.typography
     val talk = remember(base) {
         base.copy(bodyMedium = base.bodyMedium.copy(fontSize = 15.sp, lineHeight = 24.sp))
     }
     MaterialTheme(colorScheme = MaterialTheme.colorScheme, shapes = MaterialTheme.shapes, typography = talk) {
-        AiRichText(content = content, palette = palette)
+        AiRichText(content = content, palette = palette, mentions = mentions)
     }
 }
 
@@ -912,8 +921,8 @@ private fun DiscussionTurn.mediaJson(): String = when (this) {
 
 /**
  * 讨论串里的一条：挂在朱砂线上的头像、名字与身份、时间、宋体正文，下面一行「回复 / 复制」。
- * [depth] 为 1 时是回复：再缩进一级，用一段折角线接回上一条。[isOpener] 标出楼主（讨论串
- * 第一条有内容的发言）。
+ * [depth] 为 1 时是回复：再缩进一级。讨论串是严格时间线，回复不按父子嵌套，所以不画接回上一条
+ * 的折角线——回了谁由发言里的 @点名 自己说明。[isOpener] 标出楼主（讨论串第一条有内容的发言）。
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -932,7 +941,6 @@ private fun ThreadComment(
 ) {
     var menuOpen by remember { mutableStateOf(false) }
     val seal = palette.seal
-    val muted = palette.muted
     val authorName = authorId?.let { id ->
         personas.firstOrNull { it.id == id }?.name ?: "已删除角色"
     } ?: "我"
@@ -950,18 +958,6 @@ private fun ThreadComment(
                         end = Offset(THREAD_HOOK_END.toPx(), cy),
                         strokeWidth = 1.5.dp.toPx()
                     )
-                } else {
-                    // 折角线：从上一条头像正下方垂下，圆角转向这条回复的头像。
-                    val x = THREAD_CONTENT_START.toPx() + 15.dp.toPx()
-                    val end = start.toPx() - 4.dp.toPx()
-                    val r = 7.dp.toPx()
-                    val path = Path().apply {
-                        moveTo(x, 0f)
-                        lineTo(x, cy - r)
-                        quadraticTo(x, cy, x + r, cy)
-                        lineTo(end, cy)
-                    }
-                    drawPath(path, muted.copy(alpha = 0.45f), style = Stroke(1.2.dp.toPx()))
                 }
             }
             .combinedClickable(onClick = {}, onLongClick = { menuOpen = true })
@@ -1193,6 +1189,7 @@ private fun StreamingReplyRow(
     streaming: DiscussionStreaming,
     personas: List<PersonaEntity>,
     palette: ReaderPalette,
+    mentions: Set<String>,
     onCancel: () -> Unit
 ) {
     val persona = personas.firstOrNull { it.id == streaming.personaId }
@@ -1239,7 +1236,8 @@ private fun StreamingReplyRow(
                     StreamingAiRichText(
                         content = streaming.text,
                         palette = palette,
-                        modifier = Modifier.padding(top = 2.dp)
+                        modifier = Modifier.padding(top = 2.dp),
+                        mentions = mentions
                     )
                 }
             }

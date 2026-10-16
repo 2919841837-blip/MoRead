@@ -140,4 +140,45 @@ class AiRichTextNormalizerTest {
     fun `公式 - 常见算符与文本包装`() {
         assertEquals("A ⊆ B，共 3× 4 项", AiRichTextNormalizer.latexToPlainText("A \\subseteq B\\text{，共 }3\\times 4\\text{ 项}"))
     }
+
+    @Test
+    fun `点名 - 在场者改成链接，名单外与未点名的原样`() {
+        val output = AiRichTextNormalizer.linkifyMentions(
+            "@观澜 我倒觉得雪是压着他的，@林致 你怎么看？@顾衡 不在场",
+            handles = setOf("观澜", "林致", "用户")
+        )
+        assertTrue(output.contains("[@观澜](mor-mention:%E8%A7%82%E6%BE%9C)"))
+        assertTrue(output.contains("[@林致](mor-mention:"))
+        // 名单外的名字不改写：宁可显示成普通文字，也不动模型写下的正文。
+        assertTrue(output.contains("@顾衡 不在场"))
+        assertFalse(output.contains("[@顾衡]"))
+    }
+
+    @Test
+    fun `点名 - 数字后缀优先吃进名字，不会漏出半截`() {
+        val output = AiRichTextNormalizer.linkifyMentions(
+            "@观澜2 在吗",
+            handles = setOf("观澜", "观澜2")
+        )
+        assertTrue(output.contains("[@观澜2](mor-mention:"))
+        assertFalse(output.contains("[@观澜]2"))
+    }
+
+    @Test
+    fun `点名 - 行内代码里的 at 不算点名`() {
+        val output = AiRichTextNormalizer.linkifyMentions(
+            "写法是 `@观澜`，不是 @观澜",
+            handles = setOf("观澜")
+        )
+        assertTrue(output.contains("`@观澜`"))
+        assertTrue(output.contains("[@观澜](mor-mention:"))
+    }
+
+    @Test
+    fun `点名 - 没有名单或没有 at 时原样返回`() {
+        val source = "@观澜 在吗"
+        assertSame(source, AiRichTextNormalizer.linkifyMentions(source, emptySet()))
+        val plain = "这段话里没有点名。"
+        assertSame(plain, AiRichTextNormalizer.linkifyMentions(plain, setOf("观澜")))
+    }
 }

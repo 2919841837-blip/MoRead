@@ -140,7 +140,7 @@ class AnnotationDiscussionContextTest {
         assertFalse(transcript.contains("（你）"))
     }
 
-    /** 两个角色同名时按 personaId 判定：同伴不能因为重名被误标成「你」。 */
+    /** 两个角色同名时按 personaId 判定：同伴不能因为重名被误标成「你」，并且按发言先后加后缀去重。 */
     @Test
     fun transcriptMarksByPersonaIdNotName() {
         val transcript = transcript(
@@ -150,7 +150,7 @@ class AnnotationDiscussionContextTest {
             currentPersonaId = 8
         )
         assertEquals(
-            "观澜（其他角色）：重名的楼主\n观澜（你）：重名的回复",
+            "观澜（其他角色）：重名的楼主\n观澜2（你）：重名的回复",
             transcript
         )
     }
@@ -182,6 +182,57 @@ class AnnotationDiscussionContextTest {
         assertEquals("观澜（你）：我先划的", transcript)
     }
 
+    /** 花名册：按首次发言顺序列人，署名与 @点名 用的名字同源且唯一。 */
+    @Test
+    fun rosterListsSpeakersInFirstSpeechOrderWithUniqueHandles() {
+        val turns = buildDiscussionTurns(
+            annotations = listOf(annotation(personaId = 7, note = "我先说", createdAt = 0)),
+            replies = listOf(
+                reply(id = 1, personaId = 8, content = "我跟一句", createdAt = 1),
+                reply(id = 2, personaId = null, content = "我也来", createdAt = 2),
+                reply(id = 3, personaId = 99, content = "被删角色", createdAt = 3)
+            )
+        )
+        val roster = discussionRoster(turns, mapOf(7L to "观澜", 8L to "观澜"), currentPersonaId = 8)
+        assertEquals(listOf("观澜", "观澜2", "用户", "已删除角色"), roster.map { it.handle })
+        assertEquals(
+            listOf("观澜（其他角色）", "观澜2（你）", "用户", "已删除角色（其他角色）"),
+            roster.map { it.label }
+        )
+        assertEquals(listOf(false, true, false, false), roster.map { it.isSelf })
+    }
+
+    /** 同一角色连发多条只占一个名字：不能把自己写成「观澜」「观澜2」两个可点的人。 */
+    @Test
+    fun rosterCountsEachSpeakerOnce() {
+        val turns = buildDiscussionTurns(
+            annotations = listOf(annotation(personaId = 7, note = "第一句", createdAt = 0)),
+            replies = listOf(
+                reply(id = 1, personaId = 7, content = "第二句", createdAt = 1),
+                reply(id = 2, personaId = 7, content = "第三句", createdAt = 2)
+            )
+        )
+        val roster = discussionRoster(turns, mapOf(7L to "观澜"), currentPersonaId = 8)
+        assertEquals(listOf("观澜"), roster.map { it.handle })
+        assertEquals("观澜（其他角色）", roster.single().label)
+    }
+
+    /** 谁都没开口时没有名单可给（那一条由模型起头点评原文，不涉及点名）。 */
+    @Test
+    fun rosterIsEmptyWhenNobodySpoke() {
+        assertTrue(discussionRoster(emptyList(), emptyMap(), currentPersonaId = 7).isEmpty())
+    }
+
+    @Test
+    fun rosterLineListsEverySpeakersLabel() {
+        val turns = buildDiscussionTurns(
+            annotations = listOf(annotation(personaId = 7, note = "我先说", createdAt = 0)),
+            replies = listOf(reply(id = 1, personaId = null, content = "我也来", createdAt = 1))
+        )
+        val line = buildDiscussionRosterLine(discussionRoster(turns, mapOf(7L to "观澜"), currentPersonaId = 8))
+        assertEquals("参与讨论的人：观澜（其他角色）、用户", line)
+    }
+
     /** 用户说过话：以他的话为准，与旧行为一致。 */
     @Test
     fun userTurnQuotesUserWhenUserSpoke() {
@@ -191,12 +242,14 @@ class AnnotationDiscussionContextTest {
         )
     }
 
-    /** 用户留空、同伴说过话：请他接同伴的点，而不是让他独立点评原文。 */
+    /** 用户留空、同伴说过话：请他一句话接同伴的点（可以点名任何人），而不是独立点评原文。 */
     @Test
     fun userTurnTellsModelToPickUpAPeersPointWhenUserStayedSilent() {
         val turn = buildDiscussionUserTurn("观澜", null, peerSpoke = true, selfSpoke = false)
         assertTrue(turn.contains("已经有其他角色的发言"))
-        assertTrue(turn.contains("先明确你在回应谁的哪一点"))
+        assertTrue(turn.contains("一句话就够"))
+        assertTrue(turn.contains("@名字"))
+        assertTrue(turn.contains("不必只接最后一条"))
         assertFalse(turn.contains("点评这段划线原文"))
     }
 
@@ -253,6 +306,50 @@ class AnnotationDiscussionContextTest {
         val opener = annotation(personaId = 7, note = "AI 段评", id = 2)
         assertEquals(2L, DiscussionTurn.FromAnnotation(opener).ownerAnnotationId())
         assertEquals(1L, DiscussionTurn.FromReply(reply(id = 9, personaId = null, content = "接着说")).ownerAnnotationId())
+    }
+
+    /** 回应不是写段评：篇幅分档 + 交流感 + 点名规则都要落到提示词里。 */
+    @Test
+    fun systemPromptKeepsRepliesShortAndTeachesNamedTargets() {
+        val prompt = buildDiscussionSystemPrompt(
+            persona = persona(name = "观澜", personality = "", isRoleplay = true),
+            book = book(lastReadChapterIndex = 5),
+            chapterTitle = null,
+            chapterNumber = 3,
+            quote = "引文",
+            neighborhood = "附近原文",
+            rosterLine = "参与讨论的人：用户、观澜（你）、林致（其他角色）",
+            transcript = "用户：？",
+            readingScope = com.mozhi.reader.core.retrieval.ReadingScope.upto(5, 100)
+        )
+        assertTrue(prompt.contains("你是在跟人聊天，不是写段评"))
+        assertTrue(prompt.contains("一般 30 字以内，最多不超过 60 字"))
+        assertTrue(prompt.contains("由你起头时才放宽到 150 字"))
+        assertTrue(prompt.contains("不要凑成一段四平八稳的完整评论收尾"))
+        assertTrue(prompt.contains("@名字"))
+        assertTrue(prompt.contains("最多两三个"))
+        assertTrue(prompt.contains("不必只接最后一条发言"))
+        assertTrue(prompt.contains("回应别人的一句话时不必检索"))
+        // 名单排在讨论串之前：模型先知道有谁在场，再读谁说过什么。
+        assertTrue(prompt.indexOf("参与讨论的人") < prompt.indexOf("目前的讨论串"))
+    }
+
+    /** 谁都没开口时不发名单行：那一条是模型起头点评原文，没有人可点。 */
+    @Test
+    fun systemPromptOmitsRosterWhenNobodySpoke() {
+        val prompt = buildDiscussionSystemPrompt(
+            persona = persona(name = "观澜", personality = "", isRoleplay = true),
+            book = book(lastReadChapterIndex = 5),
+            chapterTitle = null,
+            chapterNumber = 3,
+            quote = "引文",
+            neighborhood = "",
+            transcript = EMPTY_THREAD_TRANSCRIPT,
+            readingScope = com.mozhi.reader.core.retrieval.ReadingScope.upto(5, 100)
+        )
+        // 规则条里会提到「参与讨论的人」这四个字，这里判的是名单行本身有没有出现。
+        assertFalse(prompt.contains("\n\n参与讨论的人："))
+        assertTrue(prompt.contains("目前的讨论串：\n" + EMPTY_THREAD_TRANSCRIPT))
     }
 
     @Test

@@ -72,6 +72,60 @@ internal fun userSpeaksAsOpener(target: AnnotationEntity, turns: List<Discussion
         target.note.isBlank() &&
         turns.none { it.createdAt < target.createdAt }
 
+internal const val USER_SPEAKER_NAME = "用户"
+internal const val DELETED_PERSONA_NAME = "已删除角色"
+private const val SELF_SUFFIX = "（你）"
+private const val PEER_SUFFIX = "（其他角色）"
+
+/**
+ * 讨论串里的一位发言人。转写的署名（[label]）与 @点名 用的名字（[handle]）出自同一份花名册，
+ * 两边不会漂移：模型看到的「林致（其他角色）」和它能写的 `@林致` 指同一个人。
+ *
+ * 角色名在库里可以重复，[handle] 因此按发言先后加数字后缀去重（「观澜」「观澜2」）——只在真
+ * 撞名时出现，日常零成本；[label] 不参与匹配，只是给人看的署名。
+ */
+internal data class DiscussionSpeaker(
+    val personaId: Long?,
+    val label: String,
+    val handle: String,
+    val isSelf: Boolean
+)
+
+/**
+ * 按时间线首次发言顺序列出参与讨论的人。判定只用 personaId，不比名字：同名同伴不能被误标成
+ * 「你」（同一角色连发多条也只出现一次）。
+ */
+internal fun discussionRoster(
+    turns: List<DiscussionTurn>,
+    personaNames: Map<Long, String>,
+    currentPersonaId: Long
+): List<DiscussionSpeaker> {
+    val baseNames = LinkedHashMap<Long?, String>()
+    turns.forEach { turn ->
+        val personaId = turn.personaId
+        if (!baseNames.containsKey(personaId)) {
+            baseNames[personaId] = personaId?.let { personaNames[it] ?: DELETED_PERSONA_NAME }
+                ?: USER_SPEAKER_NAME
+        }
+    }
+    val used = mutableMapOf<String, Int>()
+    return baseNames.map { (personaId, base) ->
+        val count = (used[base] ?: 0) + 1
+        used[base] = count
+        val handle = if (count == 1) base else base + count
+        val label = if (personaId == null) {
+            handle
+        } else {
+            handle + if (personaId == currentPersonaId) SELF_SUFFIX else PEER_SUFFIX
+        }
+        DiscussionSpeaker(personaId, label, handle, personaId == currentPersonaId)
+    }
+}
+
+/** SYSTEM 里的「参与讨论的人」一行：模型点名时的合法名单。谁都没开口时不出现（由调用方决定）。 */
+internal fun buildDiscussionRosterLine(roster: List<DiscussionSpeaker>): String =
+    "参与讨论的人：" + roster.joinToString("、") { it.label }
+
 /**
  * 讨论串转写成给模型看的对话记录。发言按时间线顺序排，发言人按 personaId 标
  * 「（你）/（其他角色）/用户」——空 note 的批注不入线，所以第一条就是楼主。
@@ -82,13 +136,12 @@ internal fun buildDiscussionTranscript(
     currentPersonaId: Long
 ): String {
     if (turns.isEmpty()) return EMPTY_THREAD_TRANSCRIPT
-    // 只比 personaId，不比名字：角色名可以在库里重复，按名字判会把同名同伴误标成「你」。
-    fun label(personaId: Long?): String {
-        if (personaId == null) return "用户"
-        val name = personaNames[personaId] ?: "已删除角色"
-        return if (personaId == currentPersonaId) "$name（你）" else "$name（其他角色）"
+    val byPersona = discussionRoster(turns, personaNames, currentPersonaId).associateBy { it.personaId }
+    return turns.joinToString("\n") { turn ->
+        // 名单由这批 turns 自己推出来，查不到只可能是 personaId 为 null 的用户（也在名单里）；
+        // 真兜底也宁可显示成「已删除角色」，不能把某条发言误标成用户说的。
+        (byPersona[turn.personaId]?.label ?: DELETED_PERSONA_NAME) + "：" + turn.text
     }
-    return turns.joinToString("\n") { label(it.personaId) + "：" + it.text }
 }
 
 /**
@@ -96,8 +149,8 @@ internal fun buildDiscussionTranscript(
  * 时间线上已有谁说过话，决定他是接着这场讨论往下说，还是独立点评。三个判断量都由
  * [buildDiscussionTurns] 的结果推出来。
  *
- * 用户说过话时以他的话为准（旧行为）；只有同伴说过 → 明确请他接同伴的点；只有自己说过 →
- * 请他补新东西而不是把点评重讲一遍；谁都没说过 → 照旧点评原文。
+ * 用户说过话时以他的话为准（旧行为）；只有同伴说过 → 请他接同伴的点（可以点名回应任何一个人，
+ * 不必只接最后一条）；只有自己说过 → 请他补新东西而不是把点评重讲一遍；谁都没说过 → 照旧点评原文。
  */
 internal fun buildDiscussionUserTurn(
     personaName: String,
@@ -110,7 +163,8 @@ internal fun buildDiscussionUserTurn(
             "请以${personaName}的身份直接给出你在讨论串里的下一条发言。"
     peerSpoke ->
         "讨论串里已经有其他角色的发言，用户没有补充想法。\n" +
-            "请以${personaName}的身份接着这场讨论往下说：先明确你在回应谁的哪一点，再给出你的看法。"
+            "请以${personaName}的身份接着这场讨论往下说，一句话就够：可以回应其中任何一个人，" +
+            "也可以同时回应几个人，用 @名字 点出你在回应谁；不必只接最后一条。"
     selfSpoke ->
         "用户没有补充想法，讨论串里最后是你自己的发言。\n" +
             "请以${personaName}的身份补充一点前面没说到的新东西，不要重复上面说过的话。"
