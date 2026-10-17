@@ -14,6 +14,8 @@ import com.mozhi.reader.core.database.entity.readState
 import com.mozhi.reader.core.library.AnnotationRepository
 import com.mozhi.reader.core.library.LibraryRepository
 import com.mozhi.reader.core.library.NoteRepository
+import com.mozhi.reader.core.library.visibleIn
+import com.mozhi.reader.core.library.withinLibraryScope
 import com.mozhi.reader.core.retrieval.ReadingScope
 import java.time.Instant
 import java.time.ZoneId
@@ -412,25 +414,6 @@ internal class ListNotesTool(
         return ToolResult.Success(formatNoteIndex(notes.getForBook(bookId).filter { it.visibleIn(readingScope) && (!strictSourceScope || it.withinLibraryScope(readingScope)) }, kind, currentPersonaId))
     }
 }
-
-internal fun NoteEntity.withinLibraryScope(scope: ReadingScope): Boolean {
-    if (sourceScopeChapterIndex != null || sourceScopeCharOffset != null) {
-        return sourceScopeChapterIndex != null && sourceScopeCharOffset != null &&
-            sourceScopeChapterIndex >= 0 && sourceScopeCharOffset >= 0 &&
-            scope.allowsPosition(sourceScopeChapterIndex, sourceScopeCharOffset)
-    }
-    // Unanchored handwritten notes are supplied by the user, never advertised as source evidence.
-    if (personaId == null) return relatedChapterIndex?.let {
-        it >= 0 && scope.allowsPosition(it, relatedCharOffset ?: Int.MAX_VALUE)
-    } ?: true
-    return false
-}
-
-
-private fun NoteEntity.visibleIn(scope: ReadingScope): Boolean =
-    personaId == null || scope.isWholeBook || sourceScopeChapterIndex?.let { chapter ->
-        scope.allowsPosition(chapter, sourceScopeCharOffset ?: Int.MAX_VALUE)
-    } == true
 
 internal fun formatNoteIndex(
     notes: List<NoteEntity>,

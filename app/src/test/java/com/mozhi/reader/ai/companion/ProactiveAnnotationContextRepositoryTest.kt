@@ -1,16 +1,16 @@
 package com.mozhi.reader.ai.companion
 
 import com.mozhi.reader.ai.client.AiClientFactory
-import com.mozhi.reader.ai.persona.PersonaRepository
 import com.mozhi.reader.core.database.MoReadDatabase
-import com.mozhi.reader.core.database.dao.AnnotationDao
 import com.mozhi.reader.core.database.dao.BookCharacterDao
 import com.mozhi.reader.core.database.dao.ChapterKnowledgeDao
 import com.mozhi.reader.core.database.entity.BookEntity
 import com.mozhi.reader.core.database.entity.BookSourceType
 import com.mozhi.reader.core.database.entity.ChapterEntity
+import com.mozhi.reader.core.database.entity.NoteEntity
 import com.mozhi.reader.core.datastore.BookEmbeddingSettingsStore
 import com.mozhi.reader.core.library.LibraryRepository
+import com.mozhi.reader.core.library.NoteRepository
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
@@ -26,13 +26,12 @@ class ProactiveAnnotationContextRepositoryTest {
     private val database = mockk<MoReadDatabase>()
     private val dao = mockk<ChapterKnowledgeDao>()
     private val bookCharacterDao = mockk<BookCharacterDao>()
-    private val annotationDao = mockk<AnnotationDao>()
-    private val personaRepository = mockk<PersonaRepository>()
+    private val noteRepository = mockk<NoteRepository>()
     private val clientFactory = mockk<AiClientFactory>()
     private val vectorStore = mockk<BoxStore>()
     private val embeddingSettingsStore = mockk<BookEmbeddingSettingsStore>()
     private val repository = ProactiveAnnotationContextRepository(
-        library, database, personaRepository,
+        library, database, noteRepository,
         dagger.Lazy { clientFactory },
         dagger.Lazy { vectorStore },
         embeddingSettingsStore
@@ -48,11 +47,7 @@ class ProactiveAnnotationContextRepositoryTest {
         coEvery { dao.getBefore(1, any()) } returns emptyList()
         every { database.bookCharacterDao() } returns bookCharacterDao
         coEvery { bookCharacterDao.getGuide(any()) } returns null
-        every { database.annotationDao() } returns annotationDao
-        coEvery { annotationDao.getForChapterRangeByUser(any(), any(), any()) } returns emptyList()
-        coEvery { annotationDao.getThreadCandidates(any(), any()) } returns emptyList()
-        coEvery { annotationDao.getRepliesForAnnotations(any()) } returns emptyList()
-        coEvery { personaRepository.getPersonas() } returns emptyList()
+        coEvery { noteRepository.getForBook(1) } returns emptyList()
         coEvery { embeddingSettingsStore.isEnabled(any()) } returns false
         coEvery { library.getChapter(1, any()) } answers {
             val index = arg<Int>(1)
@@ -110,12 +105,46 @@ class ProactiveAnnotationContextRepositoryTest {
     }
 
     @Test fun cachedPrepareReusesTheChapterSnapshotWithinItsRevision() = runTest {
+        val prepared = repository.cachedPrepare(1, 3)
         repository.cachedPrepare(1, 3)
-        repository.cachedPrepare(1, 3)
-        // 命中缓存：只做 revision 校验，不再重拉章梗概、角色卡与讨论串。
+        // 命中缓存：只做 revision 校验，不再重拉章梗概与角色卡。
         coVerify(exactly = 1) { dao.getBefore(1, 3) }
         coVerify(exactly = 1) { bookCharacterDao.getGuide(any()) }
-        coVerify(exactly = 1) { annotationDao.getThreadCandidates(any(), any()) }
+        // 笔记不进章节快照：每一轮召回都重新读，刚新建/更新的笔记下一轮立即生效。
+        prepared.forQuery("顾衡", null, 8_000)
+        prepared.forQuery("顾衡", null, 8_000)
+        coVerify(exactly = 2) { noteRepository.getForBook(1) }
+    }
+
+    @Test fun notesAnchoredToTheCurrentChapterOrWholeBookAreRecalled() = runTest {
+        coEvery { noteRepository.getForBook(1) } returns listOf(
+            note(relatedChapterIndex = 2, content = "本章手写笔记"),
+            NoteEntity(
+                bookId = 1, personaId = 7, title = "剧情梗概", contentMarkdown = "全书范围生成的梗概",
+                sourceScopeChapterIndex = Int.MAX_VALUE, sourceScopeCharOffset = Int.MAX_VALUE,
+                createdAt = 0, updatedAt = 0
+            ),
+            NoteEntity(
+                bookId = 1, personaId = 7, title = "伏笔", contentMarkdown = "更早章节生成的伏笔",
+                sourceScopeChapterIndex = 1, sourceScopeCharOffset = 100,
+                createdAt = 0, updatedAt = 0
+            )
+        )
+        val result = repository.prepare(1, 3).forQuery("顾衡", null, 8_000)
+        // 笔记锚在当前章（追踪类刚更新 / 手写笔记锚在最后阅读位置）时必须能召回。
+        assertTrue(result.background.contains("本章手写笔记"))
+        assertTrue(result.background.contains("全书范围生成的梗概"))
+        assertTrue(result.background.contains("更早章节生成的伏笔"))
+    }
+
+    @Test fun notesBeyondTheSpoilerBoundaryAreNotRecalled() = runTest {
+        coEvery { noteRepository.getForBook(1) } returns listOf(
+            note(relatedChapterIndex = 1, content = "顾衡在雪岭立誓。"),
+            note(relatedChapterIndex = 5, content = "顾衡在黑崖坠亡。")
+        )
+        val result = repository.prepare(1, 3).forQuery("玉佩 雪岭 顾衡", null, 8_000)
+        assertTrue(result.background.contains("雪岭立誓"))
+        assertFalse(result.background.contains("黑崖坠亡"))
     }
 
     @Test fun cachedPrepareRevalidatesWhenTheSourceRevisionChanges() = runTest {
@@ -125,4 +154,13 @@ class ProactiveAnnotationContextRepositoryTest {
         // 源文件版本变了：缓存失效，重新召回。
         coVerify(exactly = 2) { dao.getBefore(1, 3) }
     }
+
+    private fun note(relatedChapterIndex: Int?, content: String) = NoteEntity(
+        bookId = 1,
+        title = "笔记",
+        contentMarkdown = content,
+        relatedChapterIndex = relatedChapterIndex,
+        createdAt = 0,
+        updatedAt = 0
+    )
 }

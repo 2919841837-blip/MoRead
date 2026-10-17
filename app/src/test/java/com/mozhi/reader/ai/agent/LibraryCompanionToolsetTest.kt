@@ -13,6 +13,7 @@ import com.mozhi.reader.core.database.entity.BookEntity
 import com.mozhi.reader.core.database.entity.BookSourceType
 import com.mozhi.reader.core.database.entity.NoteEntity
 import com.mozhi.reader.core.library.LibraryRepository
+import com.mozhi.reader.core.library.withinLibraryScope
 import com.mozhi.reader.core.retrieval.ReadingScope
 import io.mockk.*
 import kotlinx.coroutines.test.runTest

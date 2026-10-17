@@ -14,6 +14,7 @@ import com.mozhi.reader.ai.knowledge.SourceAnchor
 import com.mozhi.reader.core.database.entity.ChapterKnowledgeEntity
 import com.mozhi.reader.core.datastore.ProactiveAnnotationContextSettings
 import com.mozhi.reader.core.library.AnnotationRecall
+import com.mozhi.reader.core.library.NoteRepository
 import com.mozhi.reader.core.retrieval.ReadingScope
 import com.mozhi.reader.core.retrieval.RetrievalCandidate
 import kotlinx.coroutines.test.runTest
@@ -305,42 +306,73 @@ class ProactiveAnnotationContextTest {
         assertEquals(recall, AnnotationRecall.decode(recall.encode()))
     }
 
-    @Test fun threadRecallInjectsWholeDiscussionWithSpeakersAndDropsIrrelevant() = runTest {
-        val body = "顾衡取出玉佩，想起在雪岭对沈岚许下的承诺，终于决定兑现誓言。".repeat(3)
-        val prepared = PreparedAnnotationContext("r",
-            threads = listOf(
-                thread(1, listOf(
-                    ThreadTurn(7L, "观澜", "顾衡在雪岭对沈岚许下的玉佩承诺，伏笔呼应。"),
-                    ThreadTurn(null, "用户", "我也觉得这个伏笔很关键。")
-                )),
-                thread(0, listOf(ThreadTurn(7L, "观澜", "集市上的陶罐都很便宜。")))
-            )
-        )
-        val result = prepared.forParagraph(body, ProactiveAnnotationParagraph(0, body.length), 8_000)
-        assertTrue(result.background.contains("前文讨论"))
-        assertTrue(result.background.contains("伏笔"))
-        assertFalse(result.background.contains("陶罐"))
-        // 整串注入：楼主层 + 用户回复都在，发言人身份保留
-        assertTrue(result.background.contains("观澜："))
-        assertTrue(result.background.contains("用户："))
-        // 详情明细按讨论串 + 发言人落库，且 encode→decode 无损
-        val recalled = result.recall.threads.single { it.label.contains("第 2 章") }
-        assertTrue(recalled.turns.any { it.speaker == "观澜" && it.text.contains("伏笔") })
-        assertTrue(recalled.turns.any { it.speaker == "用户" })
+    @Test fun notesAreForceRecalledEvenWithoutLexicalOverlap() = runTest {
+        val prepared = PreparedAnnotationContext("r", notes = {
+            listOf(note("陶罐在集市上卖三文钱。", kind = NoteRepository.KIND_PLOT_SUMMARY, title = "集市"))
+        })
+        val result = prepared.forParagraph(target, ProactiveAnnotationParagraph(0, target.length), 8_000)
+        // 笔记不参与相关性打分：与目标段毫无词面重叠也强制注入。
+        assertTrue(result.background.contains("【读书笔记】"))
+        assertTrue(result.background.contains("【剧情梗概】"))
+        assertTrue(result.background.contains("陶罐在集市上卖三文钱"))
+        val recalled = result.recall.notes.single()
+        assertTrue(recalled.label.contains("剧情梗概"))
+        assertTrue(recalled.text.contains("陶罐"))
         assertEquals(result.recall, AnnotationRecall.decode(result.recall.encode()))
     }
 
-    @Test fun threadRecallPrioritizesThreadsTheCurrentPersonaParticipatedIn() = runTest {
-        val body = "顾衡取出玉佩，想起在雪岭对沈岚许下的承诺，终于决定兑现誓言。".repeat(3)
-        // 两条内容完全相同（BM25 分数一致），只有发言人不同：当前角色参与的串应靠 tier 排前面。
+    @Test fun recallPacksCardsThenNotesThenOutlines() = runTest {
         val prepared = PreparedAnnotationContext("r",
-            threads = listOf(
-                thread(0, listOf(ThreadTurn(9L, "沈岚", "顾衡在雪岭对沈岚许下玉佩承诺，埋下伏笔。"))),
-                thread(1, listOf(ThreadTurn(7L, "观澜", "顾衡在雪岭对沈岚许下玉佩承诺，埋下伏笔。")))
-            )
+            outlines = listOf(AnnotationOutline(2, "顾衡在雪岭立誓，要把玉佩交还给沈岚。")),
+            characterCards = listOf(card("顾衡", identity("主次：主角"))),
+            notes = { listOf(note("顾衡的玉佩来自雪岭。")) }
         )
-        val result = prepared.forParagraph(body, ProactiveAnnotationParagraph(0, body.length), 8_000, personaId = 7L)
-        assertTrue(result.recall.threads.first().turns.any { it.speaker == "观澜" })
+        val result = prepared.forQuery("顾衡 玉佩 雪岭 沈岚", null, 8_000)
+        val cardsAt = result.background.indexOf("【角色卡】")
+        val notesAt = result.background.indexOf("【读书笔记】")
+        val outlineAt = result.background.indexOf("梗概（辅助资料")
+        assertTrue(cardsAt >= 0)
+        assertTrue(notesAt > cardsAt)
+        assertTrue(outlineAt > notesAt)
+    }
+
+    @Test fun atMostEightCharacterCardsAreRecalled() = runTest {
+        val names = (1..10).map { "顾衡" + "甲乙丙丁戊己庚辛壬癸"[it - 1] }
+        val prepared = PreparedAnnotationContext("r",
+            characterCards = names.map { card(it, identity("主次：主角")) }
+        )
+        val result = prepared.forQuery(names.joinToString(" "), null, 8_000)
+        assertEquals(8, result.recall.characterCards.size)
+    }
+
+    @Test fun characterCardsAreCappedAtOneFifthOfTheRecallBudget() = runTest {
+        val hugeIdentity = "顾衡" + "甲".repeat(4_000)
+        val prepared = PreparedAnnotationContext("r",
+            characterCards = listOf(card("顾衡", identity(hugeIdentity)))
+        )
+        val result = prepared.forQuery("顾衡", null, 8_000)
+        // 20% of 8,000 = 1,600：角色卡被硬裁，不会挤占后续笔记/大纲。
+        assertTrue(result.background.length <= 1_600)
+        assertTrue(result.background.contains("顾衡"))
+    }
+
+    @Test fun notesTakePrecedenceOverOutlinesWhenBudgetIsTight() = runTest {
+        val prepared = PreparedAnnotationContext("r",
+            outlines = listOf(AnnotationOutline(0, "顾衡在雪岭立誓，要把玉佩交还给沈岚。")),
+            notes = { listOf(note("陶罐".repeat(5_000))) }
+        )
+        val result = prepared.forQuery("顾衡 玉佩 雪岭 沈岚", null, 8_000)
+        assertTrue(result.background.contains("【读书笔记】"))
+        assertFalse(result.background.contains("梗概（辅助资料"))
+    }
+
+    @Test fun outlineRecallStopsAtTwentyFiveChapters() = runTest {
+        // 每章一条只命中专属词的梗概，确保都过绝对 BM25 下限，再验证名额硬上限。
+        val prepared = PreparedAnnotationContext("r",
+            outlines = (0 until 40).map { AnnotationOutline(it, "w$it") }
+        )
+        val result = prepared.forQuery((0 until 40).joinToString(" ") { "w$it" }, null, 128_000)
+        assertEquals(25, result.recall.outlines.size)
     }
 
     @Test fun absoluteFloorDropsWeakOutlineEvenWhenItsTheOnlyMatch() = runTest {
@@ -351,24 +383,6 @@ class ProactiveAnnotationContextTest {
         val result = prepared.forParagraph(target, ProactiveAnnotationParagraph(0, target.length), 8_000)
         assertTrue(result.recall.outlines.isEmpty())
         assertFalse(result.background.contains("梗概"))
-    }
-
-    @Test fun participatedThreadRecalledAtLowerThresholdThanNormal() = runTest {
-        // 参与串只沾到「顾衡」一个 bigram（BM25 < 绝对下限 1.0）：普通串通道会挡，参与串通道 score>0 即召回。
-        val prepared = PreparedAnnotationContext("r",
-            threads = listOf(thread(0, listOf(ThreadTurn(7L, "观澜", "顾衡"))))
-        )
-        val result = prepared.forParagraph(target, ProactiveAnnotationParagraph(0, target.length), 8_000, personaId = 7L)
-        assertTrue(result.recall.threads.isNotEmpty())
-        assertTrue(result.recall.threads.single().turns.any { it.speaker == "观澜" })
-    }
-
-    @Test fun participatedThreadChannelCappedAtTwo() = runTest {
-        val prepared = PreparedAnnotationContext("r",
-            threads = (0..2).map { thread(it, listOf(ThreadTurn(7L, "观澜", "顾衡"))) }
-        )
-        val result = prepared.forParagraph(target, ProactiveAnnotationParagraph(0, target.length), 8_000, personaId = 7L)
-        assertEquals(2, result.recall.threads.size)
     }
 
     @Test fun forQueryRecallsByQueryAndCarriesStructuredDetail() = runTest {
@@ -399,7 +413,13 @@ class ProactiveAnnotationContextTest {
     private fun card(name: String, vararg fields: CardField, aliases: List<String> = emptyList()) =
         AnnotationCharacterCard(name, aliases, fields.toList())
 
-    private fun thread(chapterIndex: Int, turns: List<ThreadTurn>) = AnnotationThread(1L, chapterIndex, turns)
+    private fun note(
+        content: String,
+        kind: String = NoteRepository.KIND_NOTE,
+        chapter: Int? = null,
+        title: String = "",
+        updatedAt: Long = 0
+    ) = AnnotationNote(kind, title, content, chapter, updatedAt)
 
     private fun identity(line: String) = CardField(CardFieldKind.IDENTITY, line, line.substringAfter("："))
     private fun trait(line: String) = CardField(CardFieldKind.TRAIT, line, line.substringAfter("："))
