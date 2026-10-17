@@ -83,6 +83,12 @@ internal fun AiRichText(
             }
         }
     }
+    val components = phoneMarkdownComponents(
+        textColor = palette.onBackground,
+        labelColor = palette.muted,
+        containerColor = palette.onBackground.copy(alpha = 0.04f),
+        dividerColor = palette.glassBorder
+    )
     CompositionLocalProvider(
         LocalUriHandler provides if (mentions.isEmpty()) outerUriHandler else mentionUriHandler
     ) {
@@ -90,9 +96,21 @@ internal fun AiRichText(
             // Bounded, completed dictionary entries need their full height on the first frame:
             // an asynchronous empty/loading frame clamps a restored ScrollState back to zero.
             val parsed = remember(safeMarkdown) { parseMarkdown(safeMarkdown) }
-            Markdown(state = parsed, colors = colors, typography = typography, modifier = modifier)
+            Markdown(
+                state = parsed,
+                colors = colors,
+                typography = typography,
+                components = components,
+                modifier = modifier
+            )
         } else {
-            Markdown(content = safeMarkdown, colors = colors, typography = typography, modifier = modifier)
+            Markdown(
+                content = safeMarkdown,
+                colors = colors,
+                typography = typography,
+                components = components,
+                modifier = modifier
+            )
         }
     }
 }

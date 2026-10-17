@@ -265,6 +265,8 @@ private fun toolDisplayName(name: String): String = when (name) {
     "add_annotation" -> "添加批注"
     "write_note" -> "写读书笔记"
     "save_plot_summary" -> "保存剧情梗概"
+    "save_foreshadowing_tracker" -> "保存伏笔追踪"
+    "save_romance_tracker" -> "保存感情线追踪"
     "generate_image" -> "生成并保存插图"
     "synthesize_speech" -> "合成并缓存语音"
     "web_search" -> "搜索互联网"

@@ -824,6 +824,28 @@ object DatabaseMigrations {
         }
     }
 
+    /** 读书笔记新增伏笔/感情线追踪：内置角色默认获得两项写入能力。 */
+    val Migration39To40 = object : Migration(39, 40) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            listOf(
+                "save_foreshadowing_tracker",
+                "save_romance_tracker"
+            ).forEach { tool ->
+                db.execSQL(
+                    """
+                    UPDATE `personas`
+                    SET `enabledToolsJson` = CASE
+                        WHEN `enabledToolsJson` = '[]' THEN '["$tool"]'
+                        ELSE substr(`enabledToolsJson`, 1, length(`enabledToolsJson`) - 1) || ',"$tool"]'
+                    END
+                    WHERE `isBuiltIn` = 1
+                      AND instr(`enabledToolsJson`, '"$tool"') = 0
+                    """.trimIndent()
+                )
+            }
+        }
+    }
+
     /** 人物档案：逐人落库的断点与缓存，删书级联清理。 */
     val Migration34To35 = object : Migration(34, 35) {
         override fun migrate(db: SupportSQLiteDatabase) {

@@ -45,6 +45,8 @@ val PersonaToolOptions = listOf(
     "add_annotation" to "添加批注",
     "write_note" to "写读书笔记",
     "save_plot_summary" to "保存剧情梗概",
+    "save_foreshadowing_tracker" to "保存伏笔追踪",
+    "save_romance_tracker" to "保存感情线追踪",
     "generate_image" to "生成并保存插图",
     "synthesize_speech" to "合成并缓存语音",
     "create_reading_plan" to "制定阅读计划"

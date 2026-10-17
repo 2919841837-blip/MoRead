@@ -99,6 +99,26 @@ class ReaderToolsetReadbackTest {
     }
 
     @Test
+    fun `note index labels trackers and shows covered chapter`() {
+        val text = formatNoteIndex(
+            listOf(
+                note(id = 1, personaId = 3, kind = NoteRepository.KIND_PLOT_SUMMARY, relatedChapterIndex = 7),
+                note(id = 2, personaId = 3, kind = NoteRepository.KIND_FORESHADOWING, relatedChapterIndex = 7),
+                note(id = 3, personaId = 3, kind = NoteRepository.KIND_ROMANCE_LINE, relatedChapterIndex = 7),
+                note(id = 4, personaId = 3, title = "随手记")
+            ),
+            currentPersonaId = 3,
+            nowMillis = 1_000
+        )
+
+        assertTrue(text.contains("[梗概]"))
+        assertTrue(text.contains("[伏笔]"))
+        assertTrue(text.contains("[感情线]"))
+        assertTrue(text.contains("覆盖至第 8 章"))
+        assertTrue(text.contains("覆盖至第 8 章 · "))
+    }
+
+    @Test
     fun `note write target updates own latest and rejects user note`() {
         val own = note(id = 8, personaId = 3)
         val user = note(id = 7, personaId = null)
@@ -155,13 +175,20 @@ class ReaderToolsetReadbackTest {
         createdAt = id
     )
 
-    private fun note(id: Long, personaId: Long?) = NoteEntity(
+    private fun note(
+        id: Long,
+        personaId: Long?,
+        kind: String = NoteRepository.KIND_NOTE,
+        relatedChapterIndex: Int? = null,
+        title: String = "标题"
+    ) = NoteEntity(
         id = id,
         bookId = 1,
         personaId = personaId,
-        title = "标题",
+        title = title,
         contentMarkdown = "# 摘要\n正文",
-        kind = NoteRepository.KIND_NOTE,
+        kind = kind,
+        relatedChapterIndex = relatedChapterIndex,
         createdAt = 1,
         updatedAt = 1
     )

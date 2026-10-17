@@ -45,8 +45,8 @@ internal fun companionToolPresentation(
         icon = CompanionToolIcon.ANNOTATION
     )
     "list_notes" -> CompanionToolPresentation(
-        title = "查看笔记与梗概",
-        action = "读取笔记与梗概",
+        title = "查看笔记与追踪",
+        action = "读取笔记与追踪",
         description = "查找已保存内容并按需续读",
         icon = CompanionToolIcon.NOTE
     )
@@ -84,6 +84,18 @@ internal fun companionToolPresentation(
         title = "保存剧情梗概",
         action = "更新剧情梗概",
         description = "整理并保存已读范围内的剧情",
+        icon = CompanionToolIcon.NOTE
+    )
+    "save_foreshadowing_tracker" -> CompanionToolPresentation(
+        title = "保存伏笔追踪",
+        action = "更新伏笔追踪",
+        description = "整理已埋设、已回收的伏笔",
+        icon = CompanionToolIcon.NOTE
+    )
+    "save_romance_tracker" -> CompanionToolPresentation(
+        title = "保存感情线追踪",
+        action = "更新感情线追踪",
+        description = "整理主角的主线与副线里程碑",
         icon = CompanionToolIcon.NOTE
     )
     "generate_image" -> CompanionToolPresentation(

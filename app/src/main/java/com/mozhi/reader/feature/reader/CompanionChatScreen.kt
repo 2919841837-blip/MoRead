@@ -326,6 +326,14 @@ fun CompanionChatPane(
         onGenerateIllustration = {
             showImageStudio = true
         },
+        onGenerateForeshadowingTracker = {
+            scrollState.requestFollowLatest()
+            companionViewModel.generateForeshadowingTracker(sceneQuote)
+        },
+        onGenerateRomanceTracker = {
+            scrollState.requestFollowLatest()
+            companionViewModel.generateRomanceTracker(sceneQuote)
+        },
         onToggleSpoilerProtection = {
             companionViewModel.setSpoilerProtectionEnabled(!state.spoilerProtectionEnabled)
         },

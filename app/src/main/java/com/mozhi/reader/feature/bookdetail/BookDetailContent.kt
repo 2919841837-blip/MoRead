@@ -759,7 +759,7 @@ internal fun NotesSection(
     Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             SectionLabel(
-                title = "剧情梗概与读书笔记",
+                title = "剧情与读书笔记",
                 trailing = "全部 ${notes.size} 条",
                 modifier = Modifier.weight(1f)
             )
@@ -770,7 +770,7 @@ internal fun NotesSection(
         }
         if (ordered.isEmpty()) {
             Text(
-                text = "点击“写笔记”记录想法，也可让伴读角色保存剧情梗概。",
+                text = "点击“写笔记”记录想法，也可让伴读角色保存剧情梗概、伏笔追踪与感情线。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -788,8 +788,14 @@ internal fun NotesSection(
 }
 
 internal fun List<NoteEntity>.sortedForReview(): List<NoteEntity> = sortedWith(
-    compareByDescending<NoteEntity> { it.kind == NoteRepository.KIND_PLOT_SUMMARY }
-        .thenByDescending(NoteEntity::updatedAt)
+    compareBy<NoteEntity> { note ->
+        when (note.kind) {
+            NoteRepository.KIND_PLOT_SUMMARY -> 0
+            NoteRepository.KIND_FORESHADOWING -> 1
+            NoteRepository.KIND_ROMANCE_LINE -> 2
+            else -> 3
+        }
+    }.thenByDescending(NoteEntity::updatedAt)
 )
 
 @Composable
@@ -811,22 +817,17 @@ internal fun NoteCard(note: NoteEntity, onClick: () -> Unit) {
             )
             Column(modifier = Modifier.padding(start = 12.dp)) {
                 Text(
-                    text = note.title.ifBlank {
-                        if (note.kind == NoteRepository.KIND_PLOT_SUMMARY) "剧情梗概" else "读书笔记"
-                    },
+                    text = note.title.ifBlank { NoteRepository.kindLabel(note.kind) },
                     style = MaterialTheme.typography.titleSmall,
                     fontFamily = FontFamily.Serif,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
                 Text(
-                    text = note.contentMarkdown
-                        .replace(Regex("[#*_`>\\[\\]]"), "")
-                        .replace('\n', ' ')
-                        .trim(),
+                    text = notePreview(note.contentMarkdown),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 2,
+                    maxLines = 3,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.padding(top = 3.dp)
                 )
@@ -901,3 +902,21 @@ internal fun formatDate(epochMillis: Long): String =
         .atZone(ZoneId.systemDefault())
         .toLocalDate()
         .format(DateTimeFormatter.ofPattern("M月d日"))
+
+/** 卡片只露三行：表格分隔行不该占位置，单元格之间用 · 隔开才读得出条目边界。 */
+private val tableSeparator = Regex("""^\|?[\s:|-]+\|?$""")
+
+internal fun notePreview(markdown: String): String = markdown
+    .lineSequence()
+    .filterNot { tableSeparator.matches(it.trim()) }
+    .joinToString(" ") { line ->
+        val trimmed = line.trim()
+        if (trimmed.startsWith("|")) {
+            trimmed.trim('|').split('|').joinToString(" · ") { it.trim() }
+        } else {
+            trimmed
+        }
+    }
+    .replace(Regex("[#*_`>\\[\\]]"), "")
+    .replace(Regex("\\s+"), " ")
+    .trim()

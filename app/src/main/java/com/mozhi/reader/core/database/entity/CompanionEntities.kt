@@ -316,7 +316,7 @@ data class NoteEntity(
     val personaId: Long? = null,
     val title: String,
     val contentMarkdown: String,
-    /** NOTE | PLOT_SUMMARY；专类便于书籍详情集中回顾，不靠标题字符串猜。 */
+    /** NOTE | PLOT_SUMMARY | FORESHADOWING | ROMANCE_LINE；专类便于书籍详情集中回顾，不靠标题字符串猜。 */
     val kind: String = "NOTE",
     /** 由伴读会话保存时记录来源；会话删除后笔记仍保留，故不设 FK。 */
     val sourceConversationId: Long? = null,

@@ -78,6 +78,36 @@ class ToolCallSummaryTest {
     }
 
     @Test
+    fun `tracker saves render the chapter range`() {
+        assertEquals(
+            "第 1-12 章",
+            ToolCallSummary.summarize(
+                "save_foreshadowing_tracker",
+                """{"content_md":"…","from_chapter":1,"to_chapter":12}"""
+            )
+        )
+        assertEquals(
+            "第 3-9 章",
+            ToolCallSummary.summarize(
+                "save_romance_tracker",
+                """{"content_md":"…","from_chapter":3,"to_chapter":9}"""
+            )
+        )
+    }
+
+    @Test
+    fun `list notes recognizes tracker kinds`() {
+        assertEquals(
+            "伏笔追踪",
+            ToolCallSummary.summarize("list_notes", """{"kind":"foreshadowing"}""")
+        )
+        assertEquals(
+            "主角感情线",
+            ToolCallSummary.summarize("list_notes", """{"kind":"romance_line"}""")
+        )
+    }
+
+    @Test
     fun `multiline arguments collapse to a single line`() {
         assertEquals(
             "第一行 第二行",

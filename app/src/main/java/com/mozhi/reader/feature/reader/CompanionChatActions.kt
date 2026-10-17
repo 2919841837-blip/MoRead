@@ -4,9 +4,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Brush
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.Description
+import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material.icons.outlined.Summarize
+import androidx.compose.material.icons.outlined.Visibility
 
 internal fun companionComposerActions(
     isStreaming: Boolean,
@@ -16,6 +18,8 @@ internal fun companionComposerActions(
     onPickTextFile: () -> Unit,
     onGeneratePlotSummary: () -> Unit,
     onGenerateIllustration: () -> Unit,
+    onGenerateForeshadowingTracker: () -> Unit,
+    onGenerateRomanceTracker: () -> Unit,
     onToggleSpoilerProtection: () -> Unit,
     onToggleMultiBubble: () -> Unit
 ): List<ComposerAction> = listOf(
@@ -40,6 +44,18 @@ internal fun companionComposerActions(
         label = "生成插图",
         enabled = !isStreaming,
         onClick = onGenerateIllustration
+    ),
+    ComposerAction(
+        icon = Icons.Outlined.Visibility,
+        label = "伏笔追踪",
+        enabled = !isStreaming,
+        onClick = onGenerateForeshadowingTracker
+    ),
+    ComposerAction(
+        icon = Icons.Outlined.FavoriteBorder,
+        label = "感情线追踪",
+        enabled = !isStreaming,
+        onClick = onGenerateRomanceTracker
     ),
     ComposerAction(
         icon = Icons.Outlined.Shield,

@@ -28,15 +28,27 @@ class NoteExporter @Inject constructor(
     @ApplicationContext private val context: Context
 ) {
 
-    /** 生成 Markdown 文本：书名为一级标题，剧情梗概在前，笔记按锚点章节排列。 */
+    /** 生成 Markdown 文本：书名为一级标题，剧情梗概与追踪在前，笔记按锚点章节排列。 */
     fun buildMarkdown(bookTitle: String, notes: List<NoteEntity>): String {
         val formatter = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
-        val (summaries, plainNotes) = notes.partition { it.kind == NoteRepository.KIND_PLOT_SUMMARY }
+        val (materials, plainNotes) = notes.partition { note ->
+            note.kind == NoteRepository.KIND_PLOT_SUMMARY ||
+                note.kind == NoteRepository.KIND_FORESHADOWING ||
+                note.kind == NoteRepository.KIND_ROMANCE_LINE
+        }
         return buildString {
             append("# ").append(bookTitle.ifBlank { "读书笔记" }).append("\n\n")
             append("> 由墨知 MoRead 导出 · ").append(formatter.format(Date())).append('\n')
-            summaries.forEach { note ->
-                append("\n## ").append(note.title.ifBlank { "剧情梗概" }).append("\n\n")
+            materials.sortedWith(
+                compareBy<NoteEntity> { note ->
+                    when (note.kind) {
+                        NoteRepository.KIND_PLOT_SUMMARY -> 0
+                        NoteRepository.KIND_FORESHADOWING -> 1
+                        else -> 2
+                    }
+                }.thenByDescending(NoteEntity::updatedAt)
+            ).forEach { note ->
+                append("\n## ").append(note.title.ifBlank { NoteRepository.kindLabel(note.kind) }).append("\n\n")
                 append(note.contentMarkdown.trim()).append('\n')
             }
             if (plainNotes.isNotEmpty()) {

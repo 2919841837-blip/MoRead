@@ -29,7 +29,8 @@ object ToolCallSummary {
             "list_notes" -> noteList(args)
             "add_annotation" -> annotation(args)
             "write_note" -> args.text("title")
-            "save_plot_summary" -> plotSummary(args)
+            "save_plot_summary", "save_foreshadowing_tracker", "save_romance_tracker" ->
+                rollingNote(args)
             "generate_image" -> args.text("prompt")
             "synthesize_speech" -> args.text("text")
             // 未知工具：挑第一个非空的字符串参数，总比什么都不显示好。
@@ -77,6 +78,8 @@ object ToolCallSummary {
         ?: when (args.text("kind").lowercase()) {
             "note" -> "读书笔记"
             "plot_summary" -> "剧情梗概"
+            "foreshadowing" -> "伏笔追踪"
+            "romance_line" -> "主角感情线"
             else -> "全部笔记"
         }
 
@@ -92,7 +95,7 @@ object ToolCallSummary {
         return listOf(where, style, quote).filter(String::isNotBlank).joinToString(" · ")
     }
 
-    private fun plotSummary(args: JsonObject): String {
+    private fun rollingNote(args: JsonObject): String {
         val from = args.int("from_chapter")
         val to = args.int("to_chapter")
         val range = when {

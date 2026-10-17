@@ -20,6 +20,8 @@ object PersonaSeeds {
         "add_annotation",
         "write_note",
         "save_plot_summary",
+        "save_foreshadowing_tracker",
+        "save_romance_tracker",
         "generate_image",
         "synthesize_speech",
         "create_reading_plan"

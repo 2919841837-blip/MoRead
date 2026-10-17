@@ -123,6 +123,7 @@ import com.mozhi.reader.ai.media.OnlineBookCover
 import com.mozhi.reader.ai.embedding.BookEmbeddingProgress
 import com.mozhi.reader.ai.embedding.EmbeddingIndexStage
 import com.mozhi.reader.core.library.NoteRepository
+import com.mozhi.reader.feature.reader.phoneMarkdownComponents
 import com.mozhi.reader.ui.components.FrostedSurface
 import com.mozhi.reader.ui.components.ReadingHeatmap
 import com.mozhi.reader.ui.components.RingGauge
@@ -596,7 +597,7 @@ fun BookDetailScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        "剧情梗概与读书笔记",
+                        "剧情与读书笔记",
                         style = MaterialTheme.typography.titleLarge,
                         fontFamily = FontFamily.Serif,
                         modifier = Modifier.weight(1f)
@@ -627,7 +628,7 @@ fun BookDetailScreen(
                     if (orderedNotes.isEmpty()) {
                         item {
                             Text(
-                                "还没有读书笔记。点击右上角“新建”即可记录，伴读保存的剧情梗概也会显示在这里。",
+                                "还没有读书笔记。点击右上角“新建”即可记录，伴读保存的剧情梗概、伏笔追踪和感情线也会显示在这里。",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.padding(vertical = 12.dp)
@@ -734,7 +735,7 @@ fun BookDetailScreen(
                 Column {
                     Text(note.title.ifBlank { "读书笔记" })
                     Text(
-                        if (note.kind == NoteRepository.KIND_PLOT_SUMMARY) "剧情梗概" else "读书笔记",
+                        NoteRepository.kindLabel(note.kind),
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.primary
                     )
@@ -742,7 +743,7 @@ fun BookDetailScreen(
             },
             text = {
                 LazyColumn(modifier = Modifier.fillMaxHeight(0.68f)) {
-                    item { Markdown(content = note.contentMarkdown) }
+                    item { Markdown(content = note.contentMarkdown, components = phoneMarkdownComponents()) }
                     item {
                         Text(
                             buildString {

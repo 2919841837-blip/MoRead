@@ -687,6 +687,32 @@ class ReaderCompanionViewModel @Inject constructor(
         )
     }
 
+    fun generateForeshadowingTracker(sceneQuote: String) {
+        sendWithRequiredTools(
+            text = "请更新并保存截至我当前阅读进度的伏笔追踪。先查询进度，再用 list_notes(kind=foreshadowing) 读回旧稿；有旧稿时从它覆盖章节的下一章继续，没有旧稿时从第 1 章开始，用 read_book_section 读取已读正文。若提示内容未完，按 start_char 继续，不能用零散搜索片段代替指定范围。" +
+                "条目编号固定为 F-001、F-002…，旧条目沿用原编号：未回收的留在「## 未回收」表，已回收的移到「## 已回收」表并标注回收章节，不得丢失旧稿中的未回收条目。只写已读范围。最后务必调用 save_foreshadowing_tracker 保存。",
+            sceneQuote = sceneQuote,
+            requiredTools = setOf(
+                "get_reading_progress",
+                "read_book_section",
+                "save_foreshadowing_tracker"
+            )
+        )
+    }
+
+    fun generateRomanceTracker(sceneQuote: String) {
+        sendWithRequiredTools(
+            text = "请更新并保存截至我当前阅读进度的主角感情线追踪。先查询进度，再用 list_notes(kind=romance_line) 读回旧稿；有旧稿时从它覆盖章节的下一章继续，没有旧稿时从第 1 章开始，用 read_book_section 读取已读正文。若提示内容未完，按 start_char 继续，不能用零散搜索片段代替指定范围。" +
+                "只追踪主角×主要感情对象的主线（放「## 主感情线」）和主角×配角的副感情线（放「## 副感情线」），主角以外的感情线不写。主线里程碑编号用 RM-001、RM-002…，副线用 RS-001、RS-002…，旧条目沿用原编号。只写已读范围，不推断未读走向；确实没有感情线时如实写明。最后务必调用 save_romance_tracker 保存。",
+            sceneQuote = sceneQuote,
+            requiredTools = setOf(
+                "get_reading_progress",
+                "read_book_section",
+                "save_romance_tracker"
+            )
+        )
+    }
+
     private fun sendWithRequiredTools(
         text: String,
         sceneQuote: String,
@@ -1181,11 +1207,15 @@ class ReaderCompanionViewModel @Inject constructor(
                         )
                     }
                 }
-                if ("save_plot_summary" in requiredTools && session.value.executionSteps.none {
-                        it.toolName == "save_plot_summary" && it.state == AgentStepState.SUCCEEDED
+                val missingSave = requiredTools.firstOrNull { tool ->
+                    tool in REQUIRED_ROLLING_SAVES && session.value.executionSteps.none {
+                        it.toolName == tool && it.state == AgentStepState.SUCCEEDED
                     }
-                ) {
-                    throw IllegalStateException("模型没有调用保存工具，剧情梗概尚未入库；可重试或换用支持工具调用的模型")
+                }
+                if (missingSave != null) {
+                    throw IllegalStateException(
+                        "模型没有调用保存工具，${REQUIRED_ROLLING_SAVES.getValue(missingSave)}尚未入库；可重试或换用支持工具调用的模型"
+                    )
                 }
                 withContext(Dispatchers.IO) { memoryScheduler.afterTurn(conversationId) }
                 if (session.value.conversationId != conversationId) return@launch
@@ -1289,3 +1319,10 @@ class ReaderCompanionViewModel @Inject constructor(
 }
 
 private fun runningToolStatus(displayName: String): String = "正在$displayName…"
+
+/** 按钮触发的滚动文档必须真正入库；否则这轮回复再漂亮，用户也拿不到追踪表。 */
+private val REQUIRED_ROLLING_SAVES = mapOf(
+    "save_plot_summary" to "剧情梗概",
+    "save_foreshadowing_tracker" to "伏笔追踪",
+    "save_romance_tracker" to "感情线追踪"
+)

@@ -2,10 +2,10 @@
 feature/bookdetail/AnnotationIndex.kt	21
 feature/bookdetail/BookDescriptionExtractor.kt	12
 feature/bookdetail/BookDetailAssets.kt	26
-feature/bookdetail/BookDetailContent.kt	37
+feature/bookdetail/BookDetailContent.kt	35
 feature/bookdetail/BookDetailCover.kt	42
 feature/bookdetail/BookDetailMetadata.kt	20
-feature/bookdetail/BookDetailScreen.kt	31
+feature/bookdetail/BookDetailScreen.kt	29
 feature/bookdetail/BookDetailViewModel.kt	41
 feature/bookshelf/BookCollectionComponents.kt	18
 feature/bookshelf/BookCovers.kt	1
@@ -29,8 +29,8 @@ feature/companion/LibraryCompanionScreen.kt	16
 feature/companion/LibraryCompanionViewModel.kt	12
 feature/companion/LibraryOrganizationSheet.kt	7
 feature/companion/PersonaAppearanceCards.kt	14
-feature/companion/PersonaEditorScreen.kt	91
-feature/companion/PersonaEditorViewModel.kt	19
+feature/companion/PersonaEditorScreen.kt	93
+feature/companion/PersonaEditorViewModel.kt	21
 feature/companion/PersonaMemoryScreen.kt	24
 feature/companion/PersonaMemoryViewModel.kt	7
 feature/companion/TabletCompanionHome.kt	18
@@ -68,7 +68,7 @@ feature/reader/AiRichText.kt	1
 feature/reader/AnnotationDiscussionSheet.kt	20
 feature/reader/AutoReadSession.kt	7
 feature/reader/BilingualReadingDialog.kt	22
-feature/reader/CompanionChatActions.kt	6
+feature/reader/CompanionChatActions.kt	8
 feature/reader/CompanionChatDialogs.kt	18
 feature/reader/CompanionChatHeader.kt	7
 feature/reader/CompanionChatScreen.kt	10
@@ -78,7 +78,7 @@ feature/reader/CompanionMessageParts.kt	4
 feature/reader/CompanionOrb.kt	1
 feature/reader/CompanionProcessCard.kt	8
 feature/reader/CompanionTokenUsage.kt	1
-feature/reader/CompanionToolPresentation.kt	49
+feature/reader/CompanionToolPresentation.kt	55
 feature/reader/CompanionVoiceBubble.kt	5
 feature/reader/CompanionWorkspace.kt	6
 feature/reader/DictionaryLookupDialog.kt	16
@@ -92,8 +92,8 @@ feature/reader/ReaderAnnotationNoticeCapsule.kt	1
 feature/reader/ReaderAutoReadControls.kt	20
 feature/reader/ReaderBookDetail.kt	21
 feature/reader/ReaderChrome.kt	18
-feature/reader/ReaderCompanion.kt	37
-feature/reader/ReaderCompanionViewModel.kt	14
+feature/reader/ReaderCompanion.kt	39
+feature/reader/ReaderCompanionViewModel.kt	22
 feature/reader/ReaderComposerBar.kt	2
 feature/reader/ReaderCustomThemeEditor.kt	31
 feature/reader/ReaderEpubImageDialog.kt	12

@@ -100,5 +100,14 @@ class NoteRepository @Inject constructor(
     companion object {
         const val KIND_NOTE = "NOTE"
         const val KIND_PLOT_SUMMARY = "PLOT_SUMMARY"
+        const val KIND_FORESHADOWING = "FORESHADOWING"
+        const val KIND_ROMANCE_LINE = "ROMANCE_LINE"
+
+        fun kindLabel(kind: String): String = when (kind) {
+            KIND_PLOT_SUMMARY -> "剧情梗概"
+            KIND_FORESHADOWING -> "伏笔追踪"
+            KIND_ROMANCE_LINE -> "主角感情线"
+            else -> "读书笔记"
+        }
     }
 }

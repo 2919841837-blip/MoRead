@@ -41,6 +41,7 @@ internal data class ProgressOverview(
     val readingDays: List<ReadingDailyEntity>,
     val noteCount: Int,
     val plotSummaries: List<NoteEntity>,
+    val trackerNotes: List<NoteEntity> = emptyList(),
     val annotationCount: Int,
     val currentChapterAnnotationCount: Int,
     val bookmarkCount: Int
@@ -114,6 +115,12 @@ internal fun formatProgressOverview(
         val coverage = it.relatedChapterIndex?.let { index -> "覆盖至第 ${index + 1} 章，" }.orEmpty()
         append("（").append(coverage).append(formatRelativeTime(it.updatedAt, nowMillis)).append("更新）")
     }
+    trackerOverview(overview.trackerNotes, NoteRepository.KIND_FORESHADOWING, nowMillis)?.let {
+        append("｜伏笔追踪 ").append(it)
+    }
+    trackerOverview(overview.trackerNotes, NoteRepository.KIND_ROMANCE_LINE, nowMillis)?.let {
+        append("｜感情线追踪 ").append(it)
+    }
     append("｜笔记 ").append(overview.noteCount).append(" 条")
         .append("｜划线批注 ").append(overview.annotationCount).append(" 条")
     if (overview.currentChapterAnnotationCount > 0) {
@@ -125,6 +132,17 @@ internal fun formatProgressOverview(
         append("\n用户尚未读到第 ").append(currentNumber)
             .append(" 章之后的内容，回答不要涉及后续剧情。")
     }
+}
+
+private fun trackerOverview(
+    notes: List<NoteEntity>,
+    kind: String,
+    nowMillis: Long
+): String? {
+    val matching = notes.filter { it.kind == kind }
+    val latest = matching.maxByOrNull { it.updatedAt } ?: return null
+    val coverage = latest.relatedChapterIndex?.let { "覆盖至第 ${it + 1} 章，" }.orEmpty()
+    return "${matching.size} 篇（$coverage${formatRelativeTime(latest.updatedAt, nowMillis)}更新）"
 }
 
 internal class ListChaptersTool(
@@ -349,14 +367,24 @@ internal class ListNotesTool(
     private val readingScope: ReadingScope,
     private val strictSourceScope: Boolean = false
 ) : AgentTool {
-    override val displayName: String = "查看笔记与梗概"
+    override val displayName: String = "查看笔记与追踪"
     override val spec = ToolSpec(
         name = "list_notes",
-        description = "列出本书已有笔记与剧情梗概，或按 note_id 分段读取全文；更新内容前先读取原文，用户手写内容只读。",
+        description = "列出本书已有笔记、剧情梗概与追踪，或按 note_id 分段读取全文；更新内容前先读取原文，用户手写内容只读。",
         parameters = buildJsonObject {
             put("type", "object")
             putJsonObject("properties") {
-                putJsonObject("kind") { put("type", "string"); putJsonArray("enum") { add("note"); add("plot_summary"); add("all") }; put("description", "内容类型，默认 all") }
+                putJsonObject("kind") {
+                    put("type", "string")
+                    putJsonArray("enum") {
+                        add("note")
+                        add("plot_summary")
+                        add("foreshadowing")
+                        add("romance_line")
+                        add("all")
+                    }
+                    put("description", "内容类型，默认 all")
+                }
                 putJsonObject("note_id") { put("type", "integer"); put("description", "笔记编号；提供时读取该条全文") }
                 putJsonObject("start_char") { put("type", "integer"); put("description", "全文读取起点，默认 0") }
                 putJsonObject("max_chars") { put("type", "integer"); put("description", "本次最多返回字符数，1000-8000，默认 6000") }
@@ -375,7 +403,12 @@ internal class ListNotesTool(
             return ToolResult.Success(formatNoteContent(note, start, maxChars, currentPersonaId))
         }
         val kind = arguments.text("kind").lowercase().ifBlank { "all" }
-        if (kind !in setOf("note", "plot_summary", "all")) return ToolResult.Failure("INVALID_ARGUMENT", "kind 只能是 note、plot_summary 或 all")
+        if (kind !in setOf("note", "plot_summary", "foreshadowing", "romance_line", "all")) {
+            return ToolResult.Failure(
+                "INVALID_ARGUMENT",
+                "kind 只能是 note、plot_summary、foreshadowing、romance_line 或 all"
+            )
+        }
         return ToolResult.Success(formatNoteIndex(notes.getForBook(bookId).filter { it.visibleIn(readingScope) && (!strictSourceScope || it.withinLibraryScope(readingScope)) }, kind, currentPersonaId))
     }
 }
@@ -409,19 +442,36 @@ internal fun formatNoteIndex(
         when (kind) {
             "note" -> it.kind == NoteRepository.KIND_NOTE
             "plot_summary" -> it.kind == NoteRepository.KIND_PLOT_SUMMARY
+            "foreshadowing" -> it.kind == NoteRepository.KIND_FORESHADOWING
+            "romance_line" -> it.kind == NoteRepository.KIND_ROMANCE_LINE
             else -> true
         }
     }.sortedWith(compareByDescending<NoteEntity> { it.updatedAt }.thenByDescending { it.id })
-    if (filtered.isEmpty()) return "当前书籍还没有符合条件的笔记或剧情梗概。"
-    val lines = mutableListOf("本书的笔记与梗概（共 ${filtered.size} 条）：")
+    if (filtered.isEmpty()) return "当前书籍还没有符合条件的笔记、剧情梗概或追踪。"
+    val lines = mutableListOf("本书的笔记、梗概与追踪（共 ${filtered.size} 条）：")
     filtered.forEach { note ->
-        val kindLabel = if (note.kind == NoteRepository.KIND_PLOT_SUMMARY) "梗概" else "笔记"
+        val kindLabel = when (note.kind) {
+            NoteRepository.KIND_PLOT_SUMMARY -> "梗概"
+            NoteRepository.KIND_FORESHADOWING -> "伏笔"
+            NoteRepository.KIND_ROMANCE_LINE -> "感情线"
+            else -> "笔记"
+        }
         val author = when {
             note.personaId == null -> "用户手写（只读，不可改写）"
             note.personaId == currentPersonaId -> "当前伴读"
             else -> "伴读角色 #${note.personaId}"
         }
-        lines += "#${note.id} [$kindLabel] ${note.title.ifBlank { "未命名" }} · ${note.contentMarkdown.length} 字 · ${formatRelativeTime(note.updatedAt, nowMillis)}更新 · 作者：$author"
+        // 滚动文档要告诉模型旧稿覆盖到第几章，下一轮才能从下一章续读。
+        val coverage = note.relatedChapterIndex?.let { index ->
+            if (note.kind == NoteRepository.KIND_NOTE) "第 ${index + 1} 章"
+            else "覆盖至第 ${index + 1} 章"
+        }
+        lines += buildString {
+            append("#${note.id} [$kindLabel] ${note.title.ifBlank { "未命名" }}")
+            append(" · ${note.contentMarkdown.length} 字")
+            coverage?.let { append(" · ").append(it) }
+            append(" · ${formatRelativeTime(note.updatedAt, nowMillis)}更新 · 作者：$author")
+        }
         note.contentMarkdown.firstMeaningfulLine()?.let { lines += "  开头：${it.clip(100)}" }
     }
     lines += "读全文：list_notes(note_id=${filtered.first().id})"

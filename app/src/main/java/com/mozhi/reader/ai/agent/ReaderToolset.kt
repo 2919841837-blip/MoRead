@@ -227,6 +227,26 @@ class ReaderToolset @Inject constructor(
                     )
                 )
                 add(
+                    SaveForeshadowingTrackerTool(
+                        bookId = bookId,
+                        personaId = personaId,
+                        conversationId = conversationId,
+                        getBook = { libraryRepository.getBook(bookId) },
+                        notes = noteRepository,
+                        readingScope = readingScope
+                    )
+                )
+                add(
+                    SaveRomanceTrackerTool(
+                        bookId = bookId,
+                        personaId = personaId,
+                        conversationId = conversationId,
+                        getBook = { libraryRepository.getBook(bookId) },
+                        notes = noteRepository,
+                        readingScope = readingScope
+                    )
+                )
+                add(
                     GenerateImageTool(
                         bookId = bookId,
                         personaId = personaId,
@@ -287,6 +307,9 @@ private class GetReadingProgressTool(
                 readingDays = libraryRepository.getReadingDays(bookId),
                 noteCount = notes.count { it.kind == NoteRepository.KIND_NOTE },
                 plotSummaries = notes.filter { it.kind == NoteRepository.KIND_PLOT_SUMMARY },
+                trackerNotes = notes.filter {
+                    it.kind == NoteRepository.KIND_FORESHADOWING || it.kind == NoteRepository.KIND_ROMANCE_LINE
+                },
                 annotationCount = visibleAnnotations.total,
                 currentChapterAnnotationCount = visibleAnnotations.currentChapter,
                 bookmarkCount = libraryRepository.getBookmarks(bookId).size

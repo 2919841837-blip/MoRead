@@ -27,6 +27,7 @@ import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.EditNote
 import androidx.compose.material.icons.outlined.ExpandLess
 import androidx.compose.material.icons.outlined.ExpandMore
+import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material.icons.outlined.FileOpen
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.PhotoCamera
@@ -34,6 +35,7 @@ import androidx.compose.material.icons.outlined.Psychology
 import androidx.compose.material.icons.outlined.RecordVoiceOver
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Tune
+import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -846,6 +848,8 @@ private fun toolDescription(tool: String): String = when (tool) {
     "add_annotation" -> "允许角色在原文上留下批注"
     "write_note" -> "允许角色新建或更新自己的读书笔记"
     "save_plot_summary" -> "允许角色维护本书的滚动剧情梗概"
+    "save_foreshadowing_tracker" -> "允许角色维护本书的滚动伏笔追踪"
+    "save_romance_tracker" -> "允许角色维护主角感情线的滚动追踪"
     "generate_image" -> "允许角色生成图片并保存到插图廊"
     "synthesize_speech" -> "允许角色生成并缓存语音内容"
     "create_reading_plan" -> "预留能力，阅读计划上线后生效"
@@ -860,6 +864,8 @@ private fun toolIcon(tool: String): ImageVector = when (tool) {
     "add_annotation" -> Icons.Outlined.EditNote
     "write_note" -> Icons.Outlined.Description
     "save_plot_summary" -> Icons.Outlined.Description
+    "save_foreshadowing_tracker" -> Icons.Outlined.Visibility
+    "save_romance_tracker" -> Icons.Outlined.FavoriteBorder
     "generate_image" -> Icons.Outlined.Image
     "synthesize_speech" -> Icons.Outlined.RecordVoiceOver
     "create_reading_plan" -> Icons.Outlined.CalendarMonth
