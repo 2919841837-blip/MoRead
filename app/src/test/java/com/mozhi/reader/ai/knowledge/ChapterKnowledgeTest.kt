@@ -18,10 +18,12 @@ class ChapterKnowledgeTest {
         assertTrue(result.readableOutline.startsWith("林舟在灯塔等候时"))
     }
 
-    @Test fun inventedNamesQuotesAndAmbiguousQuotesCannotBecomeKnowledge() {
+    @Test fun inventedNamesAndQuotesCannotBecomeKnowledgeButRepeatedQuotesCan() {
         assertTrue(runCatching { ChapterKnowledgeCodec.parse(raw.replace("小满带来一封信。\"", "小满其实是凶手。\""), KnowledgePart(0, source)) }.isFailure)
         assertTrue(runCatching { ChapterKnowledgeCodec.parse(raw.replace("\"name\":\"林舟\"", "\"name\":\"幕后反派\""), KnowledgePart(0, source)) }.isFailure)
-        assertTrue(runCatching { ChapterKnowledgeCodec.parse(raw, KnowledgePart(0, source + source)) }.isFailure)
+        // 同一句原文出现多次时取第一处，不再因为「不唯一」整篇作废。
+        val repeated = ChapterKnowledgeCodec.parse(raw, KnowledgePart(0, source + source))
+        assertEquals(source.indexOf("小满带来一封信。"), repeated.summary.single().start)
     }
 
     @Test fun partsCoverTheFullReadableSourceWithoutSplittingSurrogates() {

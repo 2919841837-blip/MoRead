@@ -427,7 +427,7 @@ internal fun ChapterKnowledgePanel(
             }
         }
     }
-    if (information) KnowledgeInfoDialog("章节大纲", "从已经读过的内容生成连贯梗概，长章会整合为完整脉络。\n\n每章独立生成和停止，可同时提交多章，最多同时请求两个模型任务，其余自动排队。离开页面后继续运行；退出应用后需重新生成未完成的章节。\n\n大纲保存在本机，原文依据可展开核对。修改正文或重置已读范围后，旧大纲会隐藏。", { information = false })
+    if (information) KnowledgeInfoDialog("章节大纲", "从已经读过的内容生成连贯梗概，长章会整合为完整脉络。\n\n每章独立生成和停止，可同时提交多章，最多同时请求三个模型任务，其余自动排队。离开页面后继续运行；退出应用后需重新生成未完成的章节。\n\n大纲保存在本机，原文依据可展开核对。修改正文或重置已读范围后，旧大纲会隐藏。", { information = false })
     deleting?.let { index -> ConfirmKnowledgeDelete("删除本章大纲？", "保存的大纲及其原文依据将被删除。", { deleting = null }) {
         deleting = null; actions.delete(index)
     } }

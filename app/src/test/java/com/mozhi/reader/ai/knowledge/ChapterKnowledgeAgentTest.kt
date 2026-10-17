@@ -67,7 +67,7 @@ class ChapterKnowledgeAgentTest {
         }
         val error = runCatching { agent.extractCharacters(model, "灯塔", "第十一章", part) {} }.exceptionOrNull()
         assertNotNull(error)
-        assertEquals("部分引文无法唯一核对，请重新整理", error!!.message)
+        assertEquals("部分引文无法在原文中核对，请重新整理", error!!.message)
         assertEquals(2, client.requests.size)
     }
 

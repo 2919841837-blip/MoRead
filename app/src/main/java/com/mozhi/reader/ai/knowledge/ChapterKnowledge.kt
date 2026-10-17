@@ -73,7 +73,7 @@ internal object ChapterKnowledgeCodec {
         return parts
     }
 
-    /** All offsets are derived locally; fabricated, ambiguous and out-of-range quotes fail closed. */
+    /** All offsets are derived locally; fabricated and out-of-range quotes fail closed; repeated quotes use the first occurrence. */
     fun parse(raw: String, part: KnowledgePart, maxOutlineChars: Int = 2400): ChapterKnowledge {
         require(raw.length <= 64_000) { "整理结果过长" }
         val clean = KnowledgeResponseJson.clean(raw)
@@ -137,24 +137,17 @@ internal object ChapterKnowledgeCodec {
         return content.copy(outline = validateOutline(value), manualOutline = true)
     }
 
-    private fun verify(fact: DraftFact, part: KnowledgePart): KnowledgeFact {
-        val text = fact.text.trim()
-        val quote = fact.quote.trim()
-        require(text.length in 1..600 && quote.length in 4..300) { "整理结果缺少简短描述或原文依据" }
-        val start = part.text.indexOf(quote)
-        require(start >= 0 && part.text.indexOf(quote, start + 1) == -1) { "部分引文无法唯一核对，请重新整理" }
-        return KnowledgeFact(text, quote, part.start + start, part.start + start + quote.length)
-    }
+    private fun verify(fact: DraftFact, part: KnowledgePart): KnowledgeFact = locateQuote(fact, part)
 
     /**
-     * 人物资料的引文核对：容忍空白与标点写法的走样，记录的永远是原文本身；同一句话出现多次时取第一处
-     * （文字相同，跳转到哪一处都不误导）。编造的原文照样找不到。
+     * 摘要与人物资料共用的引文核对：容忍空白与标点写法的走样，记录的永远是原文本身；同一句话出现多次时
+     * 取第一处（文字相同，跳转到哪一处都不误导）。编造的原文照样找不到。
      */
     private fun locateQuote(fact: DraftFact, part: KnowledgePart): KnowledgeFact {
         val text = fact.text.trim()
         val quote = fact.quote.trim()
         require(text.length in 1..600 && quote.length in 4..300) { "整理结果缺少简短描述或原文依据" }
-        val span = QuoteMatcher.find(part.text, quote) ?: throw IllegalArgumentException("部分引文无法唯一核对，请重新整理")
+        val span = QuoteMatcher.find(part.text, quote) ?: throw IllegalArgumentException("部分引文无法在原文中核对，请重新整理")
         val source = part.text.substring(span.start, span.end)
         require(source.length in 4..300) { "整理结果缺少简短描述或原文依据" }
         return KnowledgeFact(text, source, part.start + span.start, part.start + span.end)
