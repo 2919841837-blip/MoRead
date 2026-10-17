@@ -394,7 +394,7 @@
     <string name="characters_scope_bounded">Up to your progress · first %1$d chapters</string>
     <string name="characters_scope_full">Whole book · %1$d chapters</string>
     <string name="characters_quick_models">Model: %1$s</string>
-    <string name="characters_quick_body">First a cast list is drawn up from locally counted candidates, then each character gets a profile: biography, personality, story, relationships, each pointing to the passage it came from. The number of requests depends on how many characters there are, not on the book\'s length: about %1$d at most, billed by your provider.\n\nFinished profiles are saved right away. If you stop, leave the app or it is closed by the system, you can continue without paying again.</string>
+    <string name="characters_quick_body">First a cast list is drawn up from locally counted candidates, then each character gets a profile: biography, personality and relationships, each pointing to the passage it came from. The number of requests depends on how many characters there are, not on the book\'s length: about %1$d at most, billed by your provider.\n\nFinished profiles are saved right away. If you stop, leave the app or it is closed by the system, you can continue without paying again.</string>
     <string name="characters_quick_web_bounded">Web search is on (%1$s): used only to confirm titles and name spellings, never plot. Findings are listed separately as outside sources, collapsed.</string>
     <string name="characters_quick_web_full">Web search is on (%1$s): it can add background. Findings are listed separately as outside sources, not in the profiles.</string>
     <string name="characters_quick_start">Start</string>
@@ -598,7 +598,6 @@
     <string name="dossier_aliases_label">Also known as</string>
     <string name="dossier_alias_hint">Separate aliases with commas or line breaks</string>
     <string name="dossier_personality_hint">One per line: the trait, or the trait (with a short note)</string>
-    <string name="dossier_experiences_hint">One per line; lead with 第 3 章 · to note the chapter</string>
     <string name="dossier_arc_hint">A sentence or two; leave it empty if nothing changes</string>
     <string name="dossier_relations_hint">One per line: name (relation), or name (relation): a note</string>
     <string name="dossier_attr_manual">Yours</string>
@@ -612,11 +611,9 @@
     <string name="dossier_duplicate_name">A character with this name already exists — edit that one instead</string>
     <string name="dossier_save">Save character</string>
     <string name="characters_manual_attributes">Your details</string>
-    <string name="dossier_timeline">Story so far</string>
     <string name="dossier_arc">How they change</string>
     <string name="dossier_relations">Relationships</string>
     <string name="dossier_jump">Go to text</string>
-    <string name="dossier_chapter_unknown">Chapter not noted</string>
     <string name="dossier_relation_reverse">From their side: %1$s</string>
     <string name="dossier_menu_cd">Profile actions</string>
     <string name="dossier_menu_edit">Edit character</string>

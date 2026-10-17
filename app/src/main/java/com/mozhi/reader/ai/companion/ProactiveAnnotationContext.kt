@@ -146,7 +146,7 @@ class ProactiveAnnotationContextRepository @Inject constructor(
         return prepared
     }
 
-    /** 角色卡：按当前章过滤档案的全部字段（事实/关系/性格/经历等），拼成每位人物的档案；没有资料就整块跳过。 */
+    /** 角色卡：按当前章过滤档案的全部字段（事实/关系/性格/简介等），拼成每位人物的档案；没有资料就整块跳过。 */
     private suspend fun recallCharacterCards(bookId: Long, revision: String, currentChapter: Int): List<AnnotationCharacterCard> {
         val guide = BookCharactersCodec.visible(database.bookCharacterDao().getGuide(bookId), revision)?.guide ?: return emptyList()
         return guide.characters.mapNotNull { person -> cardFor(person, currentChapter, guide.progressBounded) }
@@ -251,13 +251,10 @@ private fun recallLog(message: String) {
 /** 每条段评最多注入几位角色卡人物。 */
 private const val MAX_CARDS = 6
 
-/** 每位角色卡人物最多保留几条前文经历。 */
-private const val CARD_EXPERIENCES = 6
-
 /** 每位角色卡人物最多保留几条关系。 */
 private const val CARD_RELATIONS = 4
 
-/** 角色卡内容字段（经历/简介/小传/成长/外貌）的相关性下限：BM25 不到本轮最高分这个比例就不注入。 */
+/** 角色卡内容字段（简介/小传/成长/外貌）的相关性下限：BM25 不到本轮最高分这个比例就不注入。 */
 private const val CARD_CONTENT_RELEVANCE_RATIO = 0.35
 
 /** 角色卡内容字段的绝对 BM25 下限：候选集 N≤5、idf 上限低，一个专有词命中 ≈1.4 越过，单字偶合 ≈0.3 被挡。 */
@@ -338,26 +335,11 @@ private fun traitsBefore(person: BookCharacter, currentChapter: Int, bounded: Bo
         .map { it.value }.distinct()
 }
 
-/** 前文经历：手写 > 上一版「人物资料」> 档案经历 > 逐条事实；AI 来源按章锚过滤，手写始终算数。 */
-private fun experiencesBefore(person: BookCharacter, currentChapter: Int): List<String> {
-    val manual = person.manualExperiences()
-    if (manual != null) return manual.map { it.text }.filter(String::isNotBlank)
-    val legacy = person.manualDescription?.takeIf(String::isNotBlank)
-        ?.lineSequence()?.map(String::trim)?.filter(String::isNotEmpty)?.toList()
-    if (!legacy.isNullOrEmpty()) return legacy
-    val dossier = person.dossier?.experiences.orEmpty().mapNotNull { event ->
-        val chapter = event.chapterIndex ?: event.anchor?.chapterIndex ?: return@mapNotNull null
-        event.text.takeIf { chapter < currentChapter && it.isNotBlank() }
-    }
-    if (dossier.isNotEmpty()) return dossier
-    return person.evidence.filter { it.chapterIndex < currentChapter }.map { it.fact.text }
-}
-
 /** 无章节锚点的标量字段（简介/小传/成长）：手写优先且始终安全；AI 值只在进度受限扫描时召回（全书扫描可能含未读情节）。 */
 private fun summaryField(manual: String?, ai: String, bounded: Boolean): String? =
     manual?.takeIf(String::isNotBlank) ?: ai.takeIf { bounded }.orEmpty().takeIf(String::isNotBlank)
 
-/** 把一位人物压成结构化角色卡字段：主次/身份/性别年龄/性格为自身字段，关系逐条，经历/简介/小传/成长/外貌为内容字段，全部只取前文或可信来源。 */
+/** 把一位人物压成结构化角色卡字段：主次/身份/性别年龄/性格为自身字段，关系逐条，简介/小传/成长/外貌为内容字段，全部只取前文或可信来源。 */
 private fun cardFields(person: BookCharacter, currentChapter: Int, bounded: Boolean): List<CardField>? {
     if (person.name.isBlank()) return null
     val fields = buildList {
@@ -379,11 +361,6 @@ private fun cardFields(person: BookCharacter, currentChapter: Int, bounded: Bool
         if (traits.isNotEmpty()) {
             val text = traits.joinToString("；")
             add(CardField(CardFieldKind.TRAIT, "性格：" + text, text))
-        }
-        val experiences = experiencesBefore(person, currentChapter).takeLast(CARD_EXPERIENCES)
-        if (experiences.isNotEmpty()) {
-            val text = experiences.joinToString("；")
-            add(CardField(CardFieldKind.CONTENT, "经历：" + text, text))
         }
         summaryField(person.manualAttributes?.tagline, person.dossier?.tagline.orEmpty(), bounded)
             ?.let { add(CardField(CardFieldKind.CONTENT, "简介：" + it, it)) }

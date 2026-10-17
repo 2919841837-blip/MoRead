@@ -43,7 +43,6 @@ data class ExtractedCharacterCard(val name: String, val description: String, val
                 (person.manualRelations() ?: dossier?.relationships.orEmpty()).takeIf { it.isNotEmpty() }?.let { relations ->
                     "人物关系：" + relations.joinToString("；") { "${it.target}（${it.relation}）" + it.detail.takeIf(String::isNotBlank)?.let { d -> "：$d" }.orEmpty() }
                 },
-                person.experiences().takeIf { it.isNotEmpty() }?.let { events -> "经历：\n" + events.joinToString("\n") { "- ${it.text}" } },
                 person.arc().takeIf(String::isNotBlank)?.let { "成长：$it" }
             ).joinToString("\n\n")
             val personality = (person.manualTraits() ?: dossier?.personality.orEmpty()).joinToString("、") { trait ->
@@ -54,7 +53,7 @@ data class ExtractedCharacterCard(val name: String, val description: String, val
 
         private fun legacy(person: BookCharacter): ExtractedCharacterCard = ExtractedCharacterCard(person.name,
             (person.attributes.map { "${it.kind.label()}：${it.value}" } + person.relationships.map { "${person.name} → ${it.target}：${it.relation}" }
-                + listOf(person.manualDescription ?: person.evidence.joinToString("\n\n") { evidence ->
+                + listOf(person.evidence.joinToString("\n\n") { evidence ->
                 "${evidence.fact.text}\n（第 ${evidence.chapterIndex + 1} 章依据：${evidence.fact.quote}）"
             })).filter(String::isNotBlank).joinToString("\n\n"),
             person.attributes.filter { it.kind == CharacterAttributeKind.PERSONALITY }.map { it.value }.distinct().joinToString("、"))

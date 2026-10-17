@@ -138,7 +138,8 @@ class ReaderKnowledgeVisualTest {
         capture("chapter-characters-dark.png")
         compose.onNodeWithTag("person-林舟").performClick()
         compose.onNodeWithTag("dossier-list").assertIsDisplayed()
-        compose.onNodeWithText(fact.text).performScrollTo().assertIsDisplayed()
+        // 旧资料的事实（原「经历」栏）不再出现在档案页。
+        compose.onNodeWithText(fact.text).assertDoesNotExist()
         capture("chapter-character-legacy-dossier-dark.png")
         compose.onNodeWithContentDescription("返回人物列表").performClick()
         compose.onNodeWithTag("characters-list").assertIsDisplayed()
@@ -148,7 +149,7 @@ class ReaderKnowledgeVisualTest {
         compose.onNodeWithText("包括还没读到的章节", substring = true).assertIsDisplayed()
     }
 
-    /** 新档案：头像、主次、一句话、小传、性格、经历时间线、关系（双向合并）与台词，各条都能跳回原文。 */
+    /** 新档案：头像、主次、一句话、小传、性格、关系（双向合并）与台词，各条都能跳回原文。 */
     @Test fun profilesShowStructuredDossiersRelationsAndAGraph() {
         val anchor = { start: Int -> SourceAnchor(1, start, start + 6) }
         val lin = BookCharacter("林舟", emptyList(), role = CharacterRole.PROTAGONIST, mentions = 320, dossier = CharacterDossier(
@@ -156,8 +157,6 @@ class ReaderKnowledgeVisualTest {
             gender = "男", age = "十七岁", identity = "灯塔守望人", appearance = "瘦高，常穿一件旧呢外套",
             arc = "从固守一隅到主动出发",
             personality = listOf(DossierTrait("执着", "风雨夜也按时点灯", anchor(0)), DossierTrait("嘴硬心软", "嘴上赶小满走，却给她留了热汤", anchor(20))),
-            experiences = listOf(DossierEvent("独自守着灯塔，在雨夜等来了小满。", 0, anchor(0)), DossierEvent("和小满约好天亮出发。", 1, anchor(20)),
-                DossierEvent("在海岸小镇找到寄信人的旧居。", 3, anchor(40))),
             relationships = listOf(DossierRelation("小满", "同伴", "一起踏上寻信之旅", anchor(20)), DossierRelation("林伯", "祖父", "把守灯的规矩传给了他", anchor(0)))))
         val man = BookCharacter("小满", emptyList(), role = CharacterRole.MAJOR, mentions = 120, dossier = CharacterDossier(
             tagline = "送来迟到之信的姑娘", identity = "信使", personality = listOf(DossierTrait("爽朗")),
@@ -175,9 +174,6 @@ class ReaderKnowledgeVisualTest {
         capture("character-dossier.png")
         compose.onNodeWithText("执着").performScrollTo().performClick()
         assertEquals(anchor(0), located.last())
-        compose.onNodeWithTag("dossier-list").performScrollToKey("timeline")
-        compose.onNodeWithText("在海岸小镇找到寄信人的旧居。").performScrollTo().performClick()
-        assertEquals(anchor(40), located.last())
         // 小满的档案说林舟是「旅伴」，在林舟的档案里合并成同一条关系。
         compose.onNodeWithTag("dossier-list").performScrollToKey("relations")
         compose.onNodeWithText("对方眼中：旅伴", substring = true).performScrollTo().assertIsDisplayed()
@@ -208,14 +204,14 @@ class ReaderKnowledgeVisualTest {
         val anchor = scroll("characters-list")
         compose.onNodeWithContentDescription("人物12的人物操作").performClick()
         compose.onNodeWithText("编辑人物").performClick()
-        // 经历是「一行一条」的多行框：整段换掉就是接管这一栏。
-        editorField("character-experiences").performScrollTo().performTextReplacement("守望灯塔的人，手动修订")
+        // 成长变化是整段文本：换掉就是接管这一栏。
+        editorField("character-arc").performScrollTo().performTextReplacement("守望灯塔的人，手动修订")
         compose.onNodeWithText("保存人物").performClick()
-        assertEquals(listOf("守望灯塔的人，手动修订"), created?.experiences()?.map { it.text })
+        assertEquals("守望灯塔的人，手动修订", created?.arc())
         assertEquals(anchor, scroll("characters-list"), .001f)
         compose.onNodeWithContentDescription("新增人物").performClick()
         editorField("character-name").performScrollTo().performTextInput("渡船人")
-        editorField("character-experiences").performScrollTo().performTextInput("在码头接应")
+        editorField("character-bio").performScrollTo().performTextInput("在码头接应")
         compose.onNodeWithText("保存人物").performClick()
         assertEquals("渡船人", created?.name)
         assertEquals(anchor, scroll("characters-list"), .001f)

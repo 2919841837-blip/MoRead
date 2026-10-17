@@ -18,9 +18,6 @@ data class SourceAnchor(val chapterIndex: Int, val start: Int, val end: Int)
 @Serializable
 data class DossierTrait(val trait: String, val detail: String = "", val anchor: SourceAnchor? = null)
 
-@Serializable
-data class DossierEvent(val text: String, val chapterIndex: Int? = null, val anchor: SourceAnchor? = null)
-
 /** [relation] 是「对方是本人物的什么人」：苏晚 · 师姐 ＝ 苏晚是他的师姐。 */
 @Serializable
 data class DossierRelation(val target: String, val relation: String, val detail: String = "", val anchor: SourceAnchor? = null)
@@ -40,14 +37,13 @@ data class CharacterDossier(
     val appearanceAnchor: SourceAnchor? = null,
     val arc: String = "",
     val personality: List<DossierTrait> = emptyList(),
-    val experiences: List<DossierEvent> = emptyList(),
     val relationships: List<DossierRelation> = emptyList()
 ) {
-    val isEmpty: Boolean get() = tagline.isEmpty() && bio.isEmpty() && personality.isEmpty() && experiences.isEmpty() &&
+    val isEmpty: Boolean get() = tagline.isEmpty() && bio.isEmpty() && personality.isEmpty() &&
         relationships.isEmpty() && identity.isEmpty() && appearance.isEmpty()
 
     fun anchors(): List<SourceAnchor> = listOfNotNull(appearanceAnchor) + personality.mapNotNull { it.anchor } +
-        experiences.mapNotNull { it.anchor } + relationships.mapNotNull { it.anchor }
+        relationships.mapNotNull { it.anchor }
 }
 
 /** 一位人物的整理结果，也是断点缓存里存的内容。[evidence]/[attributes] 回填给插图形象、角色卡等旧调用方。 */
@@ -61,8 +57,8 @@ internal data class ProfiledCharacter(
 )
 
 internal object CharacterDossierCodec {
-    /** 2 = 提示词不再要经典台词。版本折进逐人档案的缓存键，旧档案不再命中、由 pruneDossiers 清掉。 */
-    const val PROMPT_VERSION = 2
+    /** 3 = 不再整理人物经历。版本折进逐人档案的缓存键，旧档案不再命中、由 pruneDossiers 清掉。 */
+    const val PROMPT_VERSION = 3
 
     fun prompt(bookTitle: String, progressBounded: Boolean): String = """
         你是读书助手，为读者整理《$bookTitle》里一位人物的「人物档案」。
@@ -79,11 +75,10 @@ internal object CharacterDossierCodec {
           "bio": "人物小传，120–250字，一段自然段：来历、处境、做过的关键事、此刻的状况",
           "appearance": {"text": "外貌，只写原文明确描写的；没有就留空", "p": 段落编号},
           "personality": [{"trait": "四字以内的性格词", "detail": "一句话，点出体现它的言行", "p": 段落编号}],
-          "experiences": [{"p": 段落编号, "event": "他在这一段经历或做了什么，一两句"}],
           "relationships": [{"name": "对方的称呼", "relation": "对方是他的什么人，如师父、妹妹、宿敌", "detail": "一句话", "p": 段落编号}],
           "arc": "他的成长与变化，一两句；看不出就留空"
         }
-        personality 2–4 条；experiences 按段落先后 3–8 条；relationships 最多 8 条，只写段落里出现过的人。
+        personality 2–4 条；relationships 最多 8 条，只写段落里出现过的人。
         p 填段落前方括号里的数字。宁可少写几条，也要保证 JSON 完整。
     """.trimIndent()
 
@@ -129,12 +124,6 @@ internal object CharacterDossierCodec {
                 anchored(item.passageNumber("p", "passage"), allNames))
         } else person.strings("personality", "性格", "traits").map { Triple(it.take(MAX_TRAIT), "", null) }
 
-        val events = person.objects("experiences", "经历", "events").mapNotNull { item ->
-            val text = item.text("event", "text", "经历", "content")?.take(MAX_EVENT) ?: return@mapNotNull null
-            val number = item.passageNumber("p", "passage")
-            Triple(text, number?.takeIf { passageAt(it) != null }, anchored(number, allNames))
-        }.sortedBy { it.second ?: Int.MAX_VALUE }.take(MAX_EVENTS)
-
         val relations = person.objects("relationships", "关系", "relations").mapNotNull { item ->
             val other = item.text("name", "target", "对象", "人物")?.take(MAX_NAME) ?: return@mapNotNull null
             val relation = item.text("relation", "关系")?.take(MAX_RELATION) ?: return@mapNotNull null
@@ -153,7 +142,6 @@ internal object CharacterDossierCodec {
             appearanceAnchor = appearanceAnchor?.anchor,
             arc = person.text("arc", "成长", "变化")?.take(MAX_ARC).orEmpty(),
             personality = traits.distinctBy { it.first }.take(MAX_TRAITS).map { DossierTrait(it.first, it.second, it.third?.anchor) },
-            experiences = events.map { (text, number, anchor) -> DossierEvent(text, passageAt(number)?.chapterIndex, anchor?.anchor) },
             relationships = relations
         )
         require(!dossier.isEmpty) { "没有整理出这个人物的资料" }
@@ -161,7 +149,6 @@ internal object CharacterDossierCodec {
         // 回填旧结构：每条都有可核对的原文句子，插图形象与角色卡照旧可用。
         val fallback = passages.firstNotNullOfOrNull { passage -> anchorIn(passage, allNames).takeIf { it.matched } }
         fun fact(text: String, at: Anchored) = CharacterEvidence(at.anchor.chapterIndex, KnowledgeFact(text, at.quote, at.anchor.start, at.anchor.end))
-        val evidence = events.mapNotNull { (text, _, at) -> at?.let { fact(text, it) } }
         val attributes = buildList {
             keptAliases.forEach { alias ->
                 passages.firstNotNullOfOrNull { passage -> anchorIn(passage, listOf(alias)).takeIf { it.matched } }
@@ -176,6 +163,8 @@ internal object CharacterDossierCodec {
             }
             traits.forEach { (trait, _, at) -> (at ?: fallback)?.let { add(BookCharacterAttribute(CharacterAttributeKind.PERSONALITY, trait, fact(trait, it))) } }
         }.distinctBy { it.kind to it.value }
+        // 人物经历不再抽取；逐字依据改由已锚定的属性回填，插图与旧角色卡仍能取到可核对的事实。
+        val evidence = attributes.map { it.evidence }.distinctBy { it.fact.text }
         return ProfiledCharacter(name, keptAliases, dossier, evidence, attributes)
     }
 
@@ -217,8 +206,6 @@ internal object CharacterDossierCodec {
     private const val MAX_TRAIT = 12
     private const val MAX_TRAITS = 5
     private const val MAX_DETAIL = 100
-    private const val MAX_EVENT = 160
-    private const val MAX_EVENTS = 10
     private const val MAX_RELATION = 16
     private const val MAX_RELATIONS = 10
 }

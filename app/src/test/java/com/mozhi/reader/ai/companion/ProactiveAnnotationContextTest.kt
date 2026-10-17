@@ -7,7 +7,6 @@ import com.mozhi.reader.ai.knowledge.ChapterKnowledgeCodec
 import com.mozhi.reader.ai.knowledge.CharacterDossier
 import com.mozhi.reader.ai.knowledge.CharacterEvidence
 import com.mozhi.reader.ai.knowledge.CharacterRole
-import com.mozhi.reader.ai.knowledge.DossierEvent
 import com.mozhi.reader.ai.knowledge.DossierRelation
 import com.mozhi.reader.ai.knowledge.DossierTrait
 import com.mozhi.reader.ai.knowledge.KnowledgeFact
@@ -115,7 +114,7 @@ class ProactiveAnnotationContextTest {
         assertNull(validatedAnnotationOutline(entry, ReadingScope.upto(2, 5), "r", promise))
     }
 
-    @Test fun cardProfileFiltersFactsAndRelationsByChapterAnchor() {
+    @Test fun cardProfileFiltersLegacyRelationsByChapterAnchor() {
         val person = BookCharacter("顾衡",
             evidence = listOf(
                 CharacterEvidence(2, KnowledgeFact("在雪岭立誓", "q", 0, 1)),
@@ -129,10 +128,11 @@ class ProactiveAnnotationContextTest {
         )
         val profile = cardProfile(person, 5, true)!!
         assertTrue(profile.contains("主角"))
-        assertTrue(profile.contains("在雪岭立誓"))
         assertTrue(profile.contains("沈岚"))
-        assertFalse(profile.contains("把玉佩交还"))
         assertFalse(profile.contains("谢玄"))
+        // 旧资料的事实（原「经历」栏）不再召回。
+        assertFalse(profile.contains("在雪岭立誓"))
+        assertFalse(profile.contains("把玉佩交还"))
     }
 
     @Test fun cardProfileReadsDossierRelationshipsWithDetail() {
@@ -158,7 +158,6 @@ class ProactiveAnnotationContextTest {
                 appearance = "一袭白衣",
                 arc = "从隐忍到决意复仇",
                 personality = listOf(DossierTrait("坚毅", "雪岭立誓足见其心", SourceAnchor(2, 0, 10))),
-                experiences = listOf(DossierEvent("在雪岭立誓", 2, SourceAnchor(2, 0, 10))),
                 relationships = listOf(DossierRelation("沈岚", "师姐", "同门情谊", SourceAnchor(3, 0, 10)))
             ),
             role = CharacterRole.PROTAGONIST
@@ -169,7 +168,6 @@ class ProactiveAnnotationContextTest {
         assertTrue(profile.contains("男"))           // 性别
         assertTrue(profile.contains("十七岁"))       // 年龄
         assertTrue(profile.contains("坚毅"))         // 性格
-        assertTrue(profile.contains("在雪岭立誓"))   // 经历
         assertTrue(profile.contains("背负血海深仇")) // 简介
         assertTrue(profile.contains("复仇"))         // 小传
         assertTrue(profile.contains("决意复仇"))     // 成长
@@ -214,7 +212,7 @@ class ProactiveAnnotationContextTest {
         val prepared = PreparedAnnotationContext("r",
             characterCards = listOf(card("顾衡",
                 identity("主次：主角"),
-                content("经历：在雪岭立誓"), aliases = listOf("顾公子"))))
+                content("小传：在雪岭立誓"), aliases = listOf("顾公子"))))
         val result = prepared.forParagraph(target, ProactiveAnnotationParagraph(0, target.length), 8_000)
         assertTrue(result.background.contains("【角色卡】"))
         assertTrue(result.background.contains("主角"))
@@ -232,12 +230,12 @@ class ProactiveAnnotationContextTest {
         val prepared = PreparedAnnotationContext("r",
             characterCards = listOf(card("顾衡",
                 identity("主次：主角"),
-                content("经历：在雪岭立誓"),
+                content("小传：在雪岭立誓"),
                 content("外貌：一袭白衣"))))
         val body = "顾衡取出玉佩，想起在雪岭对沈岚许下的承诺，终于决定兑现誓言。".repeat(3)
         val result = prepared.forParagraph(body, ProactiveAnnotationParagraph(0, body.length), 8_000)
         assertTrue(result.background.contains("主角"))
-        assertTrue(result.background.contains("在雪岭立誓"))   // 经历相关，保留
+        assertTrue(result.background.contains("在雪岭立誓"))   // 小传相关，保留
         assertFalse(result.background.contains("一袭白衣"))    // 外貌无关，闸掉
     }
 
@@ -296,7 +294,7 @@ class ProactiveAnnotationContextTest {
             ),
             characterCards = listOf(card("顾衡",
                 identity("主次：主角"),
-                content("经历：在雪岭立誓"))),
+                content("小传：在雪岭立誓"))),
             vectorRecall = vector
         )
         val recall = prepared.forParagraph(body, ProactiveAnnotationParagraph(0, body.length), 8_000).recall

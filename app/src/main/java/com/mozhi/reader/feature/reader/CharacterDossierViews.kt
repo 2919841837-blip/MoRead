@@ -14,7 +14,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.MoreHoriz
-import androidx.compose.material.icons.outlined.NorthEast
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -178,9 +177,9 @@ internal fun characterProgressText(detail: KnowledgeProgress): String = when (de
 }
 
 /**
- * 人物档案页：弹层里的二级页，带返回。从上到下是头像与一句话、基本信息、小传、性格、外貌、经历时间线、
+ * 人物档案页：弹层里的二级页，带返回。从上到下是头像与一句话、基本信息、小传、性格、外貌、
  * 成长变化、关系（自我中心图 + 列表），书外资料排在最后。依据不再单列成清单：
- * 性格标签、经历与关系各自就能点回原文（手写的那几条没有原文坐标，因此不提供跳转）。
+ * 性格标签与关系各自就能点回原文（手写的那几条没有原文坐标，因此不提供跳转）。
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -192,8 +191,6 @@ internal fun CharacterDossierPage(
 ) {
     val dossier = person.dossier
     val links = remember(person, everyone) { egoLinks(person, everyone) }
-    val timeline = remember(person) { characterTimeline(person) }
-    fun chapter(index: Int?): String = index?.let { titles[it] ?: "${it + 1}" }.orEmpty()
     Column(Modifier.fillMaxSize().testTag("dossier-${person.name}")) {
         Row(Modifier.fillMaxWidth().height(52.dp).padding(horizontal = MoReadSpacing.s), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, stringResource(R.string.characters_back), tint = palette.muted) }
@@ -279,17 +276,6 @@ internal fun CharacterDossierPage(
                     Text(appearance, style = MaterialTheme.typography.bodyMedium.copy(lineHeight = 24.sp), color = palette.onBackground)
                 }
             }
-            if (timeline.isNotEmpty()) item(key = "timeline") {
-                DossierSection(stringResource(R.string.dossier_timeline), palette) {
-                    Column {
-                        timeline.forEachIndexed { index, entry ->
-                            TimelineRow(entry, chapter(entry.chapterIndex).ifBlank { stringResource(R.string.dossier_chapter_unknown) },
-                                first = index == 0, last = index == timeline.lastIndex, palette = palette,
-                                onClick = entry.source?.let { source -> { onLocate(source) } })
-                        }
-                    }
-                }
-            }
             person.arc().takeIf(String::isNotBlank)?.let { arc -> item(key = "arc") {
                 DossierSection(stringResource(R.string.dossier_arc), palette) {
                     Text(arc, style = MaterialTheme.typography.bodyMedium.copy(lineHeight = 24.sp), color = palette.onBackground)
@@ -332,30 +318,6 @@ private fun DossierSection(title: String, palette: ReaderPalette, onJump: (() ->
                     modifier = Modifier.clickable(onClick = onTrailing).padding(MoReadSpacing.xs))
             }
             content()
-        }
-    }
-}
-
-@Composable
-private fun TimelineRow(entry: TimelineEntry, chapter: String, first: Boolean, last: Boolean, palette: ReaderPalette, onClick: (() -> Unit)?) {
-    Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min).then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)) {
-        val line = palette.glassBorder
-        val dot = palette.accent
-        Canvas(Modifier.width(18.dp).fillMaxHeight()) {
-            val x = size.width / 2
-            val y = 9.dp.toPx()
-            if (!first) drawLine(line, Offset(x, 0f), Offset(x, y), 2.dp.toPx())
-            if (!last) drawLine(line, Offset(x, y), Offset(x, size.height), 2.dp.toPx())
-            drawCircle(dot, 4.dp.toPx(), Offset(x, y))
-        }
-        Column(Modifier.weight(1f).padding(start = MoReadSpacing.s, bottom = if (last) 0.dp else MoReadSpacing.m)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(chapter, Modifier.weight(1f, fill = false), style = MaterialTheme.typography.labelSmall, color = palette.muted,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis)
-                if (onClick != null) Icon(Icons.Outlined.NorthEast, stringResource(R.string.dossier_jump), tint = palette.muted,
-                    modifier = Modifier.padding(start = MoReadSpacing.xs).size(12.dp))
-            }
-            Text(entry.text, style = MaterialTheme.typography.bodyMedium.copy(lineHeight = 23.sp), color = palette.onBackground)
         }
     }
 }

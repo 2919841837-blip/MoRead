@@ -306,8 +306,8 @@ class BookCharactersRepositoryTest {
         val name = askedName(user, body)
         return when {
             "人物名单" in system -> """{"characters":[{"name":"林舟","role":"protagonist"},{"name":"小满","role":"major"}]}"""
-            name == "林舟" -> """{"name":"林舟","tagline":"守灯人","bio":"在灯塔等候的人。","experiences":[{"p":1,"event":"在灯塔等候"}]}"""
-            else -> """{"name":"小满","tagline":"信使","bio":"送信的人。","experiences":[{"p":1,"event":"送来了一封信"}]}"""
+            name == "林舟" -> """{"name":"林舟","tagline":"守灯人","bio":"在灯塔等候的人。"}"""
+            else -> """{"name":"小满","tagline":"信使","bio":"送信的人。"}"""
         }
     }
 
@@ -336,9 +336,7 @@ class BookCharactersRepositoryTest {
         val lin = guide.characters.first()
         assertEquals(CharacterRole.PROTAGONIST, lin.role)
         assertEquals("守灯人", lin.dossier!!.tagline)
-        val anchor = lin.dossier!!.experiences.single().anchor!!
-        assertEquals(0 to "林舟在灯塔等候。", anchor.chapterIndex to quickTexts[0].substring(anchor.start, anchor.end))
-        assertEquals(0 to 0, repository.locate(published, anchor))
+        assertEquals("在灯塔等候的人。", lin.dossier!!.bio)
         // 一次名单 + 每人一份档案；全程不发工具 schema，不写聊天记录。
         assertEquals(3, client.requests)
         assertTrue(progress.any { it.stage == KnowledgeProgress.Stage.ROSTER })
@@ -474,20 +472,16 @@ class BookCharactersRepositoryTest {
         assertTrue(rescanned.evidence.isNotEmpty())
     }
 
-    /** 手写的经历 / 成长变化 / 关系同样存进 contentJson，读回来一字不差，重扫也动不了它。 */
-    @Test fun handWrittenTimelineArcAndRelationsRoundTripAndSurviveEveryLaterScan() = runBlocking {
+    /** 手写的成长变化 / 关系同样存进 contentJson，读回来一字不差，重扫也动不了它。 */
+    @Test fun handWrittenArcAndRelationsRoundTripAndSurviveEveryLaterScan() = runBlocking {
         repository.generate(repository.preview(1))
         repository.saveCharacter(1, "林舟", "林舟", ManualCharacterAttributes(
-            experiences = listOf(ManualEvent("修好了灯", 4), ManualEvent("回了老家")),
             arc = "放下执念。", relationships = listOf(ManualRelation("苏晚", "师姐", "常来看他"))))
         val saved = repository.observe(1).first().saved!!.guide.characters.first { it.name == "林舟" }
-        assertEquals(listOf("修好了灯", "回了老家"), saved.experiences().map { it.text })
-        assertEquals(4, saved.experiences().first().chapterIndex)
         assertEquals("放下执念。", saved.arc())
         assertEquals(listOf("苏晚"), saved.manualRelations()!!.map { it.target })
         repository.generate(repository.preview(1))
         val rescanned = repository.observe(1).first().saved!!.guide.characters.first { it.name == "林舟" }
-        assertEquals(listOf("修好了灯", "回了老家"), rescanned.experiences().map { it.text })
         assertEquals("放下执念。", rescanned.arc())
         assertEquals("师姐", rescanned.manualRelations()!!.single().relation)
     }

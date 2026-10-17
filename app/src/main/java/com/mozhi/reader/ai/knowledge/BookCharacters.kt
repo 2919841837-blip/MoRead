@@ -15,10 +15,6 @@ data class BookCharacterRelationship(val target: String, val relation: String, v
 @Serializable
 data class ManualTrait(val trait: String, val detail: String = "")
 
-/** 用户手写的一条经历：章节号可省（省了就是「未注明章节」，界面上不给「跳到原文」）。 */
-@Serializable
-data class ManualEvent(val text: String, val chapterIndex: Int? = null)
-
 /** 用户手写的一条关系；方向与档案一致：[relation] 是「对方是本人物的什么人」。 */
 @Serializable
 data class ManualRelation(val target: String, val relation: String = "", val detail: String = "")
@@ -37,20 +33,19 @@ data class ManualCharacterAttributes(
     val aliases: List<String>? = null, val personality: List<ManualTrait>? = null,
     /** 主次：null = 仍由 AI 判定。枚举没有「空」态，退回 AI 由编辑器的「跟随 AI」档位表达。 */
     val role: CharacterRole? = null,
-    /** 手写的经历 / 成长变化 / 社会关系；与上面几项同规则，空列表表示用户要求一条都不显示。 */
-    val experiences: List<ManualEvent>? = null, val arc: String? = null,
+    /** 手写的成长变化 / 社会关系；与上面几项同规则，空列表表示用户要求一条都不显示。 */
+    val arc: String? = null,
     val relationships: List<ManualRelation>? = null) {
     val isEmpty: Boolean get() = identity == null && gender == null && age == null && appearance == null &&
         tagline == null && bio == null && aliases == null && personality == null && role == null &&
-        experiences == null && arc == null && relationships == null
+        arc == null && relationships == null
 }
 
 @Serializable
 data class BookCharacter(val name: String, val evidence: List<CharacterEvidence>,
     /**
-     * 上一版的「人物资料」：编辑器里那个自由文本框写下的字。界面与导出都不再展示它，
-     * 只作为读取兼容的载体——旧文字会被当成这个人物的经历（见 [aiExperiences]），
-     * 用户在新的经历框里保存一次后由 [BookCharactersCodec.edit] 清掉。
+     * 上一版的「人物资料」：编辑器里那个自由文本框写下的字。仅作为旧存档的**所有权标记**保留，
+     * 避免只写过这段文字的人物在重扫或版本门控时被整条丢掉；内容本身不读取、不展示、不导出。
      */
     val manualDescription: String? = null, val sourceName: String? = null,
     val attributes: List<BookCharacterAttribute> = emptyList(),
@@ -60,7 +55,7 @@ data class BookCharacter(val name: String, val evidence: List<CharacterEvidence>
     val role: CharacterRole? = null,
     /** 称呼在提取范围内出现的次数，用于排序与关系图节点大小。 */
     val mentions: Int = 0,
-    /** 用户手写的属性（身份/性别/年龄/外貌/别名/性格/简介/小传/主次/经历/成长变化/关系）；重扫不会覆盖。 */
+    /** 用户手写的属性（身份/性别/年龄/外貌/别名/性格/简介/小传/主次/成长变化/关系）；重扫不会覆盖。 */
     val manualAttributes: ManualCharacterAttributes? = null,
     /** 用户经手过这一条（新建、改名或保存过编辑）：[BookCharactersCodec.edit] 置真，重扫合并时整条保留。 */
     val userEdited: Boolean = false) {
@@ -102,32 +97,11 @@ data class BookCharacter(val name: String, val evidence: List<CharacterEvidence>
     /** 性格（含说明）：未接管时返回 null，调用方沿用现有的档案 / 旧资料分支。 */
     fun manualTraits(): List<DossierTrait>? = manualAttributes?.personality?.map { DossierTrait(it.trait, it.detail) }
 
-    /** 手写的经历：未接管时返回 null（**空列表**表示用户要求一条都不显示，调用方不许再回落）。 */
-    fun manualExperiences(): List<DossierEvent>? = manualAttributes?.experiences?.map { DossierEvent(it.text, it.chapterIndex) }
-
     /** 手写的社会关系：未接管时返回 null。方向与档案一致（[DossierRelation.relation] 是「对方是他的什么人」）。 */
     fun manualRelations(): List<DossierRelation>? = manualAttributes?.relationships?.map { DossierRelation(it.target, it.relation, it.detail) }
 
     /** 成长变化：手写优先，其次档案；都没有就是空串（那一栏整块不显示）。 */
     fun arc(): String = manualAttributes?.arc ?: dossier?.arc.orEmpty()
-
-    /**
-     * 人物经历：手写优先，否则 [aiExperiences]。
-     *
-     * 手写接管后（含清空）一律以手写为准，所以页面上不会出现「删了一条又被 AI 填回来」。
-     */
-    fun experiences(): List<DossierEvent> = manualExperiences() ?: aiExperiences()
-
-    /**
-     * 没接管时的经历来源，按「用户写过的先算数」排：上一版的人物资料（整段当作经历，免得白写），
-     * 其次档案里整理好的经历，最后是逐段扫描留下的逐条事实。
-     * 编辑器拿它当「恢复 AI 内容」的目标值，所以它必须与 [experiences] 在未接管时逐字一致。
-     */
-    fun aiExperiences(): List<DossierEvent> = manualDescription?.takeIf(String::isNotBlank)
-        ?.let { notes -> notes.lineSequence().map(String::trim).filter(String::isNotEmpty).map { DossierEvent(it) }.toList() }
-        ?.takeIf { it.isNotEmpty() }
-        ?: dossier?.experiences?.takeIf { it.isNotEmpty() }
-        ?: evidence.map { DossierEvent(it.fact.text, it.chapterIndex) }
 
     fun tagline(): String = manualAttributes?.tagline ?: dossier?.tagline.orEmpty()
     fun bio(): String = manualAttributes?.bio ?: dossier?.bio.orEmpty()
@@ -175,10 +149,9 @@ internal object BookCharactersCodec {
         val layer = manualAttributes?.takeUnless { it.isEmpty }
         val original = originalIdentity?.let { key -> guide.characters.firstOrNull { it.identity == key } ?: error("人物已变化，请重新打开编辑") }
         require(guide.characters.none { it !== original && (it.name.equals(cleanName, true) || it.identity.equals(cleanName, true)) }) { "已有同名人物，请直接编辑该人物" }
-        // 经历一旦被接管，旧的「人物资料」就算迁移完了，可以清掉；否则留着当读取兼容的载体，老文字照旧出现在经历框里。
-        val legacy = original?.manualDescription?.takeIf { layer?.experiences == null }
         // userEdited 是「这条由用户经手」的持久标记：新建的人（可能只填了名字）与只改了名的人，重扫时才不会被整条丢掉。
-        val person = original?.copy(name = cleanName, manualDescription = legacy, sourceName = original.identity,
+        // manualDescription 不再读取，但 copy 会原样保留它，旧存档的所有权标记因此不会丢。
+        val person = original?.copy(name = cleanName, sourceName = original.identity,
             manualAttributes = layer, userEdited = true)
             ?: BookCharacter(cleanName, emptyList(), sourceName = cleanName, manualAttributes = layer, userEdited = true)
         return guide.copy(characters = if (original == null) guide.characters + person else guide.characters.map { if (it === original) person else it })

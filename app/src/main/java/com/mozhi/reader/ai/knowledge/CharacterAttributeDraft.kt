@@ -9,8 +9,7 @@ package com.mozhi.reader.ai.knowledge
  * 保存时自然也变回 null。
  *
  * 这里不追求「解析无损」：真正要保的是合并中性——没接管时草稿与 AI 原值来自同一个函数
- * （经历走 [BookCharacter.experiences]、成长走 [BookCharacter.arc]、关系走 [baselineRelations]），
- * 两边逐字相同，规范化由谁做都不影响判定。
+ * （成长走 [BookCharacter.arc]、关系走 [baselineRelations]），两边逐字相同，规范化由谁做都不影响判定。
  *
  * 唯一的例外是主次：枚举没有「空」态，所有权由档位直接表达（null = 跟随 AI），不与 AI 原值比较 ——
  * 所以选一个恰好与 AI 当前值相同的档位表示「就按这个，别再改」。
@@ -19,7 +18,7 @@ internal data class CharacterAttributeDraft(
     val identity: String = "", val gender: String = "", val age: String = "", val appearance: String = "",
     val tagline: String = "", val bio: String = "", val aliases: String = "", val personality: String = "",
     val role: CharacterRole? = null,
-    val experiences: String = "", val arc: String = "", val relations: String = "")
+    val arc: String = "", val relations: String = "")
 
 internal object CharacterAttributeDraftCodec {
     const val MAX_IDENTITY = 60
@@ -32,8 +31,6 @@ internal object CharacterAttributeDraftCodec {
     const val MAX_TRAITS = 5
     const val MAX_TRAIT = 12
     const val MAX_DETAIL = 100
-    const val MAX_EVENTS = 24
-    const val MAX_EVENT = 160
     const val MAX_ARC = 240
     const val MAX_RELATIONS = 16
     const val MAX_REL_NAME = 20
@@ -50,7 +47,6 @@ internal object CharacterAttributeDraftCodec {
         aliases = formatAliases(person?.attributeValues(CharacterAttributeKind.ALIAS).orEmpty()),
         personality = formatPersonality(person?.manualTraits() ?: person?.dossier?.personality.orEmpty()),
         role = person?.manualAttributes?.role,
-        experiences = formatExperiences(person?.experiences().orEmpty()),
         arc = person?.arc().orEmpty(),
         relations = formatRelations(baselineRelations(person)))
 
@@ -70,7 +66,6 @@ internal object CharacterAttributeDraftCodec {
             aliases = ownedList(parseAliases(draft.aliases), parseAliases(ai.aliases)),
             personality = ownedList(parsePersonality(draft.personality), parsePersonality(ai.personality)),
             role = draft.role,
-            experiences = ownedList(parseExperiences(draft.experiences), parseExperiences(ai.experiences)),
             arc = ownedText(draft.arc, ai.arc, MAX_ARC),
             relationships = ownedList(parseRelations(draft.relations), parseRelations(ai.relations)))
         return layer.takeUnless { it.isEmpty }
@@ -105,20 +100,6 @@ internal object CharacterAttributeDraftCodec {
 
     fun formatPersonality(values: List<DossierTrait>): String = values.joinToString("\n") {
         it.trait + if (it.detail.isBlank()) "" else "（${it.detail}）"
-    }
-
-    /** 经历每行一条；行首可写「第 3 章」标出章节，与正文之间用 ·、冒号或空格都行。 */
-    fun parseExperiences(input: String): List<ManualEvent> = input.lineSequence()
-        .map { it.trim() }.filter(String::isNotEmpty).mapNotNull { line ->
-            val head = CHAPTER_HEADLINE.find(line)
-            val number = head?.groupValues?.get(1)?.toIntOrNull()?.takeIf { it >= 1 }
-            val text = (head?.groupValues?.get(2) ?: line).trim().take(MAX_EVENT)
-            text.takeIf(String::isNotEmpty)?.let { ManualEvent(it, number?.minus(1)) }
-        }
-        .distinctBy { it.chapterIndex to it.text }.take(MAX_EVENTS).toList()
-
-    fun formatExperiences(events: List<DossierEvent>): String = events.joinToString("\n") { event ->
-        event.chapterIndex?.let { "第${it + 1}章 · " }.orEmpty() + event.text
     }
 
     /** 社会关系每行一条：「对象（关系）」或「对象（关系）：说明」；括号与说明都可省，全角半角都认。 */
@@ -167,6 +148,4 @@ internal object CharacterAttributeDraftCodec {
     }
 
     private fun <T> ownedList(values: List<T>, ai: List<T>): List<T>? = values.takeIf { it != ai }
-
-    private val CHAPTER_HEADLINE = Regex("""^\s*第\s*(\d+)\s*章\s*[·•・、,，:：|\-—]?\s*(.*)$""")
 }

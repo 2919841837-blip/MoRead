@@ -11,7 +11,7 @@ import kotlin.math.ln
 import kotlin.math.sin
 
 /**
- * 人物页与档案页的版面规则（纯函数，带单测）：分组、卡片摘要、经历时间线、关系合并与关系图布局。
+ * 人物页与档案页的版面规则（纯函数，带单测）：分组、卡片摘要、关系合并与关系图布局。
  * 新档案读 [BookCharacter.dossier]；完整扫描与旧存档没有档案，就从 evidence / attributes / relationships 拼出同样的结构。
  */
 
@@ -42,7 +42,7 @@ internal fun characterGroups(people: List<BookCharacter>): List<CharacterGroup> 
 
 internal data class CharacterSummary(val tagline: String, val tags: List<String>, val relationCount: Int)
 
-/** 卡片上的一句话与标签：手写值优先，其次档案，最后手写的经历、旧资料的身份与第一条事实。 */
+/** 卡片上的一句话与标签：手写值优先，其次档案，最后旧资料的第一条事实。 */
 internal fun characterSummary(person: BookCharacter): CharacterSummary {
     val dossier = person.dossier
     val tags = (person.attributeValues(CharacterAttributeKind.IDENTITY) + person.attributeValues(CharacterAttributeKind.PERSONALITY))
@@ -54,28 +54,12 @@ internal fun characterSummary(person: BookCharacter): CharacterSummary {
         person.tagline().isNotBlank() -> person.tagline()
         dossier != null -> dossier.bio.take(60)
         person.bio().isNotBlank() -> person.bio().take(60)
-        // 手动新建的人物没有档案也没有依据，手写的第一条经历就是卡片上的一句话。
-        else -> person.experiences().firstOrNull()?.text?.take(60)
-            ?: person.evidence.firstOrNull()?.fact?.text.orEmpty()
+        // 手动新建的人物没有档案也没有简介时，卡片上的话来自第一条原文事实。
+        else -> person.evidence.firstOrNull()?.fact?.text.orEmpty()
     }
     val relations = person.manualRelations()?.size
         ?: if (dossier != null) dossier.relationships.size else person.relationships.map { it.target }.distinct().size
     return CharacterSummary(tagline, tags.take(MAX_CARD_TAGS), relations)
-}
-
-internal data class TimelineEntry(val chapterIndex: Int?, val text: String, val source: CharacterSource?)
-
-/**
- * 人物经历：按章节先后。手写接管后一律以手写为准（清空就是空，不回落）；否则新档案用 experiences，
- * 再不行用旧资料的逐条事实。手写的经历没有原文坐标，所以没有可以跳回去的位置。
- */
-internal fun characterTimeline(person: BookCharacter): List<TimelineEntry> {
-    val entries = person.manualExperiences()
-        ?.map { TimelineEntry(it.chapterIndex, it.text, null) }
-        ?: person.dossier?.experiences?.takeIf { it.isNotEmpty() }
-            ?.map { TimelineEntry(it.chapterIndex ?: it.anchor?.chapterIndex, it.text, it.anchor?.let(CharacterSource::Anchor)) }
-        ?: person.evidence.map { TimelineEntry(it.chapterIndex, it.fact.text, CharacterSource.Evidence(it)) }
-    return entries.withIndex().sortedWith(compareBy({ it.value.chapterIndex ?: Int.MAX_VALUE }, { it.index })).map { it.value }
 }
 
 /**

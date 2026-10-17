@@ -8,7 +8,6 @@ class CharacterDossierLayoutTest {
     private val fact = KnowledgeFact("守着灯塔", "林舟在灯塔等候。", 0, 8)
     private val lin = BookCharacter("林舟", emptyList(), role = CharacterRole.PROTAGONIST, mentions = 300, dossier = CharacterDossier(
         tagline = "守灯人", identity = "灯塔守望人", personality = listOf(DossierTrait("执着"), DossierTrait("嘴硬心软"), DossierTrait("沉默")),
-        experiences = listOf(DossierEvent("后来出发", 5), DossierEvent("最初守灯", 0), DossierEvent("未注明")),
         relationships = listOf(DossierRelation("阿满", "同伴"), DossierRelation("路人甲", "邻居"))))
     private val man = BookCharacter("小满", emptyList(), attributes = listOf(BookCharacterAttribute(CharacterAttributeKind.ALIAS, "阿满", CharacterEvidence(0, fact))),
         role = CharacterRole.MAJOR, mentions = 80, dossier = CharacterDossier(tagline = "信使", relationships = listOf(DossierRelation("林舟", "旅伴"))))
@@ -28,11 +27,6 @@ class CharacterDossierLayoutTest {
         assertEquals(listOf("灯塔守望人", "执着", "嘴硬心软"), summary.tags)
         assertEquals(2, summary.relationCount)
         assertEquals("守着灯塔", characterSummary(legacy).tagline)
-    }
-
-    @Test fun `timeline is chronological and undated events go last`() {
-        assertEquals(listOf("最初守灯", "后来出发", "未注明"), characterTimeline(lin).map { it.text })
-        assertEquals(2, characterTimeline(legacy).single().chapterIndex)
     }
 
     @Test fun `relations merge both sides through aliases and include people who only mention them`() {
@@ -93,18 +87,6 @@ class CharacterDossierLayoutTest {
             characterSummary(lin.copy(manualAttributes = ManualCharacterAttributes(age = "三十"))).tags)
     }
 
-    @Test fun `a hand written timeline replaces the dossier one and has nothing to jump back to`() {
-        val written = lin.copy(manualAttributes = ManualCharacterAttributes(
-            experiences = listOf(ManualEvent("在码头接应", 3), ManualEvent("未注明的事"))))
-        val entries = characterTimeline(written)
-        assertEquals(listOf("在码头接应", "未注明的事"), entries.map { it.text })
-        // 未注明章节的排最后；手写的经历没有原文坐标，所以「跳到原文」无处可去。
-        assertEquals(listOf(3, null), entries.map { it.chapterIndex })
-        assertTrue(entries.all { it.source == null })
-        // 清空就是清空：不回落档案里的经历。
-        assertTrue(characterTimeline(lin.copy(manualAttributes = ManualCharacterAttributes(experiences = emptyList()))).isEmpty())
-    }
-
     @Test fun `a hand written relation list retires the legacy one but keeps what other people say`() {
         val ferryman = legacy.copy(relationships = listOf(BookCharacterRelationship("林舟", "邻居", CharacterEvidence(2, fact))))
         val written = lin.copy(manualAttributes = ManualCharacterAttributes(relationships = listOf(ManualRelation("小满", "旅伴"))))
@@ -119,10 +101,9 @@ class CharacterDossierLayoutTest {
         assertEquals(1, characterSummary(written).relationCount)
     }
 
-    @Test fun `a person the user typed in gets their one line from the first written event`() {
-        val typed = BookCharacter("渡船人", emptyList(), manualAttributes = ManualCharacterAttributes(
-            experiences = listOf(ManualEvent("在码头接应"), ManualEvent("送他过了河"))), userEdited = true)
-        assertEquals("在码头接应", characterSummary(typed).tagline)
+    @Test fun `a person with no dossier or bio gets their one line from the first fact`() {
+        val typed = BookCharacter("渡船人", listOf(CharacterEvidence(4, fact)), userEdited = true)
+        assertEquals("守着灯塔", characterSummary(typed).tagline)
         assertEquals(0, characterSummary(typed).relationCount)
     }
 

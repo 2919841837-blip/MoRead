@@ -16,7 +16,7 @@ import kotlinx.serialization.Serializable
  * 完整扫描的收尾：为资料最多的几位人物写一句话简介、小传与性格，让两种模式产出同一种档案。
  *
  * 只把已经逐条核对过的事实文字交给模型，不再发送原文，所以很便宜；也因此不给出处——
- * 经历时间线仍用核对过的原文依据。写不出来只是少一份小传，从不阻断发布。
+ * 原文依据来自逐段扫描时核对过的事实。写不出来只是少一份小传，从不阻断发布。
  */
 class CharacterBiographer @Inject constructor(private val requests: KnowledgeJsonRequest) {
 
