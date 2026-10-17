@@ -37,6 +37,7 @@ docs/superpowers/
 docs/EPUB_NATIVE_LAYOUT_PLAN.md
 docs/UI_GUIDELINES.md
 docs/releases/v1.0.5.md
+docs/recall-comparison.md
 .firecrawl/
 
 # 构建产物与发布材料（APK 一律通过 GitHub Release 分发）
