@@ -33,8 +33,8 @@ private val CharacterAttributeDraftSaver = listSaver<CharacterAttributeDraft, St
         values[9], values[10]) })
 
 /**
- * 新增/编辑一位人物：姓名、基本属性（主次/身份/性别/年龄/外貌/别名/性格）与档案两项长文
- * （成长变化/社会关系），最后是一句话简介与小传。字段名一律沿用档案页的栏目名。
+ * 新增/编辑一位人物：姓名之后按档案页的展示顺序排列字段——主次、别名、一句话简介、
+ * 性别/年龄/身份、小传、性格、外貌、成长变化、社会关系。字段名一律沿用档案页的栏目名。
  *
  * 手写过的字段从此由用户接管（[ManualCharacterAttributes]），重扫不会覆盖；「恢复 AI 内容」把文本填回
  * 模型原值，保存时这一项自然交回 AI；留空则表示要求不显示，重扫也不会填回。
@@ -72,22 +72,28 @@ internal fun BookCharacterEditorDialog(person: BookCharacter?, people: List<Book
                         Switch(checked = departed, onCheckedChange = { departed = it },
                             modifier = Modifier.testTag("character-departed"))
                     }
-                    AttributeField(R.string.dossier_identity, draft.identity, { draft = draft.copy(identity = it) },
-                        owned = manual?.identity != null, restore = ai.identity, onRestore = { draft = draft.copy(identity = it) },
-                        modifier = Modifier.testTag("character-identity"))
+                    // 顺序与档案页一致：别名/一句话简介 → 性别/年龄/身份 → 小传 → 性格 → 外貌 → 成长变化 → 关系。
+                    AttributeField(R.string.dossier_aliases_label, draft.aliases, { draft = draft.copy(aliases = it) },
+                        owned = manual?.aliases != null, restore = ai.aliases, onRestore = { draft = draft.copy(aliases = it) },
+                        supporting = stringResource(R.string.dossier_alias_hint))
+                    AttributeField(R.string.dossier_tagline, draft.tagline, { draft = draft.copy(tagline = it) },
+                        owned = manual?.tagline != null, restore = ai.tagline, onRestore = { draft = draft.copy(tagline = it) })
                     AttributeField(R.string.dossier_gender, draft.gender, { draft = draft.copy(gender = it) },
                         owned = manual?.gender != null, restore = ai.gender, onRestore = { draft = draft.copy(gender = it) })
                     AttributeField(R.string.dossier_age, draft.age, { draft = draft.copy(age = it) },
                         owned = manual?.age != null, restore = ai.age, onRestore = { draft = draft.copy(age = it) })
-                    AttributeField(R.string.dossier_appearance, draft.appearance, { draft = draft.copy(appearance = it) },
-                        owned = manual?.appearance != null, restore = ai.appearance, onRestore = { draft = draft.copy(appearance = it) },
-                        minLines = 3)
-                    AttributeField(R.string.dossier_aliases_label, draft.aliases, { draft = draft.copy(aliases = it) },
-                        owned = manual?.aliases != null, restore = ai.aliases, onRestore = { draft = draft.copy(aliases = it) },
-                        supporting = stringResource(R.string.dossier_alias_hint))
+                    AttributeField(R.string.dossier_identity, draft.identity, { draft = draft.copy(identity = it) },
+                        owned = manual?.identity != null, restore = ai.identity, onRestore = { draft = draft.copy(identity = it) },
+                        modifier = Modifier.testTag("character-identity"))
+                    AttributeField(R.string.dossier_bio, draft.bio, { draft = draft.copy(bio = it) },
+                        owned = manual?.bio != null, restore = ai.bio, onRestore = { draft = draft.copy(bio = it) },
+                        minLines = 4, modifier = Modifier.testTag("character-bio"))
                     AttributeField(R.string.dossier_personality, draft.personality, { draft = draft.copy(personality = it) },
                         owned = manual?.personality != null, restore = ai.personality, onRestore = { draft = draft.copy(personality = it) },
                         minLines = 3, supporting = stringResource(R.string.dossier_personality_hint))
+                    AttributeField(R.string.dossier_appearance, draft.appearance, { draft = draft.copy(appearance = it) },
+                        owned = manual?.appearance != null, restore = ai.appearance, onRestore = { draft = draft.copy(appearance = it) },
+                        minLines = 3)
                     AttributeField(R.string.dossier_arc, draft.arc, { draft = draft.copy(arc = it) },
                         owned = manual?.arc != null, restore = ai.arc, onRestore = { draft = draft.copy(arc = it) },
                         minLines = 2, supporting = stringResource(R.string.dossier_arc_hint),
@@ -96,11 +102,6 @@ internal fun BookCharacterEditorDialog(person: BookCharacter?, people: List<Book
                         owned = manual?.relationships != null, restore = ai.relations, onRestore = { draft = draft.copy(relations = it) },
                         minLines = 3, supporting = stringResource(R.string.dossier_relations_hint),
                         modifier = Modifier.testTag("character-relations"))
-                    AttributeField(R.string.dossier_tagline, draft.tagline, { draft = draft.copy(tagline = it) },
-                        owned = manual?.tagline != null, restore = ai.tagline, onRestore = { draft = draft.copy(tagline = it) })
-                    AttributeField(R.string.dossier_bio, draft.bio, { draft = draft.copy(bio = it) },
-                        owned = manual?.bio != null, restore = ai.bio, onRestore = { draft = draft.copy(bio = it) },
-                        minLines = 4, modifier = Modifier.testTag("character-bio"))
                     Text(stringResource(R.string.dossier_attr_hint), style = MaterialTheme.typography.bodySmall)
                 }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {

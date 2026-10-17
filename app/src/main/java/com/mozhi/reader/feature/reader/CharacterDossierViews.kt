@@ -112,8 +112,9 @@ internal fun CharacterRosterCard(person: BookCharacter, thumbnail: String?, pale
                 contentDescription = stringResource(R.string.dossier_avatar_cd, person.name))
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(MoReadSpacing.xs)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
+                    // 姓名优先拿到整行剩余宽度；状态徽标移到下一行，不能把名字挤没。
                     Text(person.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold,
-                        color = palette.onBackground, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                        color = palette.onBackground, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                     person.effectiveRole()?.let { role ->
                         Spacer(Modifier.width(MoReadSpacing.s))
                         Text(characterRoleBadge(role), style = MaterialTheme.typography.labelSmall,
@@ -121,17 +122,17 @@ internal fun CharacterRosterCard(person: BookCharacter, thumbnail: String?, pale
                             modifier = Modifier.border(1.dp, if (role == CharacterRole.SUPPORTING) palette.glassBorder else palette.accent.copy(alpha = .5f),
                                 RoundedCornerShape(6.dp)).padding(horizontal = 6.dp, vertical = 1.dp))
                     }
-                    if (person.departed) { Spacer(Modifier.width(6.dp)); StatusBadge(stringResource(R.string.characters_departed_badge), palette) }
-                    else if (person.highlights.isNotEmpty()) { Spacer(Modifier.width(6.dp)); StatusBadge(stringResource(R.string.characters_updated_badge), palette) }
-                    Spacer(Modifier.weight(1f))
                     menu()
                 }
                 if (summary.tagline.isNotBlank()) Text(summary.tagline, style = MaterialTheme.typography.bodyMedium,
                     color = palette.onBackground.copy(alpha = .86f), maxLines = 2, overflow = TextOverflow.Ellipsis)
-                if (summary.tags.isNotEmpty()) FlowRow(Modifier.clipToBounds(), horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp), maxLines = 1) {
-                    summary.tags.forEach { tag -> DossierChip(tag, palette,
-                        highlighted = person.highlightFor(HighlightField.PERSONALITY, tag) != null) }
+                if (person.departed || person.highlights.isNotEmpty() || summary.tags.isNotEmpty()) {
+                    FlowRow(Modifier.clipToBounds(), horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp), maxLines = 1) {
+                        CharacterStatusBadge(person, palette)
+                        summary.tags.forEach { tag -> DossierChip(tag, palette,
+                            highlighted = person.highlightFor(HighlightField.PERSONALITY, tag) != null) }
+                    }
                 }
                 val meta = listOfNotNull(
                     stringResource(R.string.characters_manual_attributes).takeIf { person.manualAttributes != null },
@@ -158,6 +159,15 @@ private fun StatusBadge(text: String, palette: ReaderPalette) {
     Surface(shape = RoundedCornerShape(6.dp), color = palette.accentContainer) {
         Text(text, color = palette.accent, style = MaterialTheme.typography.labelSmall,
             modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp))
+    }
+}
+
+/** 「已离场 / 有更新」：放在姓名之外的独立一行，避免和长名字抢宽度。 */
+@Composable
+private fun CharacterStatusBadge(person: BookCharacter, palette: ReaderPalette) {
+    when {
+        person.departed -> StatusBadge(stringResource(R.string.characters_departed_badge), palette)
+        person.highlights.isNotEmpty() -> StatusBadge(stringResource(R.string.characters_updated_badge), palette)
     }
 }
 
@@ -300,20 +310,21 @@ internal fun CharacterDossierPage(
                     horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(MoReadSpacing.s)) {
                     CharacterAvatar(person.name, thumbnails[person.identity], person.effectiveRole(), 96.dp, palette, onClick = onAvatar,
                         contentDescription = stringResource(R.string.dossier_avatar_cd, person.name))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    // 名字过长时让主次/状态徽标换行，而不是把名字压没。
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(MoReadSpacing.s),
+                        verticalArrangement = Arrangement.spacedBy(MoReadSpacing.xs),
+                        itemVerticalAlignment = Alignment.CenterVertically) {
                         Text(person.name, style = MaterialTheme.typography.headlineMedium, fontFamily = FontFamily.Serif,
                             fontWeight = FontWeight.SemiBold, color = palette.onBackground)
                         val roleHighlight = person.highlightFor(HighlightField.ROLE)
                         person.effectiveRole()?.let { role ->
-                            Spacer(Modifier.width(MoReadSpacing.s))
                             Text(characterRoleBadge(role), style = MaterialTheme.typography.labelMedium,
                                 color = if (roleHighlight != null) palette.onAccent else palette.accent,
                                 modifier = Modifier.then(if (roleHighlight != null)
                                     Modifier.background(palette.accent, RoundedCornerShape(6.dp)) else Modifier).padding(horizontal = 6.dp))
-                            if (roleHighlight != null) { Spacer(Modifier.width(4.dp)); NewMarker(palette) { clearing = roleHighlight } }
+                            if (roleHighlight != null) NewMarker(palette) { clearing = roleHighlight }
                         }
-                        if (person.departed) { Spacer(Modifier.width(6.dp)); StatusBadge(stringResource(R.string.characters_departed_badge), palette) }
-                        else if (person.highlights.isNotEmpty()) { Spacer(Modifier.width(6.dp)); StatusBadge(stringResource(R.string.characters_updated_badge), palette) }
+                        CharacterStatusBadge(person, palette)
                     }
                     if (person.aliases.isNotEmpty()) Text(stringResource(R.string.dossier_aliases, person.aliases.joinToString("、")),
                         style = MaterialTheme.typography.bodySmall, color = palette.muted)
