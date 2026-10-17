@@ -263,6 +263,85 @@ class BookCharacterMergeTest {
         assertEquals(listOf("阿舟"), merged.characters.map { it.name })
     }
 
+    // —— 增量更新（只刷新已有角色） ——
+
+    @Test fun `an incremental update never adds or removes anyone`() {
+        val previous = guide(person("林冲", fact("教头")), person("武松", fact("打虎")))
+        val fresh = guide(person("林冲", fact("雪夜上梁山")), person("鲁智深", fact("倒拔垂杨柳")))
+        val merged = BookCharactersCodec.mergeExisting(fresh, previous)
+        assertEquals(listOf("林冲", "武松"), merged.characters.map { it.name })
+        assertEquals(listOf("教头", "雪夜上梁山"), merged.characters.first().evidence.map { it.fact.text }.sorted())
+    }
+
+    @Test fun `an incremental update keeps the old role even when the profile says supporting`() {
+        val previous = guide(person("林冲", fact("教头"), role = CharacterRole.PROTAGONIST))
+        // 更新请求里没有完整名单，模型给的 SUPPORTING 不能把主角降级。
+        val fresh = guide(person("林冲", fact("雪夜上梁山"), role = CharacterRole.SUPPORTING))
+        val merged = BookCharactersCodec.mergeExisting(fresh, previous).characters.single()
+        assertEquals(CharacterRole.PROTAGONIST, merged.role)
+        assertEquals(CharacterRole.PROTAGONIST, merged.effectiveRole())
+    }
+
+    @Test fun `a departed person is never touched by any merge path`() {
+        val gone = person("林冲", fact("教头"), role = CharacterRole.PROTAGONIST).copy(departed = true)
+        val previous = guide(gone, person("武松", fact("打虎")))
+        val fresh = guide(person("林冲", fact("雪夜上梁山"), role = CharacterRole.SUPPORTING,
+            dossier = CharacterDossier(tagline = "新标签")), person("武松", fact("醉打蒋门神")))
+        assertEquals(gone, BookCharactersCodec.mergeExisting(fresh, previous).characters.first { it.identity == "林冲" })
+        assertEquals(gone, BookCharactersCodec.mergeTargeted(fresh, previous).characters.first { it.identity == "林冲" })
+        assertEquals(gone, BookCharactersCodec.mergeManual(fresh, previous).characters.first { it.identity == "林冲" })
+    }
+
+    @Test fun `an update marks the changed field and replacing the marks keeps them gone`() {
+        val oldBio = "他是灯塔的守塔人，已经在这里住了三十年。"
+        val previous = guide(person("林舟", fact("在灯塔等候"),
+            dossier = CharacterDossier(bio = oldBio, gender = "男")))
+        val fresh = guide(person("林舟", fact("灯还亮着"),
+            dossier = CharacterDossier(bio = oldBio + "今年春天，他第一次离开了灯塔。", gender = "男")))
+        val merged = BookCharactersCodec.mergeExisting(fresh, previous).characters.single()
+        val bio = merged.highlightFor(HighlightField.BIO)!!
+        assertEquals(listOf("今年春天，他第一次离开了灯塔。"), bio.spans.map { merged.bio().substring(it.start, it.end) })
+        assertNull(merged.highlightFor(HighlightField.GENDER))
+        // 用户清除后，同样的正文再更新一次不会把标记找回来。
+        val again = BookCharactersCodec.mergeExisting(fresh, guide(merged.copy(highlights = emptyList())))
+        assertTrue(again.characters.single().highlights.isEmpty())
+    }
+
+    @Test fun `taking a field over clears the new-content mark on it`() {
+        val marked = person("林舟", dossier = CharacterDossier(bio = "旧简介。")).copy(
+            highlights = listOf(CharacterHighlight(HighlightField.BIO, spans = listOf(HighlightSpan(0, 3)), before = "旧简介。")))
+        val edited = BookCharactersCodec.edit(guide(marked), "林舟", "林舟",
+            ManualCharacterAttributes(bio = "我自己写的简介。")).characters.single()
+        // 字段从此由用户负责，旧的新增提示不再有意义；没接管的字段仍保留标记。
+        assertTrue(edited.highlights.isEmpty())
+    }
+
+    @Test fun `the departed switch survives an edit that does not mention it`() {
+        val gone = person("林舟").copy(departed = true)
+        val renamed = BookCharactersCodec.edit(guide(gone), "林舟", "阿舟", null).characters.single()
+        assertTrue(renamed.departed)
+        val back = BookCharactersCodec.edit(guide(renamed), "林舟", "阿舟", null, departed = false).characters.single()
+        assertFalse(back.departed)
+    }
+
+    @Test fun `an incremental update advances the boundary but never rewrites the mode`() {
+        val previous = guide(person("林舟"), scanned = 40, mode = BookCharacterGuide.MODE_QUICK)
+            .copy(scannedChapterIndex = 3, scannedCharOffset = 10)
+        val fresh = guide(person("林舟", fact("灯还亮着")), scanned = 41, mode = BookCharacterGuide.MODE_TARGETED)
+            .copy(scannedChapterIndex = 5, scannedCharOffset = 20)
+        val merged = BookCharactersCodec.mergeExisting(fresh, previous)
+        assertEquals(41, merged.scannedChapters)
+        assertEquals(BookCharacterGuide.MODE_QUICK, merged.mode)
+        assertEquals(5, merged.scannedChapterIndex)
+        assertEquals(20, merged.scannedCharOffset)
+    }
+
+    @Test fun `a legacy guide derives its scan boundary from the scanned chapter count`() {
+        assertEquals(CharacterScanBoundary(9, 0), guide(person("林舟"), scanned = 10, bounded = true).scanBoundary())
+        assertTrue(guide(person("林舟"), scanned = 10, bounded = false).scanBoundary().isWholeBook)
+        assertEquals(CharacterScanBoundary(Int.MAX_VALUE, Int.MAX_VALUE), guide(person("林舟"), bounded = false).scanBoundary())
+    }
+
     @Test fun `editing keeps the legacy manual notes as an ownership marker`() {
         val person = BookCharacter("林舟", listOf(fact("在灯塔等候")), "怕水。\n在灯塔长住。")
         val written = BookCharacterGuide(listOf(person), 1, 100)

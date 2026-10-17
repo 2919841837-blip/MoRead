@@ -11,6 +11,31 @@ data class BookCharacterAttribute(val kind: CharacterAttributeKind, val value: S
 @Serializable
 data class BookCharacterRelationship(val target: String, val relation: String, val evidence: CharacterEvidence)
 
+/** 一次更新里可能新增内容的位置。 */
+@Serializable
+enum class HighlightField { ROLE, TAGLINE, BIO, GENDER, AGE, IDENTITY, APPEARANCE, ARC, PERSONALITY, RELATION }
+
+/** [start, end) 是相对最终展示文本的 UTF-16 下标。 */
+@Serializable
+data class HighlightSpan(val start: Int, val end: Int)
+
+/**
+ * 一次更新给某个字段/条目留下的高亮。字段被用户手写接管后不会再产生高亮；
+ * 用户也可以随时取消某一段或整条高亮（见 [BookCharacter.highlights]）。
+ */
+@Serializable
+data class CharacterHighlight(
+    val field: HighlightField,
+    /** PERSONALITY = 性格词；RELATION = 对象名；其余为空。 */
+    val key: String = "",
+    /** true = 整个条目都是新增的（新性格、新关系、主次变化），界面整条高亮。 */
+    val wholeItem: Boolean = false,
+    /** [wholeItem] = false 时，正文里的新增片段。 */
+    val spans: List<HighlightSpan> = emptyList(),
+    /** 更新前的文本，供点按高亮后的对比说明。 */
+    val before: String = ""
+)
+
 /** 用户手写的性格：词 + 可选说明。手写值不是书里那句话，所以没有原文锚点。 */
 @Serializable
 data class ManualTrait(val trait: String, val detail: String = "")
@@ -58,9 +83,19 @@ data class BookCharacter(val name: String, val evidence: List<CharacterEvidence>
     /** 用户手写的属性（身份/性别/年龄/外貌/别名/性格/简介/小传/主次/成长变化/关系）；重扫不会覆盖。 */
     val manualAttributes: ManualCharacterAttributes? = null,
     /** 用户经手过这一条（新建、改名或保存过编辑）：[BookCharactersCodec.edit] 置真，重扫合并时整条保留。 */
-    val userEdited: Boolean = false) {
+    val userEdited: Boolean = false,
+    /**
+     * 离场：用户判定人物已退出故事。所有更新路径都直接跳过这一条 —— 不再请求、不合并、不覆盖；
+     * 档案与手写内容原样留在列表里，用户关掉开关后恢复可更新。
+     */
+    val departed: Boolean = false,
+    /** 最近一次更新新增的内容；下一次成功更新整批替换，用户清除后不再出现。 */
+    val highlights: List<CharacterHighlight> = emptyList()) {
     val identity: String get() = sourceName ?: name
     val aliases: List<String> get() = attributeValues(CharacterAttributeKind.ALIAS)
+
+    fun highlightFor(field: HighlightField, key: String = ""): CharacterHighlight? =
+        highlights.firstOrNull { it.field == field && it.key == key }
 
     /** 这一条由用户经手过：重扫合并整条保留，插图选角也算数。旧存档没有 [userEdited]，靠手写层与人物资料认人。 */
     val userOwned: Boolean get() = userEdited || manualDescription != null || manualAttributes != null
@@ -122,7 +157,13 @@ data class BookCharacterGuide(
     /** 联网查到的书外资料：单独展示，不作为原文依据，也不混进人物事实。 */
     val externalNotes: List<ExternalCharacterNote> = emptyList(),
     /** QUICK = 主 agent 检索主要人物；FULL = 逐段扫描；TARGETED = 用户点名的若干人物。旧存档都是逐段扫描。 */
-    val mode: String = MODE_FULL
+    val mode: String = MODE_FULL,
+    /**
+     * 上次扫描到哪：第几章、章内第几个字。增量更新只把这段之后的正文算「新内容」。
+     * -1 表示旧存档没有记录（[scannedChapters] 是当时的唯一线索）。
+     */
+    val scannedChapterIndex: Int = -1,
+    val scannedCharOffset: Int = -1
 ) {
     companion object {
         const val MODE_FULL = "FULL"
@@ -130,6 +171,19 @@ data class BookCharacterGuide(
         /** 按用户输入的名单扫描；[BookCharactersCodec.visible] 不读 mode，新旧存档都解得开。 */
         const val MODE_TARGETED = "TARGETED"
     }
+
+    /** 上次扫描边界；旧存档按 [progressBounded] / [scannedChapters] 保守回退。 */
+    internal fun scanBoundary(): CharacterScanBoundary = when {
+        scannedChapterIndex >= 0 -> CharacterScanBoundary(scannedChapterIndex, scannedCharOffset.coerceAtLeast(0))
+        !progressBounded -> CharacterScanBoundary(Int.MAX_VALUE, Int.MAX_VALUE)
+        scannedChapters > 0 -> CharacterScanBoundary(scannedChapters - 1, 0)
+        else -> CharacterScanBoundary(-1, 0)
+    }
+}
+
+/** 扫描边界：正文第 [chapterIndex] 章 [charOffset] 之后才算没扫过。 */
+internal data class CharacterScanBoundary(val chapterIndex: Int, val charOffset: Int) {
+    val isWholeBook: Boolean get() = chapterIndex == Int.MAX_VALUE
 }
 
 @Serializable
@@ -142,7 +196,7 @@ data class BookCharactersSnapshot(val saved: VisibleBookCharacters? = null, val 
 internal object BookCharactersCodec {
     const val PROMPT_VERSION = 2
     fun edit(guide: BookCharacterGuide, originalIdentity: String?, name: String,
-        manualAttributes: ManualCharacterAttributes?): BookCharacterGuide {
+        manualAttributes: ManualCharacterAttributes?, departed: Boolean? = null): BookCharacterGuide {
         val cleanName = name.trim()
         require(cleanName.isNotEmpty() && cleanName.length <= 80) { "请填写 1–80 字的人物姓名" }
         // 一项都没接管（全是 null）时不存这层：contentJson 保持干净，读取规则也不必区分「空层」。
@@ -152,26 +206,59 @@ internal object BookCharactersCodec {
         // userEdited 是「这条由用户经手」的持久标记：新建的人（可能只填了名字）与只改了名的人，重扫时才不会被整条丢掉。
         // manualDescription 不再读取，但 copy 会原样保留它，旧存档的所有权标记因此不会丢。
         val person = original?.copy(name = cleanName, sourceName = original.identity,
-            manualAttributes = layer, userEdited = true)
-            ?: BookCharacter(cleanName, emptyList(), sourceName = cleanName, manualAttributes = layer, userEdited = true)
+            manualAttributes = layer, userEdited = true,
+            departed = departed ?: original.departed,
+            highlights = clearOwnedHighlights(original.highlights, layer))
+            ?: BookCharacter(cleanName, emptyList(), sourceName = cleanName, manualAttributes = layer, userEdited = true,
+                departed = departed ?: false)
         return guide.copy(characters = if (original == null) guide.characters + person else guide.characters.map { if (it === original) person else it })
     }
 
+    /** 用户接手了某个字段，就抹掉该字段上「新增」的痕迹：内容从此由用户负责。 */
+    private fun clearOwnedHighlights(highlights: List<CharacterHighlight>, layer: ManualCharacterAttributes?): List<CharacterHighlight> {
+        if (layer == null) return highlights
+        val owned = buildSet {
+            if (layer.role != null) add(HighlightField.ROLE)
+            if (layer.tagline != null) add(HighlightField.TAGLINE)
+            if (layer.bio != null) add(HighlightField.BIO)
+            if (layer.gender != null) add(HighlightField.GENDER)
+            if (layer.age != null) add(HighlightField.AGE)
+            if (layer.identity != null) add(HighlightField.IDENTITY)
+            if (layer.appearance != null) add(HighlightField.APPEARANCE)
+            if (layer.arc != null) add(HighlightField.ARC)
+            if (layer.personality != null) add(HighlightField.PERSONALITY)
+            if (layer.relationships != null) add(HighlightField.RELATION)
+        }
+        return highlights.filterNot { it.field in owned }
+    }
+
     fun mergeManual(generated: BookCharacterGuide, previous: BookCharacterGuide?): BookCharacterGuide {
+        // 离场人物是硬约束：任何扫描结果都不能把他们带回来，也不能刷新他们。
+        val departed = previous?.characters.orEmpty().filter { it.departed }
         // 手动条目 = 用户经手过这一条：只改过属性的人也不能被 AI 结果整条替掉。
-        val edits = previous?.characters.orEmpty().filter { it.userOwned }
+        val edits = previous?.characters.orEmpty().filter { it.userOwned && !it.departed }
         val result = generated.characters.mapNotNull { current ->
-            edits.firstOrNull { it.identity == current.identity }?.copy(evidence = current.evidence,
-                attributes = current.attributes, relationships = current.relationships,
-                dossier = current.dossier, role = current.role, mentions = current.mentions)
-                ?: current.takeUnless { candidate -> edits.any { it.name.equals(candidate.name, true) } }
+            departed.firstOrNull { it.identity == current.identity || it.name.equals(current.name, true) }
+                ?: edits.firstOrNull { it.identity == current.identity }?.copy(evidence = current.evidence,
+                    attributes = current.attributes, relationships = current.relationships,
+                    dossier = current.dossier, role = current.role, mentions = current.mentions)
+                ?: current.takeUnless { candidate ->
+                    edits.any { it.name.equals(candidate.name, true) } || departed.any { it.name.equals(candidate.name, true) }
+                }
         }.toMutableList()
         edits.filter { edit -> result.none { it.identity == edit.identity } }.forEach { edit ->
             // A manual rename owns the displayed name; avoid duplicate lazy-list keys/names.
             result.removeAll { it.name.equals(edit.name, true) }
             result += edit.copy(evidence = emptyList(), attributes = emptyList(), relationships = emptyList(), dossier = null)
         }
-        return generated.copy(characters = result.distinctBy { it.name })
+        departed.filter { gone -> result.none { it.identity == gone.identity } }.forEach { result += it }
+        val oldByName = previous?.characters.orEmpty().associateBy { it.identity }
+        val marked = result.map { person ->
+            val old = oldByName[person.identity] ?: previous?.characters.orEmpty().firstOrNull { it.name.equals(person.name, true) }
+            if (old == null || old.departed) person.copy(highlights = emptyList())
+            else person.copy(highlights = CharacterHighlights.diff(old, person))
+        }
+        return generated.copy(characters = marked.distinctBy { it.name })
     }
 
     /**
@@ -187,20 +274,9 @@ internal object BookCharactersCodec {
             val index = result.indexOfFirst { it.identity == fresh.identity || it.name.equals(fresh.name, true) }
             if (index < 0) {
                 result += fresh
-            } else {
-                val old = result[index]
-                // copy 保留 old 的 name、手写层与 userEdited：手动改名拥有显示名，手写值重扫不丢。
-                result[index] = old.copy(
-                    evidence = unionEvidence(old.evidence, fresh.evidence),
-                    attributes = (old.attributes + fresh.attributes).distinctBy { it.kind to it.value }.takeLast(48),
-                    relationships = (old.relationships + fresh.relationships).distinctBy { it.target to it.relation }.takeLast(96),
-                    // 本次新写的档案与主次要盖过旧的（旧条目可能只是逐段扫描留下的 evidence）；
-                    // 但手动条目从来没有档案，不能被 null 抹掉。
-                    dossier = fresh.dossier ?: old.dossier,
-                    role = fresh.role ?: old.role,
-                    mentions = maxOf(old.mentions, fresh.mentions),
-                    sourceName = old.sourceName ?: fresh.sourceName
-                )
+            } else if (!result[index].departed) {
+                // 点名扫描会走快速通道，所有角色都标 SUPPORTING；已有主次必须保留，见 [mergeExisting]。
+                result[index] = mergePerson(result[index], fresh, keepRole = false)
             }
         }
         return previous.copy(
@@ -212,6 +288,58 @@ internal object BookCharactersCodec {
             externalNotes = (previous.externalNotes + generated.externalNotes).distinctBy { it.text to it.url },
             mode = previous.mode
         )
+    }
+
+    /**
+     * 增量更新：只刷新本次点名的人，绝不新增、绝不删除，主次一律沿用旧值。
+     *
+     * 与 [mergeTargeted] 的差别是身份与主次：更新的是「已有角色」，模型在更新请求里拿不到完整名单，
+     * 它的 SUPPORTING 判定没有参考价值，套用会把主角降成配角。[generated] 的扫描边界会写进结果，
+     * 这样下一次更新只读更新的正文。离场人物即使混进 [generated] 也不会被改。
+     */
+    fun mergeExisting(generated: BookCharacterGuide, previous: BookCharacterGuide?): BookCharacterGuide {
+        previous ?: return generated
+        val result = previous.characters.toMutableList()
+        generated.characters.forEach { fresh ->
+            val index = result.indexOfFirst { it.identity == fresh.identity || it.name.equals(fresh.name, true) }
+            if (index < 0) return@forEach
+            val old = result[index]
+            if (old.departed) return@forEach
+            result[index] = mergePerson(old, fresh, keepRole = true)
+        }
+        return previous.copy(
+            characters = result,
+            scannedChapters = maxOf(previous.scannedChapters, generated.scannedChapters),
+            sourceCharacters = maxOf(previous.sourceCharacters, generated.sourceCharacters),
+            progressBounded = previous.progressBounded && generated.progressBounded,
+            externalNotes = (previous.externalNotes + generated.externalNotes).distinctBy { it.text to it.url },
+            mode = previous.mode,
+            scannedChapterIndex = generated.scannedChapterIndex,
+            scannedCharOffset = generated.scannedCharOffset
+        )
+    }
+
+    /** 两条合并的共同部分：并集证据，新的档案盖旧档案，主次可选保留旧值。 */
+    private fun mergePerson(old: BookCharacter, fresh: BookCharacter, keepRole: Boolean): BookCharacter {
+        val role = when {
+            // 增量更新：模型拿不到完整名单，它给的主次没有参考价值。
+            keepRole -> old.role
+            // 点名扫描一律把名单标成 SUPPORTING，不能据此把主角降级；真正的重判走快速/完整扫描。
+            fresh.role == CharacterRole.SUPPORTING && old.role != null -> old.role
+            else -> fresh.role ?: old.role
+        }
+        val merged = old.copy(
+            evidence = unionEvidence(old.evidence, fresh.evidence),
+            attributes = (old.attributes + fresh.attributes).distinctBy { it.kind to it.value }.takeLast(48),
+            relationships = (old.relationships + fresh.relationships).distinctBy { it.target to it.relation }.takeLast(96),
+            // 本次新写的档案与主次要盖过旧的（旧条目可能只是逐段扫描留下的 evidence）；
+            // 但手动条目从来没有档案，不能被 null 抹掉。
+            dossier = fresh.dossier ?: old.dossier,
+            role = role,
+            mentions = maxOf(old.mentions, fresh.mentions),
+            sourceName = old.sourceName ?: fresh.sourceName
+        )
+        return merged.copy(highlights = CharacterHighlights.diff(old, merged))
     }
 
     /**
@@ -286,7 +414,8 @@ internal object BookCharactersCodec {
         val guide = runCatching { AiJson.decodeFromString<BookCharacterGuide>(entry.contentJson) }.getOrNull() ?: return null
         if (entry.sourceRevision != revision || entry.promptVersion !in 1..PROMPT_VERSION) {
             val manual = guide.characters.filter { it.userOwned && it.name.isNotBlank() }
-                .map { it.copy(evidence = emptyList(), attributes = emptyList(), relationships = emptyList(), dossier = null) }
+                .map { it.copy(evidence = emptyList(), attributes = emptyList(), relationships = emptyList(),
+                    dossier = null, highlights = emptyList()) }
             return manual.takeIf { it.isNotEmpty() }?.let { VisibleBookCharacters(entry, BookCharacterGuide(it, 0, 0, true)) }
         }
         if (guide.characters.any { it.name.isBlank() || (it.evidence + it.attributes.map { a -> a.evidence } + it.relationships.map { r -> r.evidence }).any { e -> e.chapterIndex < 0 || e.fact.start < 0 ||

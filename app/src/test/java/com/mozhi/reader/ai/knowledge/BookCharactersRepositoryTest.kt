@@ -512,4 +512,71 @@ class BookCharactersRepositoryTest {
         assertEquals("摆渡人", people.single { it.name == "林舟" }.attributeValues(CharacterAttributeKind.IDENTITY).single())
     }
 
+    /** 增量更新：只把「上次扫描之后的新正文里出现过」的既有角色送进请求，其余的人零成本跳过。 */
+    @Test fun anUpdateKeepsOnlyTheExistingPeopleWhoAppearAfterTheLastScan() = runBlocking {
+        currentBook = book.copy(maxReachedChapterIndex = 0, maxReachedCharOffset = texts[0].length)
+        repository.generate(repository.preview(1, progressBounded = true))
+        val scanned = repository.observe(1).first().saved!!.guide
+        assertEquals(listOf("林舟"), scanned.characters.map { it.name })
+        currentBook = book.copy(maxReachedChapterIndex = 1, maxReachedCharOffset = texts[1].length)
+        val requests = client.requests
+        val plan = repository.preview(1, progressBounded = true,
+            targets = listOf(CharacterTarget("林舟"), CharacterTarget("小满")), updateExisting = true)
+        // 林舟只在边界之前出现；小满只在新读到的第二章里出现。
+        assertEquals(2, plan.updateCandidates)
+        assertEquals(listOf("小满"), plan.targets.map { it.name })
+        assertEquals(1, plan.updateSkipped)
+        assertTrue(plan.updateExisting)
+        assertFalse(plan.targeted)
+        assertEquals(requests, client.requests)
+    }
+
+    /** 没有新正文（上次已经扫完整本书）时，更新一个请求都不发，边界与人物原样保留。 */
+    @Test fun anUpdateWithNothingNewSendsNoRequestAndKeepsTheWholeBookBoundary() = runBlocking {
+        repository.generate(repository.preview(1))
+        val before = client.requests
+        val saved = repository.observe(1).first().saved!!.guide
+        val plan = repository.preview(1, targets = saved.characters.map { CharacterTarget(it.identity) }, updateExisting = true)
+        assertEquals(saved.characters.size, plan.updateCandidates)
+        assertTrue(plan.targets.isEmpty())
+        val published = repository.generateQuick(plan)
+        assertEquals(before, client.requests)
+        val guide = BookCharactersCodec.visible(published, revision)!!.guide
+        assertTrue(guide.scanBoundary().isWholeBook)
+        assertEquals(saved.characters.map { it.identity }, guide.characters.map { it.identity })
+    }
+
+    /** 离场开关与高亮清除都直接改已发布资料，不碰内容，也不需要模型。 */
+    @Test fun theDepartedSwitchAndHighlightControlsEditThePublishedGuideInPlace() = runBlocking {
+        publish(BookCharacterGuide(listOf(
+            BookCharacter("林舟", emptyList(), highlights = listOf(
+                CharacterHighlight(HighlightField.BIO, spans = listOf(HighlightSpan(0, 2))),
+                CharacterHighlight(HighlightField.RELATION, key = "小满", wholeItem = true))),
+            BookCharacter("小满", emptyList(), highlights = listOf(CharacterHighlight(HighlightField.TAGLINE, wholeItem = true)))
+        ), 1, 100, mode = BookCharacterGuide.MODE_QUICK))
+        repository.cancelHighlight(1, "林舟", HighlightField.BIO)
+        var people = repository.observe(1).first().saved!!.guide.characters
+        assertEquals(listOf(HighlightField.RELATION), people.first { it.identity == "林舟" }.highlights.map { it.field })
+        assertEquals(listOf(HighlightField.TAGLINE), people.first { it.identity == "小满" }.highlights.map { it.field })
+
+        repository.setDeparted(1, "林舟", true)
+        people = repository.observe(1).first().saved!!.guide.characters
+        assertTrue(people.first { it.identity == "林舟" }.departed)
+        assertFalse(people.first { it.identity == "小满" }.departed)
+        assertTrue(people.first { it.identity == "林舟" }.highlights.isNotEmpty())
+
+        repository.clearHighlights(1, "小满")
+        people = repository.observe(1).first().saved!!.guide.characters
+        assertTrue(people.first { it.identity == "小满" }.highlights.isEmpty())
+        assertFalse(people.first { it.identity == "林舟" }.highlights.isEmpty())
+
+        repository.clearHighlights(1)
+        assertTrue(repository.observe(1).first().saved!!.guide.characters.all { it.highlights.isEmpty() })
+    }
+
+    private suspend fun publish(guide: BookCharacterGuide) {
+        database.bookCharacterDao().saveGuide(BookCharacterGuideEntity(1, "gen", revision, "model", "模型",
+            BookCharactersCodec.PROMPT_VERSION, AiJson.encodeToString(guide), 0))
+    }
+
 }

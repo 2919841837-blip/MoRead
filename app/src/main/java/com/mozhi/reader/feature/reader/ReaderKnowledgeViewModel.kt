@@ -71,12 +71,44 @@ class ReaderKnowledgeViewModel @Inject constructor(
         }
     }
 
-    fun previewCharacters(progressBounded: Boolean, quick: Boolean = false, targets: List<CharacterTarget> = emptyList()) {
+    fun previewCharacters(progressBounded: Boolean, quick: Boolean = false, targets: List<CharacterTarget> = emptyList(),
+        updateExisting: Boolean = false) {
         if (mutable.value.characterTask?.active == true) return
         prepare(null) { book ->
-            val plan = characters.preview(book, progressBounded, quick, targets)
-            update(book) { it.copy(pendingCharacters = plan) }
+            val plan = characters.preview(book, progressBounded, quick, targets, updateExisting)
+            // 新正文里没有出现任何既有角色：没有可更新的内容，也不值得弹确认框。
+            if (updateExisting && plan.targets.isEmpty()) {
+                update(book) { it.copy(error = "新正文里没有出现已有角色，本次没有可更新的内容") }
+            } else update(book) { it.copy(pendingCharacters = plan) }
         }
+    }
+
+    /**
+     * 「更新到当前进度 / 更新全书人物」：只刷新已有角色，跳过离场人物。
+     * 真正的本地筛选在 [BookCharactersRepository.preview]：只有新正文里出现过的角色才会进入请求名单。
+     */
+    fun updateCharacters(progressBounded: Boolean) {
+        val snapshot = mutable.value.characters
+        if (snapshot.outdated) {
+            mutable.update { it.copy(error = "正文已变化，请先重新提取人物") }
+            return
+        }
+        val guide = snapshot.saved?.guide ?: return
+        if (snapshot.checkpointParts > 0) {
+            mutable.update { it.copy(error = "请先完成上一次提取，再更新人物") }
+            return
+        }
+        // identity 是改名前书里的正式称呼；手写改名后，正文里出现的仍是 identity，不能只认显示名。
+        val targets = guide.characters.filter { !it.departed && it.name.isNotBlank() }.map { person ->
+            CharacterTarget(person.identity, (listOf(person.name) + person.aliases)
+                .filter { !it.equals(person.identity, true) }
+                .distinct().take(CharacterScanTargets.MAX_ALIASES))
+        }
+        if (targets.isEmpty()) {
+            mutable.update { it.copy(error = "已有角色都已标记离场，没有可更新的角色") }
+            return
+        }
+        previewCharacters(progressBounded, quick = false, targets = targets, updateExisting = true)
     }
 
     private fun prepare(chapterIndex: Int?, block: suspend (Long) -> Unit) {
@@ -106,9 +138,16 @@ class ReaderKnowledgeViewModel @Inject constructor(
     fun saveOutline(chapterIndex: Int, outline: String) = localAction { book -> repository.saveOutline(book, chapterIndex, outline) }
     fun deleteCharacters() = localAction { book -> characters.delete(book) }
     fun saveCharacter(originalIdentity: String?, name: String,
-        manualAttributes: ManualCharacterAttributes?) = localAction { book ->
-        characters.saveCharacter(book, originalIdentity, name, manualAttributes)
+        manualAttributes: ManualCharacterAttributes?, departed: Boolean? = null) = localAction { book ->
+        characters.saveCharacter(book, originalIdentity, name, manualAttributes, departed)
     }
+    fun setDeparted(identity: String, departed: Boolean) = localAction { book ->
+        characters.setDeparted(book, identity, departed)
+    }
+    fun cancelHighlight(identity: String, field: HighlightField, key: String = "") = localAction { book ->
+        characters.cancelHighlight(book, identity, field, key)
+    }
+    fun clearHighlights() = localAction { book -> characters.clearHighlights(book) }
     fun saveCharacterCard(card: ExtractedCharacterCard) = localAction {
         personas.save(com.mozhi.reader.core.database.entity.PersonaEntity(
             name = card.name, personality = card.description, subtitle = "从书中提取的角色", isRoleplay = true,

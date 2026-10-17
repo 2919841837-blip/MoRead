@@ -8,6 +8,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
@@ -42,11 +43,12 @@ private val CharacterAttributeDraftSaver = listSaver<CharacterAttributeDraft, St
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun BookCharacterEditorDialog(person: BookCharacter?, people: List<BookCharacter>, onDismiss: () -> Unit,
-    onSave: (String?, String, ManualCharacterAttributes?) -> Unit) {
+    onSave: (String?, String, ManualCharacterAttributes?, Boolean) -> Unit) {
     var name by rememberSaveable(person?.identity) { mutableStateOf(person?.name.orEmpty()) }
     val baseline = remember(person) { CharacterAttributeDraftCodec.baseline(person) }
     val ai = remember(person) { CharacterAttributeDraftCodec.aiBaseline(person) }
     var draft by rememberSaveable(person?.identity, stateSaver = CharacterAttributeDraftSaver) { mutableStateOf(baseline) }
+    var departed by rememberSaveable(person?.identity) { mutableStateOf(person?.departed ?: false) }
     val manual = person?.manualAttributes
     val duplicate = people.any { it.identity != person?.identity && (it.name.equals(name.trim(), true) || it.identity.equals(name.trim(), true)) }
     MoReadPageDialog(onDismissRequest = onDismiss) {
@@ -61,6 +63,15 @@ internal fun BookCharacterEditorDialog(person: BookCharacter?, people: List<Book
                         modifier = Modifier.testTag("character-name"))
                     Text(stringResource(R.string.dossier_basic_title), style = MaterialTheme.typography.labelLarge)
                     CharacterRoleRow(draft.role, person?.role) { draft = draft.copy(role = it) }
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(stringResource(R.string.characters_departed_editor), style = MaterialTheme.typography.bodyLarge)
+                            Text(stringResource(R.string.characters_departed_hint), style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        Switch(checked = departed, onCheckedChange = { departed = it },
+                            modifier = Modifier.testTag("character-departed"))
+                    }
                     AttributeField(R.string.dossier_identity, draft.identity, { draft = draft.copy(identity = it) },
                         owned = manual?.identity != null, restore = ai.identity, onRestore = { draft = draft.copy(identity = it) },
                         modifier = Modifier.testTag("character-identity"))
@@ -95,7 +106,7 @@ internal fun BookCharacterEditorDialog(person: BookCharacter?, people: List<Book
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                     TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) }
                     Button(enabled = name.isNotBlank() && !duplicate, onClick = {
-                        onSave(person?.identity, name.trim(), CharacterAttributeDraftCodec.merge(person, draft))
+                        onSave(person?.identity, name.trim(), CharacterAttributeDraftCodec.merge(person, draft), departed)
                     }) { Text(stringResource(R.string.dossier_save)) }
                 }
             }

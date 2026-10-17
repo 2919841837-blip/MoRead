@@ -56,6 +56,13 @@ internal class CharacterResearchRequest(
      * 名字就是用户给的，不让模型再挑一遍（既省一次调用，也免得它把点名的人删掉）。
      */
     val targets: List<CharacterTarget>? = null,
+    /**
+     * 增量更新：只把上次扫描边界之后的正文当作新内容挑段落。null = 正常提取。
+     * 旧锚点作为 [previousAnchors] 的种子一起送进去，模型仍能看到人物此前的出场。
+     */
+    val updateFrom: CharacterScanBoundary? = null,
+    /** identity / name → 上一版档案里的原文锚点，用于给增量请求补充旧上下文。 */
+    val previousAnchors: Map<String, List<SourceAnchor>> = emptyMap(),
     val validate: suspend () -> Unit
 )
 
@@ -202,7 +209,8 @@ class CharacterResearchAgent @Inject internal constructor(
         counter: OccurrenceCounter): Pair<ResearchedCharacter, String>? {
         val names = (listOf(entry.name) + entry.aliases).distinct()
         val related = cast.filter { it != entry.name && it !in entry.aliases }.take(RELATED_NAMES)
-        val passages = CharacterPassages.collect(request.chapters, names, related)
+        val passages = CharacterPassages.collect(request.chapters, names, related,
+            from = request.updateFrom, seeds = request.previousAnchors[entry.name].orEmpty())
         if (passages.isEmpty()) return null
         val key = ChapterKnowledgeCodec.hash(buildString {
             append("dossier|").append(request.modelKey).append('|').append(CharacterDossierCodec.PROMPT_VERSION)
@@ -371,20 +379,32 @@ internal object CharacterPassages {
     private const val MAJOR_PASSAGES = 14
     private const val MAJOR_CHARS = 15_000
 
-    fun collect(chapters: List<Pair<Int, String>>, names: List<String>, related: List<String> = emptyList()): List<SourcePassage> {
+    fun collect(chapters: List<Pair<Int, String>>, names: List<String>, related: List<String> = emptyList(),
+        from: CharacterScanBoundary? = null, seeds: List<SourceAnchor> = emptyList()): List<SourcePassage> {
         val hits = ArrayList<Pair<Int, Int>>()
-        chapters.forEachIndexed { position, (_, text) ->
+        chapters.forEachIndexed { position, (chapterIndex, text) ->
+            // 增量更新只数边界之后的命中；边界之前的正文靠 seeds 补几处旧上下文。
+            val start = when {
+                from == null -> 0
+                chapterIndex < from.chapterIndex -> text.length
+                chapterIndex == from.chapterIndex -> from.charOffset.coerceIn(0, text.length)
+                else -> 0
+            }
             names.forEach { name ->
-                var from = 0
-                while (hits.size < 5_000) {
-                    val at = text.indexOf(name, from)
-                    if (at < 0) break
+                var at = text.indexOf(name, start)
+                while (at >= 0 && hits.size < 5_000) {
                     hits += position to at
-                    from = at + name.length
+                    at = text.indexOf(name, at + name.length)
                 }
             }
         }
-        if (hits.isEmpty()) return emptyList()
+        val seedHits = seeds.mapNotNull { anchor ->
+            val position = chapters.indexOfFirst { it.first == anchor.chapterIndex }
+            if (position >= 0 && anchor.start >= 0 && anchor.start < chapters[position].second.length) {
+                position to anchor.start
+            } else null
+        }.distinct()
+        if (hits.isEmpty() && seedHits.isEmpty()) return emptyList()
         hits.sortWith(compareBy({ it.first }, { it.second }))
         val major = hits.size >= MAJOR_HITS
         val maxPassages = if (major) MAJOR_PASSAGES else MAX_PASSAGES
@@ -408,7 +428,7 @@ internal object CharacterPassages {
         val spread = maxPassages - shared.size
         val even = if (hits.size <= spread) hits else
             (0 until spread).map { hits[(it.toLong() * (hits.size - 1) / (spread - 1).coerceAtLeast(1)).toInt()] }
-        val picks = (even + shared).distinct()
+        val picks = (seedHits + shared + even).distinct()
         val windows = picks.map { (position, at) ->
             val text = chapters[position].second
             val start = sentenceStart(text, (at - BEFORE).coerceAtLeast(0))

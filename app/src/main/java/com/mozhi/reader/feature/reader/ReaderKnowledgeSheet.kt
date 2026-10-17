@@ -50,10 +50,15 @@ internal data class ReaderKnowledgeActions(
     val cancelCharacters: () -> Unit = {}, val deleteCharacters: () -> Unit = {},
     val locateCharacter: (BookCharacterGuideEntity, CharacterEvidence) -> Unit = { _, _ -> },
     val saveCharacterCard: (ExtractedCharacterCard) -> Unit = {},
-    val saveCharacter: (String?, String, ManualCharacterAttributes?) -> Unit = { _, _, _ -> },
+    val saveCharacter: (String?, String, ManualCharacterAttributes?, Boolean?) -> Unit = { _, _, _, _ -> },
     val openLook: (String) -> Unit = {},
     val saveOutline: (Int, String) -> Unit = { _, _ -> },
-    val locateAnchor: (BookCharacterGuideEntity, SourceAnchor) -> Unit = { _, _ -> }
+    val locateAnchor: (BookCharacterGuideEntity, SourceAnchor) -> Unit = { _, _ -> },
+    /** 更新到当前进度 / 更新全书人物：只刷新已有角色，跳过离场人物。 */
+    val updateCharacters: (Boolean) -> Unit = {},
+    val setDeparted: (String, Boolean) -> Unit = { _, _ -> },
+    val cancelHighlight: (String, HighlightField, String) -> Unit = { _, _, _ -> },
+    val clearHighlights: () -> Unit = {}
 )
 
 /** 目录弹层「人物」页签的序号，供进度球直接打开。 */
@@ -91,7 +96,9 @@ internal fun ReaderKnowledgeContentsSheet(
         ReaderKnowledgeActions(viewModel::preview, viewModel::cancel, viewModel::delete, viewModel::locate,
             viewModel::previewCharacters, viewModel::cancelCharacters, viewModel::deleteCharacters, viewModel::locateCharacter,
             viewModel::saveCharacterCard, viewModel::saveCharacter, openLook = { imageCharacter = it },
-            saveOutline = viewModel::saveOutline, locateAnchor = viewModel::locateAnchor), initialTab = initialTab,
+            saveOutline = viewModel::saveOutline, locateAnchor = viewModel::locateAnchor,
+            updateCharacters = viewModel::updateCharacters, setDeparted = viewModel::setDeparted,
+            cancelHighlight = viewModel::cancelHighlight, clearHighlights = viewModel::clearHighlights), initialTab = initialTab,
         bookmarks = bookmarks, onBookmarkClick = onBookmarkClick, onDeleteBookmark = onDeleteBookmark)
     // 人物整理会跑好几分钟：开始时顺手要通知权限，切到后台也能在通知栏看到进度（拒绝也不影响整理）。
     val notificationPermission = androidx.activity.compose.rememberLauncherForActivityResult(
@@ -123,6 +130,23 @@ internal fun ReaderKnowledgeContentsSheet(
         confirmButton = { TextButton(onClick = startCharacters) { Text(stringResource(R.string.characters_quick_start)) } },
         dismissButton = { TextButton(onClick = viewModel::dismissPreview) { Text(stringResource(R.string.characters_cancel)) } }
     ) }
+    // 更新只刷新已有角色，没有名单整理这一步；新正文里没出现的人这一轮不请求。
+    state.pendingCharacters?.takeIf { it.updateExisting }?.let { plan -> AlertDialog(
+        onDismissRequest = viewModel::dismissPreview,
+        title = { Text(stringResource(if (plan.progressBounded) R.string.characters_update_title_bounded else R.string.characters_update_title_full)) },
+        text = { Text(buildString {
+            append(plan.bookTitle).append('\n')
+            append(stringResource(if (plan.progressBounded) R.string.characters_scope_bounded else R.string.characters_scope_full, plan.chapterCount))
+            append('\n')
+            append(stringResource(R.string.characters_update_models, plan.modelLabel)).append("\n\n")
+            append(stringResource(R.string.characters_update_body, plan.targets.size, plan.updateSkipped))
+            append('\n')
+            append(stringResource(R.string.characters_update_cost, plan.maximumRequests))
+            append("\n\n").append(stringResource(R.string.characters_update_hint))
+        }) },
+        confirmButton = { TextButton(onClick = startCharacters) { Text(stringResource(R.string.characters_update_start)) } },
+        dismissButton = { TextButton(onClick = viewModel::dismissPreview) { Text(stringResource(R.string.characters_cancel)) } }
+    ) }
     // 点名扫描有自己的确认文案：名单是用户给的，与「整理主要人物」不是一回事。
     state.pendingCharacters?.takeIf { it.targeted }?.let { plan -> AlertDialog(
         onDismissRequest = viewModel::dismissPreview,
@@ -139,7 +163,7 @@ internal fun ReaderKnowledgeContentsSheet(
         confirmButton = { TextButton(onClick = viewModel::generateCharacters) { Text(stringResource(R.string.characters_targets_start)) } },
         dismissButton = { TextButton(onClick = viewModel::dismissPreview) { Text(stringResource(R.string.characters_cancel)) } }
     ) }
-    state.pendingCharacters?.takeUnless { it.quick || it.targeted }?.let { plan -> AlertDialog(
+    state.pendingCharacters?.takeUnless { it.quick || it.targeted || it.updateExisting }?.let { plan -> AlertDialog(
         onDismissRequest = viewModel::dismissPreview,
         title = { Text(when {
             plan.resuming -> if (plan.progressBounded) "继续提取读过的人物？" else "继续提取全书人物？"
@@ -496,7 +520,10 @@ internal fun BookCharactersPanel(state: KnowledgeUiState, chapters: List<Chapter
                 saved?.guide?.progressBounded == true, palette, rememberLazyListState(),
                 onBack = { openedIdentity = null }, onOpenPerson = { openedIdentity = it }, onLocate = locateSource,
                 onAvatar = { actions.openLook(person.identity) }, onEdit = { editing = person; editorVisible = true },
-                onCard = { card = ExtractedCharacterCard.from(person) })
+                onCard = { card = ExtractedCharacterCard.from(person) },
+                onDeparted = { actions.setDeparted(person.identity, it) },
+                onCancelHighlight = { field, key -> actions.cancelHighlight(person.identity, field, key) },
+                onClearHighlights = actions.clearHighlights)
         } else Column(Modifier.fillMaxSize()) {
             Row(Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 20.dp).testTag("character-tools"),
                 verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -555,6 +582,8 @@ internal fun BookCharactersPanel(state: KnowledgeUiState, chapters: List<Chapter
                                 DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                                     DropdownMenuItem(text = { Text(stringResource(R.string.dossier_menu_edit)) }, onClick = { menu = false; editing = person; editorVisible = true })
                                     DropdownMenuItem(text = { Text(stringResource(R.string.dossier_menu_card)) }, onClick = { menu = false; card = ExtractedCharacterCard.from(person) })
+                                    DropdownMenuItem(text = { Text(stringResource(if (person.departed) R.string.characters_departed_off
+                                        else R.string.characters_departed_on)) }, onClick = { menu = false; actions.setDeparted(person.identity, !person.departed) })
                                 }
                             }
                         }
@@ -592,12 +621,16 @@ internal fun BookCharactersPanel(state: KnowledgeUiState, chapters: List<Chapter
                 }
             }
             Text(if (progressBounded) "只扫描读过的正文。" else "包含未读章节，资料可能涉及后续情节。", style = MaterialTheme.typography.bodySmall)
-            Row(Modifier.fillMaxWidth().selectableGroup().testTag("character-mode"), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                listOf(true to stringResource(R.string.characters_mode_quick), false to stringResource(R.string.characters_mode_full)).forEach { (quick, label) ->
-                    FilterChip(selected = quickMode == quick, onClick = { quickMode = quick }, enabled = !busy && state.characters.checkpointParts == 0, label = { Text(label) })
+            // 已有资料时两个按钮都是「更新已有角色」，不再整理名单，模式选择没有意义；
+            // 正文改版后旧资料不可更新，退回重新提取，模式选择重新出现。
+            if (saved == null || state.characters.outdated) {
+                Row(Modifier.fillMaxWidth().selectableGroup().testTag("character-mode"), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf(true to stringResource(R.string.characters_mode_quick), false to stringResource(R.string.characters_mode_full)).forEach { (quick, label) ->
+                        FilterChip(selected = quickMode == quick, onClick = { quickMode = quick }, enabled = !busy && state.characters.checkpointParts == 0, label = { Text(label) })
+                    }
                 }
+                Text(stringResource(if (quickMode) R.string.characters_mode_quick_hint else R.string.characters_mode_full_hint), style = MaterialTheme.typography.bodySmall)
             }
-            Text(stringResource(if (quickMode) R.string.characters_mode_quick_hint else R.string.characters_mode_full_hint), style = MaterialTheme.typography.bodySmall)
             // 名单输入有自己的一页：AlertDialog 装文本框会让重组停不下来（见 CharacterScanTargetsDialog）。
             TextButton(onClick = { options = false; pointing = true }, enabled = !busy) { Text(stringResource(R.string.characters_targets_entry)) }
             TextButton(onClick = { options = false; information = true }) { Icon(Icons.Outlined.Info, "书籍资料说明"); Spacer(Modifier.width(6.dp)); Text("提取说明") }
@@ -607,12 +640,19 @@ internal fun BookCharactersPanel(state: KnowledgeUiState, chapters: List<Chapter
         TextButton(onClick = {
             options = false
             if (busy) actions.cancelCharacters()
-            else actions.previewCharacters(progressBounded, quickMode && state.characters.checkpointParts == 0, emptyList())
+            else when {
+                // 断点续跑仍走「继续提取」，不能被更新路径截走。
+                state.characters.checkpointParts > 0 -> actions.previewCharacters(progressBounded, false, emptyList())
+                // 已有资料：无论「读到此处」还是「全书」，都只刷新已有角色，跳过离场人物。
+                saved != null && !state.characters.outdated -> actions.updateCharacters(progressBounded)
+                else -> actions.previewCharacters(progressBounded, quickMode, emptyList())
+            }
         }, enabled = !state.loading && !state.preparingCharacters) {
             Text(when {
                 busy -> "停止提取"
                 state.preparingCharacters -> "准备中…"
                 state.characters.checkpointParts > 0 -> "继续提取"
+                state.characters.outdated -> "重新提取人物"
                 saved != null -> if (progressBounded) "更新到当前进度" else "更新全书人物"
                 else -> if (progressBounded) "提取读过的人物" else "提取全书人物"
             })
@@ -623,8 +663,8 @@ internal fun BookCharactersPanel(state: KnowledgeUiState, chapters: List<Chapter
             pointing = false
             actions.previewCharacters(progressBounded, false, targets)
         })
-    if (editorVisible) BookCharacterEditorDialog(editing, people, onDismiss = { editorVisible = false }, onSave = { key, name, attributes ->
-        actions.saveCharacter(key, name, attributes); editorVisible = false
+    if (editorVisible) BookCharacterEditorDialog(editing, people, onDismiss = { editorVisible = false }, onSave = { key, name, attributes, departed ->
+        actions.saveCharacter(key, name, attributes, departed); editorVisible = false
     })
     card?.let { draft -> ExtractedCharacterCardDialog(draft, onDismiss = { card = null }, onSave = { actions.saveCharacterCard(it); card = null }) }
     if (information) KnowledgeInfoDialog("书中人物", "由 AI 逐章扫描正文，提取人物、身份与关系。\n\n「读到此处」只发送已经读过的内容，最后一章截到当前进度；「全书」包括还没读到的章节，可能涉及后续情节。\n\nAI 资料保留原文依据，可随时核对；你手写的内容会标注为「手写属性」，后续提取不会覆盖。\n\n已核对的段落保留缓存，更新只为新内容计费。停止后可继续，更新期间仍能查看已有资料。", { information = false })

@@ -191,7 +191,7 @@ class ReaderKnowledgeVisualTest {
         val many = guide.copy(characters = (0 until 40).map { BookCharacter("人物$it", guide.characters.first().evidence) })
         val live = mutableStateOf(state.copy(characters = BookCharactersSnapshot(VisibleBookCharacters(personEntry, many))))
         var created: BookCharacter? = null
-        val actions = ReaderKnowledgeActions(saveCharacter = { identity, name, attributes ->
+        val actions = ReaderKnowledgeActions(saveCharacter = { identity, name, attributes, _ ->
             val next = BookCharactersCodec.edit(live.value.characters.saved!!.guide, identity, name, attributes)
             created = next.characters.first { it.name == name }
             live.value = live.value.copy(characters = BookCharactersSnapshot(VisibleBookCharacters(personEntry, next)))

@@ -41,10 +41,23 @@ class BookCharactersPlan internal constructor(
      * 用户点名的人物。非空时 [CharacterResearchAgent] 跳过名单请求，直接用这份名单逐人建档，
      * 发布时并入已有资料（见 [BookCharactersCodec.mergeTargeted]）。
      */
-    val targets: List<CharacterTarget> = emptyList()
+    val targets: List<CharacterTarget> = emptyList(),
+    /**
+     * true = 增量更新已有角色：只刷新本轮在新正文里出现的既有角色，不新增、不删除、不改主次，
+     * 离场人物整轮跳过。发布走 [BookCharactersCodec.mergeExisting]。
+     */
+    val updateExisting: Boolean = false,
+    /** 更新前的既有（未离场）角色数；[updateSkipped] = 新正文里没出现、这一轮不请求的人数。 */
+    val updateCandidates: Int = 0,
+    /** 上次扫描边界；增量更新只把之后的正文交给检索。 */
+    internal val updateFrom: CharacterScanBoundary? = null
 ) {
     val chapterCount: Int get() = chapters.size
-    val targeted: Boolean get() = targets.isNotEmpty()
+    /** 用户点名（不是增量更新）。 */
+    val targeted: Boolean get() = targets.isNotEmpty() && !updateExisting
+    /** 按名单逐人建档：用户点名或增量更新。两者都跳过名单请求。 */
+    val rosterDriven: Boolean get() = targets.isNotEmpty()
+    val updateSkipped: Int get() = (updateCandidates - targets.size).coerceAtLeast(0)
     /** 本次实际要送出的字数：整章，或边界章只到已读位置。 */
     internal fun scannedChars(chapter: ChapterEntity): Int = when {
         !progressBounded -> chapter.charCount
@@ -59,13 +72,13 @@ class BookCharactersPlan internal constructor(
     // A paragraph-aware part is at least half PART_CHARS, except for the final part.
     val maximumRequests: Long = when {
         // 点名的每个人一次提交，外加一次修正机会；没有名单请求，联网补充另算。
-        targeted -> targets.size * 2L + if (webModel != null) CharacterResearchAgent.WEB_ROUNDS else 0
+        rosterDriven -> targets.size * 2L + if (webModel != null) CharacterResearchAgent.WEB_ROUNDS else 0
         quick -> CharacterResearchAgent.MAX_REQUESTS.toLong() + if (webModel != null) CharacterResearchAgent.WEB_ROUNDS else 0
         else -> chapters.sumOf {
             (scannedChars(it).toLong() + ChapterKnowledgeCodec.PART_CHARS / 2 - 1) / (ChapterKnowledgeCodec.PART_CHARS / 2)
         } * 2 + CharacterBiographer.MAX_PEOPLE * 2
     }
-    val resuming: Boolean get() = !quick && !targeted && resumeGenerationId != null
+    val resuming: Boolean get() = !quick && !rosterDriven && resumeGenerationId != null
 }
 
 /** 完整扫描写小传的缓存行用这个前缀，不计入「待继续」的人物数。 */
@@ -108,17 +121,23 @@ class BookCharactersRepository @Inject constructor(
      * [targets] 非空时只整理这些人，结果并入已有人物资料；此时不取 CHAT 模型，也没有断点续跑。
      */
     suspend fun preview(bookId: Long, progressBounded: Boolean = false, quick: Boolean = false,
-        targets: List<CharacterTarget> = emptyList()): BookCharactersPlan = withContext(Dispatchers.IO) {
+        targets: List<CharacterTarget> = emptyList(), updateExisting: Boolean = false): BookCharactersPlan = withContext(Dispatchers.IO) {
         // 界面已经解析过一次名单，这里不信任调用方：重新去重、限长、限量。
         val requested = targets.map { target ->
             CharacterTarget(target.name.trim(), target.aliases.map(String::trim).filter(String::isNotEmpty).distinct())
         }.filter { it.name.isNotEmpty() }.distinctBy { it.name.lowercase() }
-        require(requested.size <= CharacterScanTargets.MAX_TARGETS) { "一次最多扫描 ${CharacterScanTargets.MAX_TARGETS} 位人物" }
-        require(requested.all { it.name.length <= CharacterScanTargets.MAX_NAME_LENGTH }) { "人物名不能超过 ${CharacterScanTargets.MAX_NAME_LENGTH} 字" }
-        val targeted = requested.isNotEmpty()
+        // 更新不设名额上限（更新的是既有角色，不是让模型整理名单）；点名扫描仍有人数上限。
+        require(updateExisting || requested.size <= CharacterScanTargets.MAX_TARGETS) { "一次最多扫描 ${CharacterScanTargets.MAX_TARGETS} 位人物" }
+        require(!updateExisting || requested.isNotEmpty()) { "没有可更新的已有角色" }
+        // 更新名单来自已有资料，名字长度不受输入框限制；点名扫描仍按输入规则校验。
+        require(updateExisting || requested.all { it.name.length <= CharacterScanTargets.MAX_NAME_LENGTH }) {
+            "人物名不能超过 ${CharacterScanTargets.MAX_NAME_LENGTH} 字"
+        }
+        val named = requested.isNotEmpty()
         val model = clients.forRole(ModelRole.CHEAP)
-        // 联网补充需要会调工具的对话模型；没配就跳过联网，名单与档案照样只用批量任务模型。
-        val webModel = if ((quick || targeted) && webSearchSettings.current().enabled) runCatching { clients.forRole(ModelRole.CHAT) }.getOrNull() else null
+        // 联网补充需要会调工具的对话模型；没配就跳过联网。增量更新只刷新档案，不重新联网查资料。
+        val webModel = if (!updateExisting && (quick || named) && webSearchSettings.current().enabled)
+            runCatching { clients.forRole(ModelRole.CHAT) }.getOrNull() else null
         BookContentMutation.withBook(bookId) {
             val book = library.getBook(bookId)?.takeIf { it.removedAt == 0L } ?: error("书籍正文已移除")
             val scope = if (progressBounded) ReadingScope.uptoProgress(book) else ReadingScope.WholeBook
@@ -135,9 +154,29 @@ class BookCharactersRepository @Inject constructor(
             val published = dao.getGuide(bookId)
             val checkpoint = dao.getCheckpoint(bookId)?.takeIf { it.generationId != published?.generationId &&
                 it.sourceRevision == revision && it.modelKey == key && it.promptVersion == BookCharactersCodec.PROMPT_VERSION }
-            BookCharactersPlan(bookId, book.title, revision, chapters, model, checkpoint?.generationId.takeUnless { quick || targeted },
-                if (quick || targeted) 0 else checkpoint?.completedParts ?: 0, progressBounded, scope, quick, webModel,
-                targets = requested)
+            val previous = if (updateExisting) BookCharactersCodec.visible(published, revision)?.guide else null
+            if (updateExisting) requireNotNull(previous) { "还没有可更新的人物资料" }
+            val boundary = previous?.scanBoundary()
+            // 本地筛选：只留下上次扫描之后的新正文里出现过的既有角色。没出现的这一轮零请求。
+            val effective = if (boundary == null) requested else {
+                val readable = if (boundary.isWholeBook) emptyList() else chapters
+                    .filter { it.chapterIndex >= boundary.chapterIndex }
+                    .mapNotNull { chapter ->
+                        val text = library.readChapterTextStrict(bookId, chapter)
+                        val visible = if (progressBounded) scope.readableText(chapter.chapterIndex, text) else text
+                        visible.takeIf { it.isNotBlank() }?.let { chapter.chapterIndex to it }
+                    }
+                requested.filter { target ->
+                    CharacterIncrementalUpdate.appears(readable, boundary, (listOf(target.name) + target.aliases).distinct())
+                }
+            }
+            BookCharactersPlan(bookId, book.title, revision, chapters, model,
+                checkpoint?.generationId.takeUnless { quick || named || updateExisting },
+                if (quick || named || updateExisting) 0 else checkpoint?.completedParts ?: 0,
+                progressBounded, scope, quick, webModel,
+                targets = effective, updateExisting = updateExisting,
+                updateCandidates = if (updateExisting) requested.size else 0,
+                updateFrom = boundary)
         }
     }
 
@@ -151,9 +190,31 @@ class BookCharactersRepository @Inject constructor(
      * （[BookCharactersCodec.mergeTargeted]），不用只保留手动条目的 `mergeManual`。
      */
     suspend fun generateQuick(plan: BookCharactersPlan, onProgress: (KnowledgeProgress) -> Unit = {}): BookCharacterGuideEntity {
-        require(plan.quick || plan.targeted) { "既不是快速模式，也没有点名的人物" }
+        require(plan.quick || plan.targeted || plan.updateExisting) { "既不是快速模式，也没有点名的人物" }
         check(generating.add(plan.bookId)) { "这本书正在提取人物" }
         try {
+            val snapshotBefore = withContext(Dispatchers.IO) { BookContentMutation.withBook(plan.bookId) {
+                validateLocked(plan)
+                BookCharactersCodec.visible(dao.getGuide(plan.bookId), plan.revision)?.guide
+            } }
+            if (plan.updateExisting && plan.targets.isEmpty()) {
+                // 新正文里一个既有角色都没出现：不请求模型，只把扫描边界推到本次范围，下次不用再读这段。
+                return withContext(Dispatchers.IO) { BookContentMutation.withBook(plan.bookId) {
+                    validateLocked(plan)
+                    val entry = dao.getGuide(plan.bookId) ?: error("人物资料已变化，请重新打开人物页")
+                    val guide = BookCharactersCodec.visible(entry, plan.revision)?.guide
+                        ?: error("人物资料已变化，请重新打开人物页")
+                    val boundary = if (guide.scanBoundary().isWholeBook) guide.scanBoundary()
+                        else CharacterScanBoundary(plan.scope.maxChapterIndex, plan.scope.maxCharOffset)
+                    val advanced = guide.copy(scannedChapters = maxOf(guide.scannedChapters, plan.chapterCount),
+                        sourceCharacters = maxOf(guide.sourceCharacters, plan.sourceCharacters),
+                        progressBounded = guide.progressBounded && plan.progressBounded,
+                        scannedChapterIndex = boundary.chapterIndex, scannedCharOffset = boundary.charOffset)
+                    val published = entry.copy(contentJson = AiJson.encodeToString(advanced), createdAt = System.currentTimeMillis())
+                    dao.saveGuide(published)
+                    published
+                } }
+            }
             val chapters = withContext(Dispatchers.IO) { BookContentMutation.withBook(plan.bookId) {
                 validateLocked(plan)
                 var total = 0L
@@ -167,6 +228,11 @@ class BookCharactersRepository @Inject constructor(
             } }
             val titles = plan.chapters.associate { it.chapterIndex to it.title }
             val cache = dossierCache(plan)
+            // 增量更新把上一版档案里的原文位置当种子送给检索：新段落仍是主体，旧上下文只补几处。
+            val previousAnchors = if (plan.updateExisting) snapshotBefore?.characters.orEmpty().flatMap { person ->
+                val anchors = anchorsOf(person)
+                listOf(person.identity to anchors, person.name to anchors)
+            }.toMap() else emptyMap()
             val result = research.get().run(CharacterResearchRequest(
                 bookId = plan.bookId,
                 bookTitle = plan.bookTitle,
@@ -180,6 +246,8 @@ class BookCharactersRepository @Inject constructor(
                 cache = cache,
                 // 点名的名单直接给进去，管线跳过名单请求；空列表按「没点名」处理。
                 targets = plan.targets.takeIf { it.isNotEmpty() },
+                updateFrom = if (plan.updateExisting) plan.updateFrom ?: snapshotBefore?.scanBoundary() else null,
+                previousAnchors = previousAnchors,
                 validate = { validate(plan) }
             ), onProgress)
             val roleOrder = listOf(CharacterRole.PROTAGONIST, CharacterRole.MAJOR, CharacterRole.SUPPORTING)
@@ -192,22 +260,27 @@ class BookCharactersRepository @Inject constructor(
                         attributes = profile.attributes, dossier = profile.dossier, role = person.entry.role, mentions = person.mentions)
                 }
             val guide = BookCharacterGuide(characters, plan.chapterCount, plan.sourceCharacters, plan.progressBounded,
-                result.externalNotes, if (plan.targeted) BookCharacterGuide.MODE_TARGETED else BookCharacterGuide.MODE_QUICK)
+                result.externalNotes, if (plan.targeted) BookCharacterGuide.MODE_TARGETED else BookCharacterGuide.MODE_QUICK,
+                scannedChapterIndex = plan.scope.maxChapterIndex, scannedCharOffset = plan.scope.maxCharOffset)
             val generationId = UUID.randomUUID().toString()
             return withContext(Dispatchers.IO) { BookContentMutation.withBook(plan.bookId) {
                 validateLocked(plan)
                 val previous = BookCharactersCodec.visible(dao.getGuide(plan.bookId), plan.revision)?.guide
                 // 只认出别称时把 identity 钉回用户输入的大名，才和已有的那个人对得上。
-                val named = if (plan.targeted) BookCharactersCodec.anchor(guide, plan.targets) else guide
+                val named = if (plan.rosterDriven) BookCharactersCodec.anchor(guide, plan.targets) else guide
+                val merged = when {
+                    plan.updateExisting -> BookCharactersCodec.mergeExisting(named, previous)
+                    plan.targeted -> BookCharactersCodec.mergeTargeted(named, previous)
+                    else -> BookCharactersCodec.mergeManual(guide, previous)
+                }
                 val published = BookCharacterGuideEntity(plan.bookId, generationId, plan.revision, plan.modelKey,
                     listOfNotNull(plan.modelLabel, plan.webModelLabel).distinct().joinToString(" + "), BookCharactersCodec.PROMPT_VERSION,
-                    AiJson.encodeToString(if (plan.targeted) BookCharactersCodec.mergeTargeted(named, previous) else BookCharactersCodec.mergeManual(guide, previous)),
-                    System.currentTimeMillis())
+                    AiJson.encodeToString(merged), System.currentTimeMillis())
                 database.withTransaction {
                     dao.saveGuide(published)
                     // 只留下这一次用到的缓存；发布成功后才清，失败或取消时进度原样保留。
-                    // 点名扫描只碰自己那几个人，清缓存会把上一次名单扫描留下的档案一起删掉。
-                    if (!plan.targeted) dao.pruneDossiers(plan.bookId, result.usedKeys)
+                    // 点名扫描/增量更新只碰自己那几个人，清缓存会把上一次名单扫描留下的档案一起删掉。
+                    if (!plan.rosterDriven) dao.pruneDossiers(plan.bookId, result.usedKeys)
                 }
                 published
             } }
@@ -261,12 +334,14 @@ class BookCharactersRepository @Inject constructor(
             // 收尾：为资料最多的几位写小传与性格（只送已核对的事实文字），写不出来不影响发布。
             val (guide, _) = biographer.get().enrich(accumulator.guide(plan.chapterCount, plan.sourceCharacters, plan.progressBounded),
                 plan.bookTitle, plan.progressBounded, plan.model, plan.modelKey, dossierCache(plan, BIO_IDENTITY_PREFIX), { validate(plan) }, onWriting)
+            // 完整扫描过哪里，增量更新就从哪里之后继续；全书扫描的边界是 MAX。
+            val scanned = guide.copy(scannedChapterIndex = plan.scope.maxChapterIndex, scannedCharOffset = plan.scope.maxCharOffset)
             val entry = BookCharacterGuideEntity(plan.bookId, generationId, plan.revision, plan.modelKey, plan.modelLabel,
-                BookCharactersCodec.PROMPT_VERSION, AiJson.encodeToString(guide), System.currentTimeMillis())
+                BookCharactersCodec.PROMPT_VERSION, AiJson.encodeToString(scanned), System.currentTimeMillis())
             return withContext(Dispatchers.IO) { BookContentMutation.withBook(plan.bookId) {
                 validateLocked(plan)
                 val previous = BookCharactersCodec.visible(dao.getGuide(plan.bookId), plan.revision)?.guide
-                val published = entry.copy(contentJson = AiJson.encodeToString(BookCharactersCodec.mergeManual(guide, previous)))
+                val published = entry.copy(contentJson = AiJson.encodeToString(BookCharactersCodec.mergeManual(scanned, previous)))
                 // 已核对的分段留着当缓存；清空是破坏性动作，只由调用方（删除资料）显式做一次。
                 database.withTransaction {
                     dao.saveGuide(published)
@@ -308,13 +383,13 @@ class BookCharactersRepository @Inject constructor(
     }
 
     suspend fun saveCharacter(bookId: Long, originalIdentity: String?, name: String,
-        manualAttributes: ManualCharacterAttributes? = null) = withContext(Dispatchers.IO) {
+        manualAttributes: ManualCharacterAttributes? = null, departed: Boolean? = null) = withContext(Dispatchers.IO) {
         BookContentMutation.withBook(bookId) {
             library.getBook(bookId)?.takeIf { it.removedAt == 0L } ?: error("书籍已移除")
             val revision = library.bookTextRevision(bookId)
             val previous = dao.getGuide(bookId)
             val guide = BookCharactersCodec.visible(previous, revision)?.guide ?: BookCharacterGuide(emptyList(), 0, 0, true)
-            val edited = BookCharactersCodec.edit(guide, originalIdentity, name, manualAttributes)
+            val edited = BookCharactersCodec.edit(guide, originalIdentity, name, manualAttributes, departed)
             val entry = previous?.copy(sourceRevision = revision, promptVersion = BookCharactersCodec.PROMPT_VERSION,
                 contentJson = AiJson.encodeToString(edited), createdAt = System.currentTimeMillis())
                 ?: BookCharacterGuideEntity(bookId, UUID.randomUUID().toString(), revision, "manual", "手动添加",
@@ -322,6 +397,55 @@ class BookCharactersRepository @Inject constructor(
             dao.saveGuide(entry)
         }
     }
+
+    /** 离场开关：只改状态，档案与手写内容原样保留；重新上场后恢复可更新。 */
+    suspend fun setDeparted(bookId: Long, identity: String, departed: Boolean) = transformGuide(bookId) { guide ->
+        require(guide.characters.any { it.identity == identity }) { "人物已变化，请重新打开人物页" }
+        guide.copy(characters = guide.characters.map {
+            if (it.identity == identity) it.copy(departed = departed) else it
+        })
+    }
+
+    /** 取消一段/一条「本次新增」高亮；内容本身不动。 */
+    suspend fun cancelHighlight(bookId: Long, identity: String, field: HighlightField, key: String = "") =
+        transformGuide(bookId) { guide ->
+            guide.copy(characters = guide.characters.map { person ->
+                if (person.identity != identity) person else person.copy(highlights = person.highlights.filterNot {
+                    it.field == field && it.key == key
+                })
+            })
+        }
+
+    /** 清掉一个人（[identity] 非空）或全部人物的高亮。 */
+    suspend fun clearHighlights(bookId: Long, identity: String? = null) = transformGuide(bookId) { guide ->
+        guide.copy(characters = guide.characters.map { person ->
+            if (identity == null || person.identity == identity) person.copy(highlights = emptyList()) else person
+        })
+    }
+
+    /**
+     * 人物页的小修改（离场、取消高亮）：必须基于当前可见资料，正文改版后旧 AI 条目不能被顺手写回去。
+     */
+    private suspend fun transformGuide(bookId: Long, transform: (BookCharacterGuide) -> BookCharacterGuide) =
+        withContext(Dispatchers.IO) {
+            BookContentMutation.withBook(bookId) {
+                library.getBook(bookId)?.takeIf { it.removedAt == 0L } ?: error("书籍已移除")
+                val revision = library.bookTextRevision(bookId)
+                val previous = dao.getGuide(bookId) ?: error("人物资料已变化，请重新打开人物页")
+                val guide = BookCharactersCodec.visible(previous, revision)?.guide
+                    ?: error("人物资料已变化，请重新打开人物页")
+                dao.saveGuide(previous.copy(sourceRevision = revision, promptVersion = BookCharactersCodec.PROMPT_VERSION,
+                    contentJson = AiJson.encodeToString(transform(guide)), createdAt = System.currentTimeMillis()))
+            }
+        }
+
+    /** 上一版档案里可用的原文锚点（档案 + 证据），增量更新时当上下文种子。 */
+    private fun anchorsOf(person: BookCharacter): List<SourceAnchor> = (
+        person.dossier?.anchors().orEmpty() +
+            person.evidence.map { SourceAnchor(it.chapterIndex, it.fact.start, it.fact.end) } +
+            person.attributes.map { SourceAnchor(it.evidence.chapterIndex, it.evidence.fact.start, it.evidence.fact.end) } +
+            person.relationships.map { SourceAnchor(it.evidence.chapterIndex, it.evidence.fact.start, it.evidence.fact.end) }
+        ).distinct().take(12)
 
     /** 缓存在写入时已逐条核对；读回只确认坐标仍指向同一段原文，规则与写入时的宽松核对一致。 */
     private fun cachedCharacters(raw: String, part: KnowledgePart): List<KnowledgeCharacter>? = runCatching {
