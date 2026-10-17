@@ -2,6 +2,9 @@ package com.mozhi.reader.ui.components
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -20,18 +23,93 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.input.OffsetMapping
+import androidx.compose.ui.text.input.TransformedText
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import com.mozhi.reader.ui.theme.moReadMetrics
 import com.mozhi.reader.ui.theme.fieldContainerColor
 import com.mozhi.reader.ui.theme.sectionHairline
+
+/**
+ * 输入框里的渲染期标记（人物编辑器用它表示「本次更新新增」）。
+ *
+ * [offset] 是**原始文本**里的下标，标记只出现在渲染结果里，不会进入 value：
+ * 用户输入、退格、复制与保存都看不到它，所以不需要任何清洗步骤。
+ */
+data class TextMarker(val offset: Int)
+
+private const val MarkerGlyph = "★"
+
+/**
+ * 在若干原始锚点前插入 [MarkerGlyph]：按锚点顺序逐段拼出渲染文本，原文的标注一并保留。
+ * [MarkerOffsetMapping] 把标记的整个视觉区间折回同一个原始锚点，光标可以停在锚点两侧，
+ * 但不会停进标记内部（也就没有「退格删一半」）。
+ */
+internal class MarkerTransformation(private val offsets: List<Int>, private val style: SpanStyle) : VisualTransformation {
+    override fun filter(text: AnnotatedString): TransformedText {
+        val anchors = offsets.map { it.coerceIn(0, text.length) }.distinct().sorted()
+        if (anchors.isEmpty()) return TransformedText(text, OffsetMapping.Identity)
+        val transformed = buildAnnotatedString {
+            var cursor = 0
+            anchors.forEach { anchor ->
+                append(text.subSequence(cursor, anchor))
+                append(MarkerGlyph)
+                addStyle(style, length - MarkerGlyph.length, length)
+                cursor = anchor
+            }
+            append(text.subSequence(cursor, text.length))
+        }
+        return TransformedText(transformed, MarkerOffsetMapping(anchors, text.length))
+    }
+}
+
+internal class MarkerOffsetMapping(private val anchors: List<Int>, private val originalLength: Int) : OffsetMapping {
+    override fun originalToTransformed(offset: Int): Int {
+        val safe = offset.coerceIn(0, originalLength)
+        return safe + anchors.count { it <= safe } * MarkerGlyph.length
+    }
+
+    override fun transformedToOriginal(offset: Int): Int {
+        var inserted = 0
+        anchors.forEach { anchor ->
+            val start = anchor + inserted
+            if (offset <= start) return (offset - inserted).coerceIn(0, originalLength)
+            if (offset < start + MarkerGlyph.length) return anchor
+            inserted += MarkerGlyph.length
+        }
+        return (offset - inserted).coerceIn(0, originalLength)
+    }
+}
+
+/** 命中的是哪个标记的原始锚点；文本已经溢出（内部可滚动）时坐标对不上，干脆不响应。 */
+private fun markerAt(layout: TextLayoutResult, markers: List<TextMarker>, position: Offset): TextMarker? {
+    if (layout.hasVisualOverflow) return null
+    val offset = layout.getOffsetForPosition(position)
+    val anchors = markers.map { it.offset }.distinct().sorted()
+    var inserted = 0
+    anchors.forEach { anchor ->
+        val start = anchor + inserted
+        if (offset in start until start + MarkerGlyph.length) return markers.firstOrNull { it.offset == anchor }
+        inserted += MarkerGlyph.length
+    }
+    return null
+}
 
 /**
  * 项目里唯一的文本输入控件。
@@ -59,9 +137,33 @@ fun MoReadTextField(
     leadingIcon: ImageVector? = null,
     trailing: (@Composable () -> Unit)? = null,
     keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
-    visualTransformation: VisualTransformation = VisualTransformation.None
+    visualTransformation: VisualTransformation = VisualTransformation.None,
+    /** 渲染期标记：只插入视觉层，不进入 [value]。 */
+    markers: List<TextMarker> = emptyList(),
+    /** 点按标记；为 null 时标记仅作提示。 */
+    onMarkerClick: ((TextMarker) -> Unit)? = null
 ) {
     var focused by remember { mutableStateOf(false) }
+    var textLayout by remember { mutableStateOf<TextLayoutResult?>(null) }
+    val currentMarkers by rememberUpdatedState(markers)
+    val currentMarkerClick by rememberUpdatedState(onMarkerClick)
+    val markerStyle = SpanStyle(color = MaterialTheme.colorScheme.primary,
+        background = MaterialTheme.colorScheme.primaryContainer)
+    val transformation = remember(markers, visualTransformation, markerStyle) {
+        if (markers.isEmpty()) visualTransformation else MarkerTransformation(markers.map { it.offset }, markerStyle)
+    }
+    val markerTap = if (markers.isEmpty() || onMarkerClick == null) Modifier else Modifier.pointerInput(markers) {
+        awaitEachGesture {
+            val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+            val result = textLayout ?: return@awaitEachGesture
+            val marker = markerAt(result, currentMarkers, down.position) ?: return@awaitEachGesture
+            // 标记上也可能起手滑动列表：位移超过 touchSlop 就不算点按。
+            val up = waitForUpOrCancellation(pass = PointerEventPass.Initial) ?: return@awaitEachGesture
+            if ((up.position - down.position).getDistance() > viewConfiguration.touchSlop) return@awaitEachGesture
+            up.consume()
+            currentMarkerClick?.invoke(marker)
+        }
+    }
     val fieldShape = moReadMetrics().fieldShape
     val borderColor = when {
         isError -> MaterialTheme.colorScheme.error
@@ -118,7 +220,8 @@ fun MoReadTextField(
                     singleLine = singleLine,
                     minLines = minLines,
                     keyboardOptions = keyboardOptions,
-                    visualTransformation = visualTransformation,
+                    visualTransformation = transformation,
+                    onTextLayout = { textLayout = it },
                     textStyle = LocalTextStyle.current.merge(
                         MaterialTheme.typography.bodyMedium.copy(color = contentColor)
                     ),
@@ -127,6 +230,7 @@ fun MoReadTextField(
                         .fillMaxWidth()
                         .defaultMinSize(minHeight = 20.dp)
                         .onFocusChanged { focused = it.isFocused }
+                        .then(markerTap)
                 )
             }
             if (trailing != null) {

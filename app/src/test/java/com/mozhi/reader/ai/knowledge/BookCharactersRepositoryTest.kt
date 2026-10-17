@@ -574,6 +574,20 @@ class BookCharactersRepositoryTest {
         assertTrue(repository.observe(1).first().saved!!.guide.characters.all { it.highlights.isEmpty() })
     }
 
+    /** 删除单个人物只动这一条：其他人物、扫描边界与手写层都不受牵连。 */
+    @Test fun deletingOneCharacterLeavesTheOthersAndTheScanBoundaryAlone() = runBlocking {
+        publish(BookCharacterGuide(listOf(
+            BookCharacter("林舟", emptyList(), manualAttributes = ManualCharacterAttributes(bio = "守塔人")),
+            BookCharacter("小满", emptyList())
+        ), 3, 100, mode = BookCharacterGuide.MODE_QUICK))
+        repository.deleteCharacter(1, "林舟")
+        val guide = repository.observe(1).first().saved!!.guide
+        assertEquals(listOf("小满"), guide.characters.map { it.name })
+        assertEquals(3, guide.scannedChapters)
+        assertEquals(100, guide.sourceCharacters)
+        assertNull(guide.characters.single().manualAttributes)
+    }
+
     private suspend fun publish(guide: BookCharacterGuide) {
         database.bookCharacterDao().saveGuide(BookCharacterGuideEntity(1, "gen", revision, "model", "模型",
             BookCharactersCodec.PROMPT_VERSION, AiJson.encodeToString(guide), 0))

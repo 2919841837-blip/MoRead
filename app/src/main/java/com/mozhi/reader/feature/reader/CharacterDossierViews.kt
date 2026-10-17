@@ -2,10 +2,8 @@ package com.mozhi.reader.feature.reader
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -32,11 +30,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -50,10 +44,7 @@ import com.mozhi.reader.R
 import com.mozhi.reader.ai.agent.RelationLayout
 import com.mozhi.reader.ai.knowledge.BookCharacter
 import com.mozhi.reader.ai.knowledge.CharacterAttributeKind
-import com.mozhi.reader.ai.knowledge.CharacterHighlight
 import com.mozhi.reader.ai.knowledge.CharacterRole
-import com.mozhi.reader.ai.knowledge.HighlightField
-import com.mozhi.reader.ai.knowledge.HighlightSpan
 import com.mozhi.reader.ai.knowledge.ExternalCharacterNote
 import com.mozhi.reader.ai.knowledge.KnowledgeProgress
 import com.mozhi.reader.ai.knowledge.KnowledgeTaskState
@@ -108,8 +99,12 @@ internal fun CharacterRosterCard(person: BookCharacter, thumbnail: String?, pale
         modifier = Modifier.fillMaxWidth().testTag("person-${person.name}")) {
         Row(Modifier.padding(start = 14.dp, top = 14.dp, bottom = 14.dp, end = MoReadSpacing.xs),
             horizontalArrangement = Arrangement.spacedBy(MoReadSpacing.m)) {
-            CharacterAvatar(person.name, thumbnail, person.effectiveRole(), 56.dp, palette, onClick = onAvatar,
-                contentDescription = stringResource(R.string.dossier_avatar_cd, person.name))
+            Column(horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                CharacterAvatar(person.name, thumbnail, person.effectiveRole(), 56.dp, palette, onClick = onAvatar,
+                    contentDescription = stringResource(R.string.dossier_avatar_cd, person.name))
+                CharacterStatusBadge(person, palette)
+            }
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(MoReadSpacing.xs)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     // 姓名优先拿到整行剩余宽度；状态徽标移到下一行，不能把名字挤没。
@@ -126,13 +121,9 @@ internal fun CharacterRosterCard(person: BookCharacter, thumbnail: String?, pale
                 }
                 if (summary.tagline.isNotBlank()) Text(summary.tagline, style = MaterialTheme.typography.bodyMedium,
                     color = palette.onBackground.copy(alpha = .86f), maxLines = 2, overflow = TextOverflow.Ellipsis)
-                if (person.departed || person.highlights.isNotEmpty() || summary.tags.isNotEmpty()) {
-                    FlowRow(Modifier.clipToBounds(), horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp), maxLines = 1) {
-                        CharacterStatusBadge(person, palette)
-                        summary.tags.forEach { tag -> DossierChip(tag, palette,
-                            highlighted = person.highlightFor(HighlightField.PERSONALITY, tag) != null) }
-                    }
+                if (summary.tags.isNotEmpty()) FlowRow(Modifier.clipToBounds(), horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp), maxLines = 1) {
+                    summary.tags.forEach { tag -> DossierChip(tag, palette) }
                 }
                 val meta = listOfNotNull(
                     stringResource(R.string.characters_manual_attributes).takeIf { person.manualAttributes != null },
@@ -145,11 +136,10 @@ internal fun CharacterRosterCard(person: BookCharacter, thumbnail: String?, pale
 }
 
 @Composable
-private fun DossierChip(text: String, palette: ReaderPalette, onClick: (() -> Unit)? = null,
-    highlighted: Boolean = false) {
+private fun DossierChip(text: String, palette: ReaderPalette, onClick: (() -> Unit)? = null) {
     Surface(onClick = onClick ?: {}, enabled = onClick != null, shape = RoundedCornerShape(8.dp),
-        color = if (highlighted) palette.accent else palette.accentContainer) {
-        Text(text, color = if (highlighted) palette.onAccent else palette.accent, style = MaterialTheme.typography.labelMedium, maxLines = 1,
+        color = palette.accentContainer) {
+        Text(text, color = palette.accent, style = MaterialTheme.typography.labelMedium, maxLines = 1,
             modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp))
     }
 }
@@ -169,52 +159,6 @@ private fun CharacterStatusBadge(person: BookCharacter, palette: ReaderPalette) 
         person.departed -> StatusBadge(stringResource(R.string.characters_departed_badge), palette)
         person.highlights.isNotEmpty() -> StatusBadge(stringResource(R.string.characters_updated_badge), palette)
     }
-}
-
-/** 可点击的「新」角标：点按询问是否清除这条高亮。与旁边的正文/关系行分开，避免抢走它们的点击。 */
-@Composable
-private fun NewMarker(palette: ReaderPalette, onClick: () -> Unit) {
-    Surface(onClick = onClick, shape = RoundedCornerShape(6.dp), color = palette.accentContainer) {
-        Text(stringResource(R.string.characters_highlight_new), color = palette.accent,
-            style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp))
-    }
-}
-
-/**
- * 正文 + 「本次更新新增」高亮。点按高亮片段会回调 [onTap]（由档案页弹清除确认），
- * 普通文字部分不拦截点击。
- */
-@Composable
-private fun HighlightedText(text: String, highlight: CharacterHighlight?, palette: ReaderPalette, style: TextStyle,
-    modifier: Modifier = Modifier, onTap: ((CharacterHighlight, HighlightSpan?) -> Unit)? = null,
-    maxLines: Int = Int.MAX_VALUE, overflow: TextOverflow = TextOverflow.Clip) {
-    if (highlight == null || (!highlight.wholeItem && highlight.spans.isEmpty())) {
-        Text(text, modifier, style = style, color = palette.onBackground, maxLines = maxLines, overflow = overflow)
-        return
-    }
-    val annotated: AnnotatedString = remember(text, highlight, palette.accent, palette.accentContainer) {
-        buildAnnotatedString {
-            append(text)
-            val paint = SpanStyle(background = palette.accentContainer, color = palette.accent)
-            if (highlight.wholeItem) addStyle(paint, 0, text.length)
-            else highlight.spans.forEach { span ->
-                val start = span.start.coerceIn(0, text.length)
-                val end = span.end.coerceIn(start, text.length)
-                if (end > start) addStyle(paint, start, end)
-            }
-        }
-    }
-    var layout by remember { mutableStateOf<TextLayoutResult?>(null) }
-    val tap = if (onTap == null) Modifier else Modifier.pointerInput(annotated, highlight) {
-        detectTapGestures { position ->
-            val result = layout ?: return@detectTapGestures
-            val offset = result.getOffsetForPosition(position)
-            val span = highlight.spans.firstOrNull { offset >= it.start && offset < it.end }
-            if (highlight.wholeItem || span != null) onTap(highlight, span)
-        }
-    }
-    Text(annotated, modifier.then(tap), style = style, color = palette.onBackground, maxLines = maxLines,
-        overflow = overflow, onTextLayout = { layout = it })
 }
 
 /** 人物页顶部的固定状态行：高度不随状态变化，进度更新不会挪动列表。 */
@@ -266,25 +210,10 @@ internal fun CharacterDossierPage(
     externalNotes: List<ExternalCharacterNote>, progressBounded: Boolean, palette: ReaderPalette, listState: LazyListState,
     onBack: () -> Unit, onOpenPerson: (String) -> Unit, onLocate: (CharacterSource) -> Unit,
     onAvatar: () -> Unit, onEdit: () -> Unit, onCard: () -> Unit,
-    onDeparted: (Boolean) -> Unit = {}, onCancelHighlight: (HighlightField, String) -> Unit = { _, _ -> },
-    onClearHighlights: () -> Unit = {}
+    onDeparted: (Boolean) -> Unit = {}, onDelete: () -> Unit = {}
 ) {
     val dossier = person.dossier
     val links = remember(person, everyone) { egoLinks(person, everyone) }
-    // 点按高亮后确认：一条高亮消掉整段（性格/关系会连同说明一起撤掉标记），内容本身不动。
-    var clearing by remember(person.identity) { mutableStateOf<CharacterHighlight?>(null) }
-    clearing?.let { highlight ->
-        AlertDialog(onDismissRequest = { clearing = null },
-            title = { Text(stringResource(R.string.characters_highlight_clear_title)) },
-            text = { Text(highlight.before.takeIf(String::isNotBlank)?.let {
-                stringResource(R.string.characters_highlight_before, it.take(240))
-            } ?: stringResource(R.string.characters_highlight_clear_body)) },
-            confirmButton = { TextButton(onClick = {
-                onCancelHighlight(highlight.field, highlight.key)
-                clearing = null
-            }) { Text(stringResource(R.string.characters_highlight_clear_confirm)) } },
-            dismissButton = { TextButton(onClick = { clearing = null }) { Text(stringResource(R.string.action_cancel)) } })
-    }
     Column(Modifier.fillMaxSize().testTag("dossier-${person.name}")) {
         Row(Modifier.fillMaxWidth().height(52.dp).padding(horizontal = MoReadSpacing.s), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, stringResource(R.string.characters_back), tint = palette.muted) }
@@ -299,6 +228,8 @@ internal fun CharacterDossierPage(
                     DropdownMenuItem(text = { Text(stringResource(R.string.dossier_menu_card)) }, onClick = { menu = false; onCard() })
                     DropdownMenuItem(text = { Text(stringResource(if (person.departed) R.string.characters_departed_off
                         else R.string.characters_departed_on)) }, onClick = { menu = false; onDeparted(!person.departed) })
+                    DropdownMenuItem(text = { Text(stringResource(R.string.characters_delete_person),
+                        color = MaterialTheme.colorScheme.error) }, onClick = { menu = false; onDelete() })
                 }
             }
         }
@@ -310,54 +241,39 @@ internal fun CharacterDossierPage(
                     horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(MoReadSpacing.s)) {
                     CharacterAvatar(person.name, thumbnails[person.identity], person.effectiveRole(), 96.dp, palette, onClick = onAvatar,
                         contentDescription = stringResource(R.string.dossier_avatar_cd, person.name))
-                    // 名字过长时让主次/状态徽标换行，而不是把名字压没。
+                    CharacterStatusBadge(person, palette)
+                    // 名字过长时让主次徽标换行，而不是把名字压没。
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(MoReadSpacing.s),
                         verticalArrangement = Arrangement.spacedBy(MoReadSpacing.xs),
                         itemVerticalAlignment = Alignment.CenterVertically) {
                         Text(person.name, style = MaterialTheme.typography.headlineMedium, fontFamily = FontFamily.Serif,
                             fontWeight = FontWeight.SemiBold, color = palette.onBackground)
-                        val roleHighlight = person.highlightFor(HighlightField.ROLE)
                         person.effectiveRole()?.let { role ->
                             Text(characterRoleBadge(role), style = MaterialTheme.typography.labelMedium,
-                                color = if (roleHighlight != null) palette.onAccent else palette.accent,
-                                modifier = Modifier.then(if (roleHighlight != null)
-                                    Modifier.background(palette.accent, RoundedCornerShape(6.dp)) else Modifier).padding(horizontal = 6.dp))
-                            if (roleHighlight != null) NewMarker(palette) { clearing = roleHighlight }
+                                color = palette.accent, modifier = Modifier.padding(horizontal = 6.dp))
                         }
-                        CharacterStatusBadge(person, palette)
                     }
                     if (person.aliases.isNotEmpty()) Text(stringResource(R.string.dossier_aliases, person.aliases.joinToString("、")),
                         style = MaterialTheme.typography.bodySmall, color = palette.muted)
                     person.tagline().takeIf(String::isNotBlank)?.let { tagline ->
-                        HighlightedText(tagline, person.highlightFor(HighlightField.TAGLINE), palette,
-                            MaterialTheme.typography.bodyLarge, onTap = { highlight, _ -> clearing = highlight })
-                    }
-                }
-            }
-            if (person.highlights.isNotEmpty()) item(key = "updates") {
-                Surface(shape = RoundedCornerShape(14.dp), color = palette.accentContainer, modifier = Modifier.fillMaxWidth()) {
-                    Row(Modifier.padding(horizontal = MoReadSpacing.m, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text(stringResource(R.string.characters_highlight_banner), Modifier.weight(1f),
-                            style = MaterialTheme.typography.bodySmall, color = palette.accent)
-                        Text(stringResource(R.string.characters_clear_highlights), style = MaterialTheme.typography.labelMedium,
-                            color = palette.accent, modifier = Modifier.clickable(onClick = onClearHighlights).padding(MoReadSpacing.xs))
+                        Text(tagline, style = MaterialTheme.typography.bodyLarge, color = palette.onBackground)
                     }
                 }
             }
             // 手写值优先，其次档案；完整扫描的旧资料没有档案，回落到同名属性（同一属性有多个说法时取第一条）。
             fun attribute(kind: CharacterAttributeKind) = person.attributeValues(kind).firstOrNull()
             val facts = listOfNotNull(
-                attribute(CharacterAttributeKind.GENDER)?.let { Triple(R.string.dossier_gender, it, HighlightField.GENDER) },
-                attribute(CharacterAttributeKind.AGE)?.let { Triple(R.string.dossier_age, it, HighlightField.AGE) },
-                attribute(CharacterAttributeKind.IDENTITY)?.let { Triple(R.string.dossier_identity, it, HighlightField.IDENTITY) })
+                attribute(CharacterAttributeKind.GENDER)?.let { R.string.dossier_gender to it },
+                attribute(CharacterAttributeKind.AGE)?.let { R.string.dossier_age to it },
+                attribute(CharacterAttributeKind.IDENTITY)?.let { R.string.dossier_identity to it })
             if (facts.isNotEmpty()) item(key = "facts") {
                 Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(MoReadSpacing.s)) {
-                    facts.forEach { (label, value, field) ->
+                    facts.forEach { (label, value) ->
                         Surface(shape = RoundedCornerShape(14.dp), color = palette.glass, modifier = Modifier.weight(if (label == R.string.dossier_identity) 2f else 1f).fillMaxHeight()) {
                             Column(Modifier.padding(horizontal = MoReadSpacing.m, vertical = 10.dp)) {
                                 Text(stringResource(label), style = MaterialTheme.typography.labelSmall, color = palette.muted)
-                                HighlightedText(value, person.highlightFor(field), palette, MaterialTheme.typography.bodyMedium,
-                                    onTap = { highlight, _ -> clearing = highlight }, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                                Text(value, style = MaterialTheme.typography.bodyMedium, color = palette.onBackground,
+                                    maxLines = 3, overflow = TextOverflow.Ellipsis)
                             }
                         }
                     }
@@ -365,8 +281,7 @@ internal fun CharacterDossierPage(
             }
             person.bio().takeIf(String::isNotBlank)?.let { bio -> item(key = "bio") {
                 DossierSection(stringResource(R.string.dossier_bio), palette) {
-                    HighlightedText(bio, person.highlightFor(HighlightField.BIO), palette,
-                        MaterialTheme.typography.bodyLarge.copy(lineHeight = 28.sp), onTap = { highlight, _ -> clearing = highlight })
+                    Text(bio, style = MaterialTheme.typography.bodyLarge.copy(lineHeight = 28.sp), color = palette.onBackground)
                 }
             } }
             val written = person.manualTraits()
@@ -377,15 +292,11 @@ internal fun CharacterDossierPage(
                 DossierSection(stringResource(R.string.dossier_personality), palette) {
                     Column(verticalArrangement = Arrangement.spacedBy(MoReadSpacing.m)) {
                         traits.forEach { trait ->
-                            val highlight = person.highlightFor(HighlightField.PERSONALITY, trait.trait)
                             Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(MoReadSpacing.m)) {
                                 DossierChip(trait.trait, palette,
-                                    trait.anchor?.let { anchor -> { onLocate(CharacterSource.Anchor(anchor)) } },
-                                    highlighted = highlight != null)
-                                if (highlight != null) NewMarker(palette) { clearing = highlight }
-                                if (trait.detail.isNotBlank()) HighlightedText(trait.detail, highlight, palette,
-                                    MaterialTheme.typography.bodyMedium, Modifier.weight(1f).padding(top = 4.dp),
-                                    onTap = { it, _ -> clearing = it })
+                                    trait.anchor?.let { anchor -> { onLocate(CharacterSource.Anchor(anchor)) } })
+                                if (trait.detail.isNotBlank()) Text(trait.detail, style = MaterialTheme.typography.bodyMedium,
+                                    color = palette.onBackground, modifier = Modifier.weight(1f).padding(top = 4.dp))
                             }
                         }
                         if (legacyTraits.isNotEmpty()) FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -399,24 +310,19 @@ internal fun CharacterDossierPage(
             if (appearance != null) item(key = "appearance") {
                 DossierSection(stringResource(R.string.dossier_appearance), palette,
                     onJump = person.appearanceAnchor()?.let { anchor -> { onLocate(CharacterSource.Anchor(anchor)) } }) {
-                    HighlightedText(appearance, person.highlightFor(HighlightField.APPEARANCE), palette,
-                        MaterialTheme.typography.bodyMedium.copy(lineHeight = 24.sp), onTap = { highlight, _ -> clearing = highlight })
+                    Text(appearance, style = MaterialTheme.typography.bodyMedium.copy(lineHeight = 24.sp), color = palette.onBackground)
                 }
             }
             person.arc().takeIf(String::isNotBlank)?.let { arc -> item(key = "arc") {
                 DossierSection(stringResource(R.string.dossier_arc), palette) {
-                    HighlightedText(arc, person.highlightFor(HighlightField.ARC), palette,
-                        MaterialTheme.typography.bodyMedium.copy(lineHeight = 24.sp), onTap = { highlight, _ -> clearing = highlight })
+                    Text(arc, style = MaterialTheme.typography.bodyMedium.copy(lineHeight = 24.sp), color = palette.onBackground)
                 }
             } }
             if (links.isNotEmpty()) item(key = "relations") {
                 DossierSection(stringResource(R.string.dossier_relations), palette) {
                     Column(verticalArrangement = Arrangement.spacedBy(MoReadSpacing.s)) {
                         CharacterEgoGraph(person, links.take(MAX_EGO_NODES), thumbnails, palette, onOpenPerson)
-                        links.forEach { link ->
-                            RelationRow(person, link, thumbnails, palette, onOpenPerson, onLocate,
-                                person.relationHighlight(link, everyone)) { clearing = it }
-                        }
+                        links.forEach { link -> RelationRow(person, link, thumbnails, palette, onOpenPerson, onLocate) }
                     }
                 }
             }
@@ -455,8 +361,7 @@ private fun DossierSection(title: String, palette: ReaderPalette, onJump: (() ->
 
 @Composable
 private fun RelationRow(person: BookCharacter, link: EgoLink, thumbnails: Map<String, String>, palette: ReaderPalette,
-    onOpenPerson: (String) -> Unit, onLocate: (CharacterSource) -> Unit,
-    highlight: CharacterHighlight? = null, onClear: (CharacterHighlight) -> Unit = {}) {
+    onOpenPerson: (String) -> Unit, onLocate: (CharacterSource) -> Unit) {
     val open = link.identity?.let { identity -> { onOpenPerson(identity) } } ?: link.source?.let { source -> { onLocate(source) } }
     Surface(onClick = open ?: {}, enabled = open != null, shape = RoundedCornerShape(14.dp), color = palette.background.copy(alpha = .5f),
         modifier = Modifier.fillMaxWidth().testTag("relation-${person.identity}-${link.target}")) {
@@ -465,10 +370,9 @@ private fun RelationRow(person: BookCharacter, link: EgoLink, thumbnails: Map<St
             CharacterAvatar(link.target, link.identity?.let(thumbnails::get), null, 36.dp, palette)
             Column(Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(MoReadSpacing.s)) {
-                    HighlightedText(link.target, highlight, palette, MaterialTheme.typography.titleSmall,
-                        Modifier.weight(1f, fill = false), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    if (link.relation.isNotBlank()) DossierChip(link.relation, palette, highlighted = highlight != null)
-                    if (highlight != null) NewMarker(palette) { onClear(highlight) }
+                    Text(link.target, style = MaterialTheme.typography.titleSmall, color = palette.onBackground,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                    if (link.relation.isNotBlank()) DossierChip(link.relation, palette)
                 }
                 val secondary = listOfNotNull(
                     link.reverse.takeIf(String::isNotBlank)?.let { stringResource(R.string.dossier_relation_reverse, it) },
@@ -479,17 +383,6 @@ private fun RelationRow(person: BookCharacter, link: EgoLink, thumbnails: Map<St
             }
         }
     }
-}
-
-/** 关系高亮的 key 是 AI 写下的对象名；界面上可能已经换成人物卡上的正式称呼，两个名字都认。 */
-private fun BookCharacter.relationHighlight(link: EgoLink, everyone: List<BookCharacter>): CharacterHighlight? {
-    if (highlights.isEmpty()) return null
-    val names = buildSet {
-        add(link.target)
-        link.identity?.let { add(it) }
-        everyone.firstOrNull { it.identity == link.identity }?.let { other -> add(other.name); addAll(other.aliases) }
-    }
-    return highlights.firstOrNull { it.field == HighlightField.RELATION && it.key in names }
 }
 
 /** 档案页上的小关系图：本人在中心，关系人排成一圈，连线中点标关系。 */

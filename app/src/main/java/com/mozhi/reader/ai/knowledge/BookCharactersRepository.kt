@@ -406,6 +406,12 @@ class BookCharactersRepository @Inject constructor(
         })
     }
 
+    /** 删除一位人物；其他人物与扫描边界不动。手写层随这一条一起删除。 */
+    suspend fun deleteCharacter(bookId: Long, identity: String) = transformGuide(bookId) { guide ->
+        require(guide.characters.any { it.identity == identity }) { "人物已变化，请重新打开人物页" }
+        guide.copy(characters = guide.characters.filterNot { it.identity == identity })
+    }
+
     /** 取消一段/一条「本次新增」高亮；内容本身不动。 */
     suspend fun cancelHighlight(bookId: Long, identity: String, field: HighlightField, key: String = "") =
         transformGuide(bookId) { guide ->

@@ -147,7 +147,8 @@ class ReaderKnowledgeViewModel @Inject constructor(
     fun cancelHighlight(identity: String, field: HighlightField, key: String = "") = localAction { book ->
         characters.cancelHighlight(book, identity, field, key)
     }
-    fun clearHighlights() = localAction { book -> characters.clearHighlights(book) }
+    fun clearHighlights(identity: String) = localAction { book -> characters.clearHighlights(book, identity) }
+    fun deleteCharacter(identity: String) = localAction { book -> characters.deleteCharacter(book, identity) }
     fun saveCharacterCard(card: ExtractedCharacterCard) = localAction {
         personas.save(com.mozhi.reader.core.database.entity.PersonaEntity(
             name = card.name, personality = card.description, subtitle = "从书中提取的角色", isRoleplay = true,

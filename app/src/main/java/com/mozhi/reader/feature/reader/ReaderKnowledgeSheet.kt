@@ -57,8 +57,11 @@ internal data class ReaderKnowledgeActions(
     /** 更新到当前进度 / 更新全书人物：只刷新已有角色，跳过离场人物。 */
     val updateCharacters: (Boolean) -> Unit = {},
     val setDeparted: (String, Boolean) -> Unit = { _, _ -> },
+    /** 编辑器字段里的 ★：撤掉这条「本次新增」标记，内容不动。 */
     val cancelHighlight: (String, HighlightField, String) -> Unit = { _, _, _ -> },
-    val clearHighlights: () -> Unit = {}
+    /** 编辑器右上角的 ☆：一次清掉这个人所有 ★ 标记。 */
+    val clearHighlights: (String) -> Unit = {},
+    val deleteCharacter: (String) -> Unit = {}
 )
 
 /** 目录弹层「人物」页签的序号，供进度球直接打开。 */
@@ -98,7 +101,8 @@ internal fun ReaderKnowledgeContentsSheet(
             viewModel::saveCharacterCard, viewModel::saveCharacter, openLook = { imageCharacter = it },
             saveOutline = viewModel::saveOutline, locateAnchor = viewModel::locateAnchor,
             updateCharacters = viewModel::updateCharacters, setDeparted = viewModel::setDeparted,
-            cancelHighlight = viewModel::cancelHighlight, clearHighlights = viewModel::clearHighlights), initialTab = initialTab,
+            cancelHighlight = viewModel::cancelHighlight, clearHighlights = viewModel::clearHighlights,
+            deleteCharacter = viewModel::deleteCharacter), initialTab = initialTab,
         bookmarks = bookmarks, onBookmarkClick = onBookmarkClick, onDeleteBookmark = onDeleteBookmark)
     // 人物整理会跑好几分钟：开始时顺手要通知权限，切到后台也能在通知栏看到进度（拒绝也不影响整理）。
     val notificationPermission = androidx.activity.compose.rememberLauncherForActivityResult(
@@ -468,6 +472,7 @@ internal fun BookCharactersPanel(state: KnowledgeUiState, chapters: List<Chapter
     val people = saved?.guide?.characters.orEmpty()
     var card by remember(state.bookId) { mutableStateOf<ExtractedCharacterCard?>(null) }
     var editing by remember(state.bookId) { mutableStateOf<BookCharacter?>(null) }
+    var deletingPerson by remember(state.bookId) { mutableStateOf<BookCharacter?>(null) }
     var editorVisible by rememberSaveable(state.bookId) { mutableStateOf(false) }
     var query by rememberSaveable(state.bookId) { mutableStateOf("") }
     var searching by rememberSaveable { mutableStateOf(false) }
@@ -522,8 +527,7 @@ internal fun BookCharactersPanel(state: KnowledgeUiState, chapters: List<Chapter
                 onAvatar = { actions.openLook(person.identity) }, onEdit = { editing = person; editorVisible = true },
                 onCard = { card = ExtractedCharacterCard.from(person) },
                 onDeparted = { actions.setDeparted(person.identity, it) },
-                onCancelHighlight = { field, key -> actions.cancelHighlight(person.identity, field, key) },
-                onClearHighlights = actions.clearHighlights)
+                onDelete = { deletingPerson = person })
         } else Column(Modifier.fillMaxSize()) {
             Row(Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 20.dp).testTag("character-tools"),
                 verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -584,6 +588,9 @@ internal fun BookCharactersPanel(state: KnowledgeUiState, chapters: List<Chapter
                                     DropdownMenuItem(text = { Text(stringResource(R.string.dossier_menu_card)) }, onClick = { menu = false; card = ExtractedCharacterCard.from(person) })
                                     DropdownMenuItem(text = { Text(stringResource(if (person.departed) R.string.characters_departed_off
                                         else R.string.characters_departed_on)) }, onClick = { menu = false; actions.setDeparted(person.identity, !person.departed) })
+                                    DropdownMenuItem(text = { Text(stringResource(R.string.characters_delete_person),
+                                        color = MaterialTheme.colorScheme.error) },
+                                        onClick = { menu = false; deletingPerson = person })
                                 }
                             }
                         }
@@ -617,9 +624,14 @@ internal fun BookCharactersPanel(state: KnowledgeUiState, chapters: List<Chapter
         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Row(Modifier.fillMaxWidth().selectableGroup().testTag("character-scope"), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 listOf(true to "读到此处", false to "全书").forEach { (bounded, label) ->
-                    FilterChip(selected = progressBounded == bounded, onClick = { progressBounded = bounded }, enabled = !busy, label = { Text(label) })
+                    FilterChip(selected = progressBounded == bounded, onClick = { progressBounded = bounded },
+                        enabled = !busy, label = { Text(label) })
                 }
             }
+            // 同一个胶囊外观，但它是入口而不是范围选项：另起一行，放在两档范围下方。
+            FilterChip(selected = false, onClick = { options = false; pointing = true }, enabled = !busy,
+                label = { Text(stringResource(R.string.characters_targets_entry)) },
+                modifier = Modifier.testTag("character-targets-entry"))
             Text(if (progressBounded) "只扫描读过的正文。" else "包含未读章节，资料可能涉及后续情节。", style = MaterialTheme.typography.bodySmall)
             // 已有资料时两个按钮都是「更新已有角色」，不再整理名单，模式选择没有意义；
             // 正文改版后旧资料不可更新，退回重新提取，模式选择重新出现。
@@ -632,7 +644,6 @@ internal fun BookCharactersPanel(state: KnowledgeUiState, chapters: List<Chapter
                 Text(stringResource(if (quickMode) R.string.characters_mode_quick_hint else R.string.characters_mode_full_hint), style = MaterialTheme.typography.bodySmall)
             }
             // 名单输入有自己的一页：AlertDialog 装文本框会让重组停不下来（见 CharacterScanTargetsDialog）。
-            TextButton(onClick = { options = false; pointing = true }, enabled = !busy) { Text(stringResource(R.string.characters_targets_entry)) }
             TextButton(onClick = { options = false; information = true }) { Icon(Icons.Outlined.Info, "书籍资料说明"); Spacer(Modifier.width(6.dp)); Text("提取说明") }
             if (saved != null || state.characters.checkpointParts > 0) TextButton(onClick = { options = false; deleting = true }, enabled = !busy) { Text("删除人物资料") }
         }
@@ -663,9 +674,22 @@ internal fun BookCharactersPanel(state: KnowledgeUiState, chapters: List<Chapter
             pointing = false
             actions.previewCharacters(progressBounded, false, targets)
         })
-    if (editorVisible) BookCharacterEditorDialog(editing, people, onDismiss = { editorVisible = false }, onSave = { key, name, attributes, departed ->
-        actions.saveCharacter(key, name, attributes, departed); editorVisible = false
-    })
+    // 编辑器里点掉 ★ 会立刻落库；跟着实时快照走，标记才会当场消失，而草稿仍按 identity 保留。
+    val editingPerson = editing?.let { snapshot -> people.firstOrNull { it.identity == snapshot.identity } ?: snapshot }
+    if (editorVisible) BookCharacterEditorDialog(editingPerson, people, onDismiss = { editorVisible = false },
+        onSave = { key, name, attributes, departed ->
+            actions.saveCharacter(key, name, attributes, departed); editorVisible = false
+        }, onCancelHighlight = { field, key ->
+            editingPerson?.let { actions.cancelHighlight(it.identity, field, key) }
+        }, onClearHighlights = {
+            editingPerson?.let { actions.clearHighlights(it.identity) }
+        })
+    deletingPerson?.let { person ->
+        ConfirmKnowledgeDelete(stringResource(R.string.characters_delete_title, person.name),
+            stringResource(R.string.characters_delete_body), { deletingPerson = null }) {
+            deletingPerson = null; actions.deleteCharacter(person.identity)
+        }
+    }
     card?.let { draft -> ExtractedCharacterCardDialog(draft, onDismiss = { card = null }, onSave = { actions.saveCharacterCard(it); card = null }) }
     if (information) KnowledgeInfoDialog("书中人物", "由 AI 逐章扫描正文，提取人物、身份与关系。\n\n「读到此处」只发送已经读过的内容，最后一章截到当前进度；「全书」包括还没读到的章节，可能涉及后续情节。\n\nAI 资料保留原文依据，可随时核对；你手写的内容会标注为「手写属性」，后续提取不会覆盖。\n\n已核对的段落保留缓存，更新只为新内容计费。停止后可继续，更新期间仍能查看已有资料。", { information = false })
     if (deleting) ConfirmKnowledgeDelete("删除人物资料？", "删除这本书的人物资料（包括手写属性）及未完成的提取进度。", { deleting = false }) {

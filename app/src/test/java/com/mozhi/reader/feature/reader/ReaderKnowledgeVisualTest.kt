@@ -224,13 +224,68 @@ class ReaderKnowledgeVisualTest {
         capture("characters-manual-search.png")
     }
 
+    @Test fun editorStarsFollowTheLiveHighlightsAndCanBeClearedOneByOneOrAllAtOnce() {
+        val marked = guide.copy(characters = listOf(guide.characters.first().copy(
+            role = CharacterRole.PROTAGONIST,
+            highlights = listOf(
+                CharacterHighlight(HighlightField.ROLE, wholeItem = true),
+                CharacterHighlight(HighlightField.BIO, wholeItem = true)))))
+        val live = mutableStateOf(state.copy(characters = BookCharactersSnapshot(VisibleBookCharacters(personEntry, marked))))
+        val actions = ReaderKnowledgeActions(cancelHighlight = { identity, field, key ->
+            // 模拟仓库落库后推回新快照：标记应跟着实时人物走，而不是停在打开编辑器那一刻的旧对象上。
+            val current = live.value.characters.saved!!.guide
+            val next = current.copy(characters = current.characters.map { person ->
+                if (person.identity != identity) person else person.copy(
+                    highlights = person.highlights.filterNot { it.field == field && it.key == key })
+            })
+            live.value = live.value.copy(characters = BookCharactersSnapshot(VisibleBookCharacters(personEntry, next)))
+        }, clearHighlights = { identity ->
+            val current = live.value.characters.saved!!.guide
+            val next = current.copy(characters = current.characters.map { person ->
+                if (person.identity != identity) person else person.copy(highlights = emptyList())
+            })
+            live.value = live.value.copy(characters = BookCharactersSnapshot(VisibleBookCharacters(personEntry, next)))
+        })
+        show(tab = 2, input = { live.value }, actions = actions)
+        compose.onNodeWithContentDescription("林舟的人物操作").performClick()
+        compose.onNodeWithText("编辑人物").performClick()
+        compose.onNodeWithTag("character-role-updated").performScrollTo().assertIsDisplayed().performClick()
+        compose.waitForIdle()
+        compose.onNodeWithTag("character-role-updated").assertDoesNotExist()
+        // 只撤掉主次这一条，小传的标记还在。
+        assertEquals(listOf(HighlightField.BIO), live.value.characters.saved!!.guide.characters.first().highlights.map { it.field })
+        // ☆ 一键清掉剩下的全部标记；没有标记了，按钮也随之消失。
+        compose.onNodeWithTag("character-clear-marks").performClick()
+        compose.onNodeWithText("清除标记").performClick()
+        compose.waitForIdle()
+        assertTrue(live.value.characters.saved!!.guide.characters.first().highlights.isEmpty())
+        compose.onNodeWithTag("character-clear-marks").assertDoesNotExist()
+    }
+
+    @Test fun characterCardDeletesOnePersonOnlyAfterConfirmation() {
+        val live = mutableStateOf(state)
+        val actions = ReaderKnowledgeActions(deleteCharacter = { identity ->
+            val current = live.value.characters.saved!!.guide
+            val next = current.copy(characters = current.characters.filterNot { it.identity == identity })
+            live.value = live.value.copy(characters = BookCharactersSnapshot(VisibleBookCharacters(personEntry, next)))
+        })
+        show(tab = 2, input = { live.value }, actions = actions)
+        compose.onNodeWithContentDescription("林舟的人物操作").performClick()
+        compose.onNodeWithText("删除人物").performClick()
+        compose.onNodeWithText("删除「林舟」？").assertIsDisplayed()
+        compose.onNodeWithText("删除").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithTag("person-林舟").assertDoesNotExist()
+        assertEquals(listOf("小满"), live.value.characters.saved!!.guide.characters.map { it.name })
+    }
+
     @Test fun namedScanKeepsTheTypedNamesAndTheirAliasesAndStartsItsOwnPreview() {
         var asked: Triple<Boolean, Boolean, List<CharacterTarget>>? = null
         show(tab = 2, actions = ReaderKnowledgeActions(previewCharacters = { bounded, quick, targets ->
             asked = Triple(bounded, quick, targets)
         }))
         compose.onNodeWithText("提取").performClick()
-        compose.onNodeWithText("点名扫描…").performClick()
+        compose.onNodeWithText("点名扫描").performClick()
         targetsField().performTextInput("黄晓明（晓明、绿大暗）\n林舟")
         compose.onNodeWithText("已识别 2 位").assertIsDisplayed()
         capture("characters-named-scan.png")
